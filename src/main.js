@@ -72,8 +72,9 @@ aimMesh.rotation.order = 'YXZ';
 scene.add(aimMesh);
 
 // Кусок ствола между высотами y0 и y1; ствол сужается к вершине.
+// У земли он ровно TRUNK_R и нигде не толще: по этому радиусу считаются пропилы, и их полоса должна выступать из коры.
 function trunkPiece(y0, y1) {
-  const radius = (y) => TRUNK_R * (1.1 - (0.5 * y) / TREE_H);
+  const radius = (y) => TRUNK_R * (1 - (0.4 * y) / TREE_H);
   const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius(y1), radius(y0), y1 - y0, 24), barkMat);
   mesh.position.y = (y0 + y1) / 2;
   return mesh;
@@ -381,6 +382,8 @@ startEl.addEventListener('click', () => {
 canvas.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   if (document.pointerLockElement !== canvas) lockPointer();
+  // Каждое нажатие заново выбирает пропил по прицелу, даже если между отпусканием и нажатием не прошло ни кадра.
+  round.active = null;
   sawing = true;
 });
 addEventListener('mouseup', (e) => {
