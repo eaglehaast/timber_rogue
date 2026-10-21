@@ -35,10 +35,15 @@ export class TrunkVoxels {
         this.inside[k * this.n + i] = Math.hypot(this.x(i), this.z(k)) <= radius ? 1 : 0;
       }
     }
-    this.full = this.inside.reduce((s, v) => s + v, 0);
     this.data = new Uint8Array(this.n * this.n * this.ny);
     for (let j = 0; j < this.ny; j++) this.data.set(this.inside, j * this.n * this.n);
-    this.layerCount = new Int32Array(this.ny).fill(this.full);
+    // Волокна идут вдоль ствола, по колонкам кубиков. Для каждой колонки: сколько в ней выпилено,
+    // нижний и верхний край выреза и наклон пропила, что её перерезал. version растёт с каждым кубиком.
+    this.gap = new Uint16Array(this.n * this.n);
+    this.gapLow = new Int16Array(this.n * this.n).fill(this.ny);
+    this.gapHigh = new Int16Array(this.n * this.n).fill(-1);
+    this.normals = new Float32Array(this.n * this.n * 3);
+    this.version = 0;
     // Слои, где уже прошла пила: только в них что-то может отвалиться.
     this.cutLow = Infinity;
     this.cutHigh = -1;
@@ -60,26 +65,54 @@ export class TrunkVoxels {
   z(k) { return (k + 0.5) * VOXEL - this.half; }
   at(i, j, k) { return this.data[(j * this.n + k) * this.n + i]; }
 
-  layerOf(y) {
-    return THREE.MathUtils.clamp(Math.floor(y / VOXEL), 0, this.ny - 1);
+  neighbours(id) {
+    const { n } = this;
+    const layer = n * n;
+    const rest = id % layer;
+    const i = rest % n;
+    const k = (rest - i) / n;
+    const out = [];
+    if (i > 0) out.push(id - 1);
+    if (i < n - 1) out.push(id + 1);
+    if (k > 0) out.push(id - n);
+    if (k < n - 1) out.push(id + n);
+    if (id >= layer) out.push(id - layer);
+    if (id + layer < this.data.length) out.push(id + layer);
+    return out;
+  }
+
+  // Кубик выпилен или выпал: волокно в его колонке перерезано.
+  cutFibre(id, normal) {
+    const layer = this.n * this.n;
+    const j = Math.floor(id / layer);
+    const col = id - j * layer;
+    this.gap[col]++;
+    this.gapLow[col] = Math.min(this.gapLow[col], j);
+    this.gapHigh[col] = Math.max(this.gapHigh[col], j);
+    if (normal) this.normals.set([normal.x, normal.y, normal.z], col * 3);
+    this.version++;
   }
 
   // Вырезает щель пилы: кубики, чьи центры лежат в плоскости полотна (толщина — один кубик без дыр
   // при любом наклоне), не дальше depth по ходу пилы и в пределах длины шины.
   carve({ origin, along, side, normal }, depth, barLength) {
     const halfT = 0.5 * VOXEL * (Math.abs(normal.x) + Math.abs(normal.y) + Math.abs(normal.z));
+    // Плоскость пологая (наклон не больше 60°): в каждой колонке её пересекают единицы кубиков —
+    // те, чьи центры лежат в полуинтервале [низ, верх). Нормаль смотрим вверх, чтобы низ был снизу.
+    // Толщина в колонке — layers ≥ 1 слоя, и номера слоёв считаются от одного t, поэтому
+    // хоть один кубик в колонку попадает всегда, как бы ни округлялись дроби.
+    const up = normal.y < 0 ? -1 : 1;
+    const nx = normal.x * up, ny = normal.y * up, nz = normal.z * up;
+    const layers = (2 * halfT) / (ny * VOXEL);
     const { n } = this;
     for (let k = 0; k < n; k++) {
       for (let i = 0; i < n; i++) {
         if (!this.inside[k * n + i]) continue;
         const dx = this.x(i) - origin.x;
         const dz = this.z(k) - origin.z;
-        const c = dx * normal.x + dz * normal.z;
-        // Плоскость пологая (наклон не больше 60°), поэтому в каждой колонке её пересекают единицы кубиков.
-        const y0 = origin.y + (-halfT - c) / normal.y;
-        const y1 = origin.y + (halfT - c) / normal.y;
-        const j0 = Math.max(0, Math.ceil(Math.min(y0, y1) / VOXEL - 0.5));
-        const j1 = Math.min(this.ny - 1, Math.floor(Math.max(y0, y1) / VOXEL - 0.5));
+        const t = (origin.y - (halfT + dx * nx + dz * nz) / ny) / VOXEL - 0.5;
+        const j0 = Math.max(0, Math.ceil(t));
+        const j1 = Math.min(this.ny - 1, Math.ceil(t + layers) - 1);
         for (let j = j0; j <= j1; j++) {
           const id = (j * n + k) * n + i;
           if (!this.data[id]) continue;
@@ -88,7 +121,7 @@ export class TrunkVoxels {
           const w = dx * side.x + dy * side.y + dz * side.z;
           if (s > depth || Math.abs(w) > barLength / 2) continue;
           this.data[id] = 0;
-          this.layerCount[j]--;
+          this.cutFibre(id, normal);
           this.chunks[Math.floor(j / CHUNK)].dirty = true;
           this.cutLow = Math.min(this.cutLow, j);
           this.cutHigh = Math.max(this.cutHigh, j);
@@ -118,20 +151,6 @@ export class TrunkVoxels {
     const held = new Set();
     const pieces = [];
 
-    const neighbours = (id) => {
-      const rest = id % layer;
-      const i = rest % n;
-      const k = (rest - i) / n;
-      const out = [];
-      if (i > 0) out.push(id - 1);
-      if (i < n - 1) out.push(id + 1);
-      if (k > 0) out.push(id - n);
-      if (k < n - 1) out.push(id + n);
-      if (id >= layer) out.push(id - layer);
-      if (id + layer < data.length) out.push(id + layer);
-      return out;
-    };
-
     const flood = (start) => {
       const no = ++this.floods;
       const piece = [];
@@ -142,7 +161,7 @@ export class TrunkVoxels {
         piece.push(id);
         const j = Math.floor(id / layer);
         if (j <= lo || j >= hi) return held.add(no);
-        for (const nb of neighbours(id)) {
+        for (const nb of this.neighbours(id)) {
           if (!data[nb]) continue;
           if (stamp[nb] >= first) {
             if (held.has(stamp[nb])) return held.add(no);
@@ -152,46 +171,49 @@ export class TrunkVoxels {
           stack.push(nb);
         }
       }
+      piece.forEach((id) => this.cutFibre(id));
       pieces.push(this.detach(piece));
     };
 
     for (const id of seeds) {
-      for (const nb of neighbours(id)) if (data[nb] && stamp[nb] < first) flood(nb);
+      for (const nb of this.neighbours(id)) if (data[nb] && stamp[nb] < first) flood(nb);
     }
     return pieces;
   }
 
-  // Самый тонкий слой: там дерево и сломается.
-  weakest() {
-    let best = 0;
-    for (let j = 1; j < this.ny; j++) if (this.layerCount[j] < this.layerCount[best]) best = j;
-    return { layer: best, share: this.layerCount[best] / this.full };
-  }
-
-  // Центр тяжести древесины в слое и её самая дальняя точка вдоль направления.
-  layerCentroid(j) {
-    let cx = 0, cz = 0, count = 0;
-    this.eachInLayer(j, (x, z) => { cx += x; cz += z; count++; });
-    return count ? { x: cx / count, z: cz / count } : { x: 0, z: 0 };
-  }
-
-  farthestAlong(j, dir) {
-    let best = 0;
-    this.eachInLayer(j, (x, z) => { best = Math.max(best, x * dir.x + z * dir.z); });
-    return best;
-  }
-
-  eachInLayer(j, fn) {
-    const { n } = this;
-    for (let k = 0; k < n; k++) {
-      for (let i = 0; i < n; i++) if (this.at(i, j, k)) fn(this.x(i), this.z(k), i, k);
+  // Отделяет верхушку, которая падает; здесь остаётся пень. Перерезанная колонка делится по выпилу:
+  // что выше него — верх. Целые колонки недопила рвутся на высоте h. Кусок между двумя пропилами
+  // в одной колонке уходит с верхом, если держится за него сбоку, иначе остаётся на пне.
+  splitTop(h) {
+    const { n, data, gap, gapLow, gapHigh } = this;
+    const layer = n * n;
+    const tear = Math.round(h / VOXEL);
+    const top = new Uint8Array(data.length);
+    const between = (id) => {
+      const j = Math.floor(id / layer);
+      const col = id - j * layer;
+      return gap[col] > 0 && j > gapLow[col] && j < gapHigh[col];
+    };
+    const stack = [];
+    for (let id = 0; id < data.length; id++) {
+      if (!data[id]) continue;
+      const j = Math.floor(id / layer);
+      const col = id - j * layer;
+      if (gap[col] ? j > gapHigh[col] : j >= tear) {
+        top[id] = 1;
+        stack.push(id);
+      }
     }
-  }
-
-  // Отделяет всё выше слоя layer в новую сетку (верхушка, которая падает); здесь остаётся пень.
-  split(layer) {
+    while (stack.length) {
+      for (const nb of this.neighbours(stack.pop())) {
+        if (data[nb] && !top[nb] && between(nb)) {
+          top[nb] = 1;
+          stack.push(nb);
+        }
+      }
+    }
     const ids = [];
-    for (let id = (layer + 1) * this.n * this.n; id < this.data.length; id++) if (this.data[id]) ids.push(id);
+    for (let id = 0; id < data.length; id++) if (top[id]) ids.push(id);
     return this.detach(ids);
   }
 
@@ -207,7 +229,6 @@ export class TrunkVoxels {
     }
     const part = new TrunkVoxels(this.radius, (jHigh - jLow + 1) * VOXEL, this.material, this.floor + jLow);
     part.data.fill(0);
-    part.layerCount.fill(0);
     part.chunks.forEach((c) => { c.dirty = false; });
     const center = new THREE.Vector3();
     for (const id of ids) {
@@ -218,10 +239,8 @@ export class TrunkVoxels {
       center.y += (this.floor + j + 0.5) * VOXEL;
       center.z += this.z(k);
       part.data[id - jLow * layer] = 1;
-      part.layerCount[j - jLow]++;
       part.chunks[Math.floor((j - jLow) / CHUNK)].dirty = true;
       this.data[id] = 0;
-      this.layerCount[j]--;
       this.chunks[Math.floor(j / CHUNK)].dirty = true;
     }
     part.center = center.divideScalar(ids.length);
