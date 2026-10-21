@@ -19,9 +19,10 @@ const FACES = [
 ];
 
 export class TrunkVoxels {
-  constructor(radius, height, material) {
+  // floor — с какого слоя (от земли) начинается сетка: у отвалившихся кусков она не с нуля.
+  constructor(radius, height, material, floor = 0) {
     this.radius = radius;
-    this.height = height;
+    this.floor = floor;
     this.n = Math.ceil((2 * radius) / VOXEL);
     this.ny = Math.round(height / VOXEL);
     this.half = (this.n * VOXEL) / 2;
@@ -38,8 +39,14 @@ export class TrunkVoxels {
     this.data = new Uint8Array(this.n * this.n * this.ny);
     for (let j = 0; j < this.ny; j++) this.data.set(this.inside, j * this.n * this.n);
     this.layerCount = new Int32Array(this.ny).fill(this.full);
+    // Слои, где уже прошла пила: только в них что-то может отвалиться.
+    this.cutLow = Infinity;
+    this.cutHigh = -1;
+    this.removed = []; // вырезанные с прошлой проверки на отвалившиеся куски
+    this.floods = 0;
 
     this.group = new THREE.Group();
+    this.group.position.y = floor * VOXEL;
     this.chunks = [];
     for (let c = 0; c * CHUNK < this.ny; c++) {
       const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);
@@ -83,9 +90,75 @@ export class TrunkVoxels {
           this.data[id] = 0;
           this.layerCount[j]--;
           this.chunks[Math.floor(j / CHUNK)].dirty = true;
+          this.cutLow = Math.min(this.cutLow, j);
+          this.cutHigh = Math.max(this.cutHigh, j);
+          this.removed.push(id);
         }
       }
     }
+  }
+
+  // Куски, которые пропилы отрезали от всего: ни с пнём снизу, ни со стволом сверху не связаны.
+  // Отвалиться может только то, что граничит с только что вырезанными кубиками, поэтому заливку
+  // запускаем от их соседей. Ниже и выше полосы, где работала пила, ствол цельный: кто дотянулся
+  // до её края или до уже признанного держащимся куска — держится, и заливка сразу обрывается.
+  // Вверх-вниз идём в первую очередь, так до края полосы обычно доходим за несколько шагов.
+  // Что залилось целиком, не дотянувшись, — отвалилось и переносится в свою сетку.
+  breakLoose() {
+    const seeds = this.removed;
+    this.removed = [];
+    if (!seeds.length) return [];
+    const { n, data } = this;
+    const layer = n * n;
+    const lo = this.cutLow - 1;
+    const hi = this.cutHigh + 1;
+    this.stamp ??= new Int32Array(data.length);
+    const { stamp } = this;
+    const first = this.floods + 1; // метки прошлых вызовов устарели: с тех пор пила могла что-то отрезать
+    const held = new Set();
+    const pieces = [];
+
+    const neighbours = (id) => {
+      const rest = id % layer;
+      const i = rest % n;
+      const k = (rest - i) / n;
+      const out = [];
+      if (i > 0) out.push(id - 1);
+      if (i < n - 1) out.push(id + 1);
+      if (k > 0) out.push(id - n);
+      if (k < n - 1) out.push(id + n);
+      if (id >= layer) out.push(id - layer);
+      if (id + layer < data.length) out.push(id + layer);
+      return out;
+    };
+
+    const flood = (start) => {
+      const no = ++this.floods;
+      const piece = [];
+      const stack = [start];
+      stamp[start] = no;
+      while (stack.length) {
+        const id = stack.pop();
+        piece.push(id);
+        const j = Math.floor(id / layer);
+        if (j <= lo || j >= hi) return held.add(no);
+        for (const nb of neighbours(id)) {
+          if (!data[nb]) continue;
+          if (stamp[nb] >= first) {
+            if (held.has(stamp[nb])) return held.add(no);
+            continue;
+          }
+          stamp[nb] = no;
+          stack.push(nb);
+        }
+      }
+      pieces.push(this.detach(piece));
+    };
+
+    for (const id of seeds) {
+      for (const nb of neighbours(id)) if (data[nb] && stamp[nb] < first) flood(nb);
+    }
+    return pieces;
   }
 
   // Самый тонкий слой: там дерево и сломается.
@@ -117,18 +190,45 @@ export class TrunkVoxels {
 
   // Отделяет всё выше слоя layer в новую сетку (верхушка, которая падает); здесь остаётся пень.
   split(layer) {
-    const top = new TrunkVoxels(this.radius, this.height, this.material);
-    const cut = (layer + 1) * this.n * this.n;
-    top.data.set(this.data);
-    top.layerCount.set(this.layerCount);
-    top.data.fill(0, 0, cut);
-    top.layerCount.fill(0, 0, layer + 1);
-    this.data.fill(0, cut);
-    this.layerCount.fill(0, layer + 1);
-    this.chunks.forEach((c) => { c.dirty = true; });
-    top.remesh();
+    const ids = [];
+    for (let id = (layer + 1) * this.n * this.n; id < this.data.length; id++) if (this.data[id]) ids.push(id);
+    return this.detach(ids);
+  }
+
+  // Переносит перечисленные кубики в новую сетку высотой ровно в их слои — отдельное тело.
+  // Заодно считает его центр и нижнюю точку (в координатах ствола): по ним кусок падает на землю.
+  detach(ids) {
+    const layer = this.n * this.n;
+    let jLow = Infinity, jHigh = -1;
+    for (const id of ids) {
+      const j = Math.floor(id / layer);
+      jLow = Math.min(jLow, j);
+      jHigh = Math.max(jHigh, j);
+    }
+    const part = new TrunkVoxels(this.radius, (jHigh - jLow + 1) * VOXEL, this.material, this.floor + jLow);
+    part.data.fill(0);
+    part.layerCount.fill(0);
+    part.chunks.forEach((c) => { c.dirty = false; });
+    const center = new THREE.Vector3();
+    for (const id of ids) {
+      const j = Math.floor(id / layer);
+      const rest = id - j * layer;
+      const k = Math.floor(rest / this.n);
+      center.x += this.x(rest - k * this.n);
+      center.y += (this.floor + j + 0.5) * VOXEL;
+      center.z += this.z(k);
+      part.data[id - jLow * layer] = 1;
+      part.layerCount[j - jLow]++;
+      part.chunks[Math.floor((j - jLow) / CHUNK)].dirty = true;
+      this.data[id] = 0;
+      this.layerCount[j]--;
+      this.chunks[Math.floor(j / CHUNK)].dirty = true;
+    }
+    part.center = center.divideScalar(ids.length);
+    part.low = part.floor * VOXEL;
+    part.remesh();
     this.remesh();
-    return top;
+    return part;
   }
 
   remesh() {

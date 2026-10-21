@@ -3,10 +3,12 @@ import { TrunkVoxels, VOXEL } from './trunk.js';
 
 const TRUNK_R = 0.3;
 const TREE_H = 12;
-const ZONE_H = 1.5;       // низ ствола из вокселей: здесь можно пилить
 const REACH = 1.0;        // докуда достаёт пила от лица до коры
-const SAW_SPEED = 0.12;   // метров глубины в секунду
-const BAR_L = 0.45;       // длина шины: ствол толще, с одной стороны насквозь не пропилить
+const MAX_ENTRY = 2.0;    // выше этого пилу к стволу не приставить
+// Низ ствола из вокселей: выше самой высокой точки входа ещё запас, чтобы полотно, наклонённое вверх, шло по древесине.
+const ZONE_H = 3.2;
+const SAW_SPEED = 0.2;    // метров глубины в секунду
+const BAR_L = 0.7;        // длина шины
 const HOLD = 0.2;         // доля слоя: если недопил меньше, дерево не держится
 const MAX_TILT = THREE.MathUtils.degToRad(60);
 const MAX_TURN = THREE.MathUtils.degToRad(30);
@@ -112,7 +114,7 @@ function newRound() {
 
   round = {
     root, voxels, upper, targetAz,
-    cuts: [],
+    cuts: [], debris: [],
     pivot: null, axis: null, fallDir: null, fallLen: 0, angle: 0, speed: 0,
     done: false,
   };
@@ -131,6 +133,9 @@ function basis(cut) {
   return { origin: cut.origin, along, side, normal };
 }
 
+// Насквозь по наклонному полотну дальше, чем по горизонтали.
+const fullDepth = (cut) => (2 * TRUNK_R) / Math.cos(cut.tilt);
+
 // Расстояние по взгляду до коры, если взгляд (по горизонтали) упирается в ствол.
 function distanceToBark(forward) {
   const along = -(player.pos.x * forward.x + player.pos.z * forward.z);
@@ -146,7 +151,7 @@ function sawCandidate(forward) {
   const bark = distanceToBark(forward);
   if (bark === null || bark > REACH) return null;
   const origin = player.pos.clone().addScaledVector(forward, bark);
-  origin.y = THREE.MathUtils.clamp(EYE + Math.tan(player.pitch) * bark, 0.05, ZONE_H - 0.05);
+  origin.y = THREE.MathUtils.clamp(EYE + Math.tan(player.pitch) * bark, 0.05, MAX_ENTRY);
   const fresh = { origin, yaw: player.yaw, tilt: 0, depth: 0 };
   const freshNormal = basis(fresh).normal;
   return round.cuts.find((c) => {
@@ -193,6 +198,34 @@ function startFall(layer) {
   round.angle = 0.03;
   mode = 'free';
   saw = null;
+}
+
+// Отпиленный кусок отваливается от ствола наружу, кувыркаясь, и ложится на землю.
+function dropPiece(part) {
+  const body = new THREE.Group();
+  body.position.copy(part.center);
+  part.group.position.sub(part.center);
+  body.add(part.group);
+  round.root.add(body);
+  const out = new THREE.Vector3(part.center.x, 0, part.center.z).normalize();
+  round.debris.push({
+    body,
+    velocity: out.multiplyScalar(0.6),
+    spin: new THREE.Vector3(-out.z, 0, out.x),
+    rest: part.center.y - part.low,
+    landed: false,
+  });
+}
+
+function fallPiece(piece, dt) {
+  if (piece.landed) return;
+  piece.velocity.y -= G * dt;
+  piece.body.position.addScaledVector(piece.velocity, dt);
+  piece.body.rotateOnWorldAxis(piece.spin, 2 * dt);
+  if (piece.body.position.y <= piece.rest) {
+    piece.body.position.y = piece.rest;
+    piece.landed = true;
+  }
 }
 
 function land() {
@@ -242,8 +275,9 @@ function update(dt) {
 
   if (mode === 'cut') {
     if (!round.cuts.includes(saw)) round.cuts.push(saw);
-    saw.depth = Math.min(saw.depth + SAW_SPEED * dt, 2 * TRUNK_R);
+    saw.depth = Math.min(saw.depth + SAW_SPEED * dt, fullDepth(saw));
     round.voxels.carve(basis(saw), saw.depth, BAR_L);
+    round.voxels.breakLoose().forEach(dropPiece);
     round.voxels.remesh();
     const weak = round.voxels.weakest();
     if (weak.share < HOLD) startFall(weak.layer);
@@ -253,6 +287,8 @@ function update(dt) {
   aimPlane.visible = Boolean(shown) && mode !== 'cut';
   bar.visible = Boolean(shown);
   if (shown) placeSaw(shown);
+
+  round.debris.forEach((piece) => fallPiece(piece, dt));
 
   if (round.pivot && !round.done) {
     // Падение стержня вокруг конца: угловое ускорение растёт с наклоном, поэтому сначала медленно, потом резко.
@@ -264,7 +300,7 @@ function update(dt) {
 
   hintEl.textContent = hint(candidate);
   depthEl.style.visibility = saw ? 'visible' : 'hidden';
-  if (saw) depthFillEl.style.width = `${(saw.depth / (2 * TRUNK_R)) * 100}%`;
+  if (saw) depthFillEl.style.width = `${(saw.depth / fullDepth(saw)) * 100}%`;
 
   drawSection(forward, right, shown);
 
