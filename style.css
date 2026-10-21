@@ -42,6 +42,25 @@ html, body {
   text-shadow: 0 1px 3px #000;
 }
 
+#log {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  max-width: 45%;
+  font-size: 17px;
+  line-height: 1.4;
+  text-shadow: 0 1px 3px #000;
+}
+
+#log div {
+  animation: fade 6s forwards;
+}
+
+@keyframes fade {
+  0%, 75% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 #depth {
   position: absolute;
   left: 50%;
