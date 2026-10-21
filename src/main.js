@@ -1,22 +1,21 @@
 import * as THREE from 'three';
+import { TrunkVoxels, VOXEL } from './trunk.js';
 
 const TRUNK_R = 0.3;
 const TREE_H = 12;
-const REACH = 1.0;        // докуда достаёт шина пилы от лица до коры
+const ZONE_H = 1.5;       // низ ствола из вокселей: здесь можно пилить
+const REACH = 1.0;        // докуда достаёт пила от лица до коры
 const SAW_SPEED = 0.12;   // метров глубины в секунду
-const HOLD = 0.2;         // доля сечения: если недопил меньше, дерево не держится
-const CUT_MIN_Y = 0.3;
-const CUT_MAX_Y = 1.3;
-const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(8));   // прицел прилипает к пропилу, если почти совпал
-const SNAP_HEIGHT = 0.06;
-const SAME_KERF = Math.cos(THREE.MathUtils.degToRad(20));
+const BAR_L = 0.45;       // длина шины: ствол толще, с одной стороны насквозь не пропилить
+const HOLD = 0.2;         // доля слоя: если недопил меньше, дерево не держится
+const MAX_TILT = THREE.MathUtils.degToRad(60);
+const MAX_TURN = THREE.MathUtils.degToRad(30);
+const SNAP_DIST = 0.03;   // прицел прилипает к начатому пропилу, если почти совпал с ним
+const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(10));
 const TOLERANCE = THREE.MathUtils.degToRad(10);
 const EYE = 1.7;
 const G = 9.8;
-
-// Сечение ствола — многоугольник; каждый пропил отрезает от него хорду.
-const SECTION_SIDES = 64;
-const FULL_SECTION = (SECTION_SIDES / 2) * TRUNK_R ** 2 * Math.sin((Math.PI * 2) / SECTION_SIDES);
+const MOUSE = 0.0022;
 
 const canvas = document.getElementById('scene');
 const hintEl = document.getElementById('hint');
@@ -49,45 +48,55 @@ ground.rotation.x = -Math.PI / 2;
 scene.add(ground);
 
 const barkMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2b });
+const voxelMat = new THREE.MeshLambertMaterial({ vertexColors: true });
 const crownMat = new THREE.MeshLambertMaterial({ color: 0x2f5d2a });
-const kerfMat = new THREE.MeshBasicMaterial({ color: 0x1a0f08 });
-const aimMat = new THREE.MeshBasicMaterial({ color: 0xff9a2e, transparent: true, opacity: 0.7 });
 const targetMat = new THREE.MeshBasicMaterial({
   color: 0x4cff6a, transparent: true, opacity: 0.35, depthWrite: false,
 });
+
+// Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил, и сама шина на текущей глубине.
+const aimPlane = new THREE.Mesh(
+  new THREE.PlaneGeometry(BAR_L, 2 * TRUNK_R),
+  new THREE.MeshBasicMaterial({
+    color: 0xff9a2e, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false,
+  }),
+);
+const bar = new THREE.Mesh(
+  new THREE.BoxGeometry(BAR_L, 0.05, 0.012),
+  new THREE.MeshLambertMaterial({ color: 0x9a9aa0 }),
+);
+scene.add(aimPlane, bar);
 
 // Направление на земле задаём азимутом: 0 — вдоль +x, против часовой стрелки при взгляде сверху.
 // Так же считают углы RingGeometry после поворота на землю, поэтому сектор цели совпадает с азимутом.
 const dirOf = (az) => new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
 const azimuthOf = (v) => Math.atan2(-v.z, v.x);
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+const forwardOf = (yaw) => new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
 
 const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0 };
 const keys = new Set();
-let sawing = false;
+// free — ходим и смотрим; aim — пила приставлена, мышь крутит полотно; cut — пилим.
+let mode = 'free';
+let saw = null;
 let round = null;
 
-const aimMesh = new THREE.Mesh(new THREE.BufferGeometry(), aimMat);
-aimMesh.rotation.order = 'YXZ';
-scene.add(aimMesh);
-
-// Кусок ствола между высотами y0 и y1; ствол сужается к вершине.
-// У земли он ровно TRUNK_R и нигде не толще: по этому радиусу считаются пропилы, и их полоса должна выступать из коры.
-function trunkPiece(y0, y1) {
-  const radius = (y) => TRUNK_R * (1 - (0.4 * y) / TREE_H);
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius(y1), radius(y0), y1 - y0, 24), barkMat);
-  mesh.position.y = (y0 + y1) / 2;
+// Ствол выше зоны пиления — обычный цилиндр, сужается к вершине.
+function upperTrunk() {
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(TRUNK_R * 0.6, TRUNK_R, TREE_H - ZONE_H, 48), barkMat);
+  mesh.position.y = (ZONE_H + TREE_H) / 2;
   return mesh;
 }
 
 function newRound() {
   if (round) scene.remove(round.root);
 
-  const trunk = trunkPiece(0, TREE_H);
+  const voxels = new TrunkVoxels(TRUNK_R, ZONE_H, voxelMat);
+  voxels.remesh();
   const crown = new THREE.Mesh(new THREE.ConeGeometry(2.2, 7, 12), crownMat);
   crown.position.y = TREE_H - 2;
   const upper = new THREE.Group();
-  upper.add(trunk, crown);
+  upper.add(upperTrunk(), crown);
 
   const targetAz = Math.random() * Math.PI * 2;
   const target = new THREE.Mesh(
@@ -98,96 +107,80 @@ function newRound() {
   target.position.y = 0.02;
 
   const root = new THREE.Group();
-  root.add(upper, target);
+  root.add(voxels.group, upper, target);
   scene.add(root);
 
   round = {
-    root, upper, trunk, targetAz,
-    cuts: [], active: null,
+    root, voxels, upper, targetAz,
+    cuts: [],
     pivot: null, axis: null, fallDir: null, fallLen: 0, angle: 0, speed: 0,
     done: false,
   };
+  mode = 'free';
+  saw = null;
   resultEl.hidden = true;
 }
 
-// Пропил — плоская срезанная часть круга ствола: всё, что ближе к пильщику, чем хорда на глубине depth.
-// Радиус чуть больше ствола, чтобы пропил проступал на коре полосой.
-function shapeKerf(mesh, { dir, y, depth }, radius) {
-  const chord = -TRUNK_R + depth;
-  const a = Math.acos(THREE.MathUtils.clamp(chord / radius, -1, 1));
-  const shape = new THREE.Shape();
-  shape.absarc(0, 0, radius, a, Math.PI * 2 - a, false);
-  shape.closePath();
-  mesh.geometry.dispose();
-  mesh.geometry = new THREE.ExtrudeGeometry(shape, { depth: 0.02, bevelEnabled: false });
-  mesh.position.y = y;
-  mesh.rotation.set(-Math.PI / 2, azimuthOf(dir), 0);
+// Пропил задан точкой входа на коре, поворотом по горизонтали и наклоном полотна.
+// along — куда пила идёт вглубь, side — вдоль шины, normal — перпендикуляр к полотну.
+function basis(cut) {
+  const flat = forwardOf(cut.yaw);
+  const side = new THREE.Vector3(-flat.z, 0, flat.x);
+  const along = flat.multiplyScalar(Math.cos(cut.tilt)).setY(-Math.sin(cut.tilt));
+  const normal = side.clone().cross(along);
+  return { origin: cut.origin, along, side, normal };
 }
 
-function addCut({ dir, y }) {
-  const mesh = new THREE.Mesh(new THREE.BufferGeometry(), kerfMat);
-  mesh.rotation.order = 'YXZ';
-  round.root.add(mesh);
-  const cut = { dir, y, depth: 0, mesh };
-  round.cuts.push(cut);
-  return cut;
+// Расстояние по взгляду до коры, если взгляд (по горизонтали) упирается в ствол.
+function distanceToBark(forward) {
+  const along = -(player.pos.x * forward.x + player.pos.z * forward.z);
+  if (along <= 0) return null;
+  const perp2 = player.pos.x ** 2 + player.pos.z ** 2 - along ** 2;
+  if (perp2 > TRUNK_R ** 2) return null;
+  return along - Math.sqrt(TRUNK_R ** 2 - perp2);
 }
 
-// Что осталось от сечения после всех пропилов (в координатах x, z от оси ствола).
-function section() {
-  let poly = [];
-  for (let i = 0; i < SECTION_SIDES; i++) {
-    const a = (i / SECTION_SIDES) * Math.PI * 2;
-    poly.push([Math.cos(a) * TRUNK_R, Math.sin(a) * TRUNK_R]);
-  }
-  for (const cut of round.cuts) poly = clip(poly, cut.dir.x, cut.dir.z, -TRUNK_R + cut.depth);
-  return poly;
+// Куда встанет пила, если приставить её сейчас: точка на коре под прицелом, полотно горизонтально.
+// Если рядом начатый пропил того же направления, пила встаёт в него.
+function sawCandidate(forward) {
+  const bark = distanceToBark(forward);
+  if (bark === null || bark > REACH) return null;
+  const origin = player.pos.clone().addScaledVector(forward, bark);
+  origin.y = THREE.MathUtils.clamp(EYE + Math.tan(player.pitch) * bark, 0.05, ZONE_H - 0.05);
+  const fresh = { origin, yaw: player.yaw, tilt: 0, depth: 0 };
+  const freshNormal = basis(fresh).normal;
+  return round.cuts.find((c) => {
+    const { normal } = basis(c);
+    return normal.dot(freshNormal) > SNAP_COS
+      && forwardOf(c.yaw).dot(forward) > SNAP_COS
+      && Math.abs(origin.clone().sub(c.origin).dot(normal)) < SNAP_DIST;
+  }) ?? fresh;
 }
 
-// Оставляет часть многоугольника, где p·n >= k.
-function clip(poly, nx, nz, k) {
-  const out = [];
-  poly.forEach((p, i) => {
-    const q = poly[(i + 1) % poly.length];
-    const dp = p[0] * nx + p[1] * nz - k;
-    const dq = q[0] * nx + q[1] * nz - k;
-    if (dp >= 0) out.push(p);
-    if (dp * dq < 0) {
-      const t = dp / (dp - dq);
-      out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
-    }
-  });
-  return out;
-}
-
-function areaAndCentroid(poly) {
-  let a = 0, cx = 0, cz = 0;
-  poly.forEach((p, i) => {
-    const q = poly[(i + 1) % poly.length];
-    const cross = p[0] * q[1] - q[0] * p[1];
-    a += cross;
-    cx += (p[0] + q[0]) * cross;
-    cz += (p[1] + q[1]) * cross;
-  });
-  if (a === 0) return { area: 0, x: 0, z: 0 };
-  return { area: Math.abs(a / 2), x: cx / (3 * a), z: cz / (3 * a) };
+function placeSaw(cut) {
+  const b = basis(cut);
+  const rotation = new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(b.side, b.along, b.normal),
+  );
+  aimPlane.quaternion.copy(rotation);
+  aimPlane.position.copy(b.origin).addScaledVector(b.along, TRUNK_R);
+  bar.quaternion.copy(rotation);
+  bar.position.copy(b.origin).addScaledVector(b.along, cut.depth);
 }
 
 // Дерево перекидывается через недопил: падает в ту сторону, куда недопил смещён от оси.
-// Подпил с одной стороны и валочный пропил с другой оставляют недопил у подпила — туда и падение.
 // Недопил по центру или его нет вовсе — направление не задал никто, дерево решает само.
-function startFall(poly, rest) {
+function startFall(layer) {
+  const { voxels } = round;
+  const rest = voxels.layerCentroid(layer);
   const off = Math.hypot(rest.x, rest.z);
   const f = off > 0.05 * TRUNK_R
     ? new THREE.Vector3(rest.x / off, 0, rest.z / off)
     : dirOf(Math.random() * Math.PI * 2);
-  const edge = poly.reduce((m, p) => Math.max(m, p[0] * f.x + p[1] * f.z), 0);
-  const h = round.cuts.reduce((s, c) => s + c.y, 0) / round.cuts.length;
+  const edge = voxels.farthestAlong(layer, f);
+  const h = (layer + 1) * VOXEL;
 
-  round.trunk.removeFromParent();
-  round.root.add(trunkPiece(0, h));
-  round.upper.add(trunkPiece(h, TREE_H));
-
+  round.upper.add(voxels.split(layer).group);
   const pivot = new THREE.Group();
   pivot.position.copy(f).multiplyScalar(edge).setY(h);
   round.root.add(pivot);
@@ -198,7 +191,8 @@ function startFall(poly, rest) {
   round.fallLen = TREE_H - h;
   round.axis = new THREE.Vector3(0, 1, 0).cross(f);
   round.angle = 0.03;
-  round.active = null;
+  mode = 'free';
+  saw = null;
 }
 
 function land() {
@@ -222,34 +216,18 @@ function showResult(title, note) {
   resultEl.hidden = false;
 }
 
-// Расстояние по взгляду до коры, если взгляд (по горизонтали) упирается в ствол.
-function distanceToBark(forward) {
-  const along = -(player.pos.x * forward.x + player.pos.z * forward.z);
-  if (along <= 0) return null;
-  const perp2 = player.pos.x ** 2 + player.pos.z ** 2 - along ** 2;
-  if (perp2 > TRUNK_R ** 2) return null;
-  return along - Math.sqrt(TRUNK_R ** 2 - perp2);
-}
-
-// Куда ляжет пропил: направление взгляда и высота, где прицел встречает кору.
-// Если это почти совпадает с уже начатым пропилом, прицел встаёт в него.
-function aimAt(forward) {
-  const bark = distanceToBark(forward);
-  if (bark === null || bark > REACH) return null;
-  const y = THREE.MathUtils.clamp(EYE + Math.tan(player.pitch) * bark, CUT_MIN_Y, CUT_MAX_Y);
-  const cut = round.cuts.find((c) => c.dir.dot(forward) > SNAP_COS && Math.abs(c.y - y) < SNAP_HEIGHT);
-  return cut ?? { dir: forward.clone(), y, depth: 0 };
-}
-
 function update(dt) {
-  const forward = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+  const forward = forwardOf(player.yaw);
   const right = new THREE.Vector3(-forward.z, 0, forward.x);
 
+  // Ходить можно, только пока пила не приставлена к стволу.
   const move = new THREE.Vector3();
-  if (keys.has('KeyW')) move.add(forward);
-  if (keys.has('KeyS')) move.sub(forward);
-  if (keys.has('KeyD')) move.add(right);
-  if (keys.has('KeyA')) move.sub(right);
+  if (mode === 'free') {
+    if (keys.has('KeyW')) move.add(forward);
+    if (keys.has('KeyS')) move.sub(forward);
+    if (keys.has('KeyD')) move.add(right);
+    if (keys.has('KeyA')) move.sub(right);
+  }
   const moving = move.lengthSq() > 0;
   if (moving) {
     const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6 : 3;
@@ -260,23 +238,21 @@ function update(dt) {
   const dist = Math.hypot(player.pos.x, player.pos.z);
   if (dist < minDist) player.pos.multiplyScalar(minDist / dist);
 
-  const aim = round.pivot ? null : aimAt(forward);
-  if (!sawing) round.active = null;
-  else if (!round.active && aim) round.active = round.cuts.includes(aim) ? aim : addCut(aim);
+  const candidate = mode === 'free' && !round.pivot ? sawCandidate(forward) : null;
 
-  const active = round.active;
-  const aligned = !active || forward.dot(active.dir) > SAME_KERF;
-  const cutting = active && aim && aligned;
-  if (cutting) {
-    active.depth = Math.min(active.depth + SAW_SPEED * dt, TRUNK_R * 2);
-    shapeKerf(active.mesh, active, TRUNK_R * 1.03);
-    const poly = section();
-    const rest = areaAndCentroid(poly);
-    if (rest.area < HOLD * FULL_SECTION) startFall(poly, rest);
+  if (mode === 'cut') {
+    if (!round.cuts.includes(saw)) round.cuts.push(saw);
+    saw.depth = Math.min(saw.depth + SAW_SPEED * dt, 2 * TRUNK_R);
+    round.voxels.carve(basis(saw), saw.depth, BAR_L);
+    round.voxels.remesh();
+    const weak = round.voxels.weakest();
+    if (weak.share < HOLD) startFall(weak.layer);
   }
 
-  aimMesh.visible = Boolean(aim) && !active;
-  if (aimMesh.visible) shapeKerf(aimMesh, { ...aim, depth: Math.max(aim.depth, 0.04) + 0.005 }, TRUNK_R * 1.06);
+  const shown = saw ?? candidate;
+  aimPlane.visible = Boolean(shown) && mode !== 'cut';
+  bar.visible = Boolean(shown);
+  if (shown) placeSaw(shown);
 
   if (round.pivot && !round.done) {
     // Падение стержня вокруг конца: угловое ускорение растёт с наклоном, поэтому сначала медленно, потом резко.
@@ -286,21 +262,14 @@ function update(dt) {
     if (round.angle === Math.PI / 2) land();
   }
 
-  if (round.pivot) hintEl.textContent = round.done ? '' : 'Падает! Беги!';
-  else if (active && !aligned) hintEl.textContent = 'Пили в тот же пропил';
-  else if (active) hintEl.textContent = '';
-  else if (!aim) hintEl.textContent = round.cuts.length ? '' : 'Подойди к стволу';
-  else if (round.cuts.includes(aim)) hintEl.textContent = 'ЛКМ — продолжить пропил';
-  else hintEl.textContent = 'ЛКМ — новый пропил';
+  hintEl.textContent = hint(candidate);
+  depthEl.style.visibility = saw ? 'visible' : 'hidden';
+  if (saw) depthFillEl.style.width = `${(saw.depth / (2 * TRUNK_R)) * 100}%`;
 
-  const shown = active ?? aim;
-  depthEl.style.visibility = shown && !round.pivot ? 'visible' : 'hidden';
-  if (shown) depthFillEl.style.width = `${(shown.depth / (TRUNK_R * 2)) * 100}%`;
-
-  drawSection(forward, right, aim);
+  drawSection(forward, right, shown);
 
   let hx = 0, hy = 0;
-  if (cutting) {
+  if (mode === 'cut') {
     hx = (Math.random() - 0.5) * 6;
     hy = (Math.random() - 0.5) * 6;
   } else if (moving) {
@@ -314,29 +283,54 @@ function update(dt) {
   camera.rotation.set(player.pitch, player.yaw, 0);
 }
 
-// Схема сечения сверху, развёрнутая по взгляду: ты всегда снизу.
-// Светлое — недопил, тёмное — выпиленное, оранжевая линия — куда ляжет пропил, зелёная — цель.
-function drawSection(forward, right, aim) {
+function hint(candidate) {
+  if (round.pivot) return round.done ? '' : 'Падает! Беги!';
+  if (mode === 'cut') return '';
+  if (mode === 'aim') {
+    if (saw.depth > 0) return 'ЛКМ — пилить дальше · S — убрать пилу';
+    const tilt = Math.round(THREE.MathUtils.radToDeg(saw.tilt));
+    return `Наклон ${tilt}° · мышь — наклон и поворот · ЛКМ — пилить · S — убрать пилу`;
+  }
+  if (!candidate) return round.cuts.length ? '' : 'Подойди к стволу';
+  return round.cuts.includes(candidate) ? 'ЛКМ — приставить пилу к пропилу' : 'ЛКМ — приставить пилу';
+}
+
+// Схема слоя ствола сверху, развёрнутая по взгляду: ты всегда снизу.
+// Светлое — древесина, тёмное — выпилено. Показан слой под пилой, а без пилы — самый тонкий.
+const layerCanvas = document.createElement('canvas');
+const layerCtx = layerCanvas.getContext('2d');
+
+function drawSection(forward, right, shown) {
+  const { voxels } = round;
+  const { n } = voxels;
+  const layer = shown ? voxels.layerOf(shown.origin.y) : voxels.weakest().layer;
+  layerCanvas.width = layerCanvas.height = n;
+  const img = layerCtx.createImageData(n, n);
+  for (let k = 0; k < n; k++) {
+    for (let i = 0; i < n; i++) {
+      if (!voxels.inside[k * n + i]) continue;
+      img.data.set(voxels.at(i, layer, k) ? [226, 191, 134, 255] : [42, 26, 14, 255], (k * n + i) * 4);
+    }
+  }
+  layerCtx.putImageData(img, 0, 0);
+
+  // Кубик (i, k) лежит в мире в (x, z); на экране x идёт вдоль right, z — против forward.
   const ctx = sectionCtx;
   const size = sectionEl.width;
   const scale = (size * 0.36) / TRUNK_R;
+  const px = scale * VOXEL;
+  const a = right.x * px, b = -forward.x * px, c = right.z * px, d = -forward.z * px;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, size, size);
+  ctx.imageSmoothingEnabled = false;
+  ctx.setTransform(a, b, c, d, size / 2 - ((a + c) * n) / 2, size / 2 - ((b + d) * n) / 2);
+  ctx.drawImage(layerCanvas, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
   const toScreen = (x, z) => [
     size / 2 + (x * right.x + z * right.z) * scale,
     size / 2 - (x * forward.x + z * forward.z) * scale,
   ];
-
-  ctx.clearRect(0, 0, size, size);
-  ctx.fillStyle = '#2a1a0e';
-  ctx.beginPath();
-  ctx.arc(size / 2, size / 2, TRUNK_R * scale, 0, Math.PI * 2);
-  ctx.fill();
-
-  const poly = section();
-  ctx.fillStyle = '#e2bf86';
-  ctx.beginPath();
-  poly.forEach(([x, z]) => ctx.lineTo(...toScreen(x, z)));
-  ctx.fill();
-
   const target = dirOf(round.targetAz);
   ctx.strokeStyle = '#4cff6a';
   ctx.lineWidth = 3;
@@ -344,18 +338,6 @@ function drawSection(forward, right, aim) {
   ctx.moveTo(...toScreen(target.x * TRUNK_R * 1.1, target.z * TRUNK_R * 1.1));
   ctx.lineTo(...toScreen(target.x * TRUNK_R * 1.35, target.z * TRUNK_R * 1.35));
   ctx.stroke();
-
-  if (aim && !round.active) {
-    const u = -TRUNK_R + Math.max(aim.depth, 0.01);
-    const w = Math.sqrt(TRUNK_R ** 2 - u ** 2);
-    const side = new THREE.Vector3(-aim.dir.z, 0, aim.dir.x);
-    ctx.strokeStyle = '#ff9a2e';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(...toScreen(aim.dir.x * u + side.x * w, aim.dir.z * u + side.z * w));
-    ctx.lineTo(...toScreen(aim.dir.x * u - side.x * w, aim.dir.z * u - side.z * w));
-    ctx.stroke();
-  }
 }
 
 function resize() {
@@ -373,6 +355,11 @@ addEventListener('resize', resize);
 addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'KeyR') newRound();
+  // S при приставленной пиле — шаг назад: пила убрана, ходить снова можно.
+  if (e.code === 'KeyS' && mode !== 'free') {
+    mode = 'free';
+    saw = null;
+  }
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 startEl.addEventListener('click', () => {
@@ -382,20 +369,29 @@ startEl.addEventListener('click', () => {
 canvas.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   if (document.pointerLockElement !== canvas) lockPointer();
-  // Каждое нажатие заново выбирает пропил по прицелу, даже если между отпусканием и нажатием не прошло ни кадра.
-  round.active = null;
-  sawing = true;
+  if (mode === 'aim') mode = 'cut';
+  else if (mode === 'free' && !round.pivot) {
+    saw = sawCandidate(forwardOf(player.yaw));
+    if (saw) mode = 'aim';
+  }
 });
 addEventListener('mouseup', (e) => {
-  if (e.button === 0) sawing = false;
+  if (e.button === 0 && mode === 'cut') mode = 'aim';
 });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== canvas) sawing = false;
+  if (document.pointerLockElement !== canvas && mode === 'cut') mode = 'aim';
 });
 document.addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas) return;
-  player.yaw -= e.movementX * 0.0022;
-  player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * 0.0022, -1.5, 1.5);
+  if (mode === 'free') {
+    player.yaw -= e.movementX * MOUSE;
+    player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * MOUSE, -1.5, 1.5);
+  } else if (mode === 'aim' && saw.depth === 0) {
+    // Пока пила не вошла в древесину, мышь крутит полотно: вбок — поворот, вверх-вниз — наклон.
+    const turn = THREE.MathUtils.clamp(angleDiff(saw.yaw - e.movementX * MOUSE, player.yaw), -MAX_TURN, MAX_TURN);
+    saw.yaw = player.yaw + turn;
+    saw.tilt = THREE.MathUtils.clamp(saw.tilt + e.movementY * MOUSE, -MAX_TILT, MAX_TILT);
+  }
 });
 
 resize();
