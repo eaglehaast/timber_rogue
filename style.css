@@ -78,14 +78,31 @@ html, body {
   background: #f2a33a;
 }
 
-#section {
+#side {
   position: absolute;
   top: 16px;
   right: 16px;
-  width: 150px;
-  height: 150px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.25);
+  width: 180px;
+  height: 240px;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-radius: 6px;
+}
+
+#side span {
+  position: absolute;
+  left: 6px;
+  bottom: 4px;
+  font-size: 13px;
+  text-shadow: 0 1px 2px #000;
+}
+
+#gap {
+  position: absolute;
+  left: calc(50% + 92px);
+  top: 63%;
+  margin-top: -6px;
+  font-size: 16px;
+  text-shadow: 0 1px 3px #000;
 }
 
 #hands {

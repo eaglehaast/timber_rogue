@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { TrunkVoxels, VOXEL } from './trunk.js';
-import { section, tipping, closing, pivotHeight, tearAngle, slope, kerfLoad, THIN, FRICTION } from './physics.js';
+import {
+  section, tipping, closing, pivotHeight, tearAngle, slope, deflection, kerfWidth, FRICTION,
+} from './physics.js';
 
 const TRUNK_R = 0.3;
 const TREE_H = 12;
@@ -12,7 +14,11 @@ const SAW_SPEED = 0.2;    // метров глубины в секунду
 const BAR_L = 0.7;        // длина шины
 // Массы, кг: низ ствола, остальной ствол, крона. Крона тяжёлая и смещена — она и решает, куда тянет вес.
 const M_ZONE = 800, M_TRUNK = 1500, M_CROWN = 900;
-const PINCH = 2.5;        // во столько раз пропил под шиной сжат сильнее среднего — закусывает
+const PINCH = 3;          // мм: уже этого щель под шиной — закусывает
+const OPEN = 14;          // мм: шире — щель раскрывается
+const LEAN = THREE.MathUtils.degToRad(0.4); // настолько наклонился ствол — это уже заметно
+// Больше этого ствол стоя не наклоняется: недопил теряет устойчивость, и дальше его ведёт падение.
+const SHOWN_TILT = THREE.MathUtils.degToRad(3);
 const MAX_TILT = THREE.MathUtils.degToRad(60);
 const MAX_TURN = THREE.MathUtils.degToRad(30);
 const SNAP_DIST = 0.03;   // прицел прилипает к начатому пропилу, если почти совпал с ним
@@ -30,8 +36,8 @@ const handsEl = document.getElementById('hands');
 const resultEl = document.getElementById('result');
 const logEl = document.getElementById('log');
 const startEl = document.getElementById('start');
-const sectionEl = document.getElementById('section');
-const sectionCtx = sectionEl.getContext('2d');
+const gapEl = document.getElementById('gap');
+const sideEl = document.getElementById('side');
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -40,6 +46,8 @@ scene.background = new THREE.Color(0x9cc4e4);
 scene.fog = new THREE.Fog(0x9cc4e4, 30, 90);
 const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 200);
 camera.rotation.order = 'YXZ';
+// Вид сбоку — справа от игрока, на всё дерево: видно, клонится ли ствол к тебе или от тебя.
+const sideCamera = new THREE.PerspectiveCamera(50, 0.75, 0.5, 200);
 
 scene.add(new THREE.HemisphereLight(0xdfefff, 0x4a5a30, 1.2));
 const sun = new THREE.DirectionalLight(0xffffff, 1.5);
@@ -147,7 +155,7 @@ function newRound() {
     root, voxels, upper, targetAz, ...tree,
     weight: mass * G, mass,
     wind: { dir: dirOf(Math.random() * Math.PI * 2), max: 0.05 + Math.random() * 0.2, phase: Math.random() * 9 },
-    time: 0, sway: new THREE.Vector3(),
+    time: 0, sway: new THREE.Vector3(), tilt: new THREE.Vector3(), gap: null,
     sec: null, secVersion: -1,
     cuts: [], debris: [],
     top: false, slide: null, fall: null, done: false,
@@ -209,9 +217,9 @@ function placeSaw(cut) {
   bar.position.copy(b.origin).addScaledVector(b.along, cut.depth);
 }
 
-// Центр тяжести над срезом с поправкой на ветер и на то, куда съехал перерезанный верх.
+// Центр тяжести над срезом с поправкой на ветер, на наклон ствола и на то, куда съехал перерезанный верх.
 function centerOfMass() {
-  const c = round.com.clone().add(round.sway);
+  const c = round.com.clone().add(round.sway).addScaledVector(round.tilt, round.com.y);
   if (round.slide) c.addScaledVector(round.slide.dir, round.slide.s * Math.cos(round.slide.tilt));
   return c;
 }
@@ -241,30 +249,43 @@ function crack(power) {
   const source = audio.createBufferSource();
   source.buffer = buffer;
   const gain = audio.createGain();
-  gain.gain.value = power;
+  gain.gain.value = 0.25 * power;
   source.connect(gain).connect(audio.destination);
   source.start();
 }
 
-// Стоящее дерево: качает ветром, и после каждого кубика пересчитываем, держит ли его недопил.
+// Стоящее дерево: качает ветром, недопил гнётся под весом, и после каждого кубика
+// пересчитываем, держит ли он дерево.
 function stand(dt) {
   round.time += dt;
   const g = gust(round.time, round.wind.phase);
   round.sway.copy(round.wind.dir).multiplyScalar(g * round.wind.max);
-  // Крона качается вокруг сгиба: смещение веса делим на высоту над сгибом.
-  const swayAxis = new THREE.Vector3(0, 1, 0).cross(round.wind.dir);
-  round.bend.quaternion.setFromAxisAngle(swayAxis, (g * round.wind.max) / (round.com.y - ZONE_H)).multiply(round.lean);
-
-  if (!round.voxels.version) return;
-  if (round.secVersion !== round.voxels.version) {
+  if (round.voxels.version && round.secVersion !== round.voxels.version) {
     round.sec = section(round.voxels);
     round.secVersion = round.voxels.version;
   }
   const { sec } = round;
-  const c = centerOfMass();
+  if (sec) round.tilt = deflection(sec, round.com.clone().add(round.sway), round.weight, round.com.y);
 
+  // Крона качается вокруг сгиба: смещение веса делим на высоту над сгибом. Наклон недопила
+  // рисуем там же — на глаз разницы с поворотом у пропила при таких углах нет.
+  // Наклон больше SHOWN_TILT бывает, только когда недопил потерял устойчивость: дерево в этом
+  // же кадре начинает падать, и дальше его поворачивает падение.
+  const up = new THREE.Vector3(0, 1, 0);
+  const sway = new THREE.Quaternion().setFromAxisAngle(
+    up.clone().cross(round.wind.dir), (g * round.wind.max) / (round.com.y - ZONE_H),
+  );
+  const tilt = new THREE.Quaternion().setFromAxisAngle(
+    up.clone().cross(round.tilt).normalize(), Math.min(round.tilt.length(), SHOWN_TILT),
+  );
+  round.bend.quaternion.copy(tilt).multiply(sway).multiply(round.lean);
+  if (!sec) return;
+
+  const c = centerOfMass();
   if (g > 0.8) say('gust', 'Порыв ветра качнул крону');
   else if (g < 0.4) unsay('gust');
+  if (round.tilt.length() > LEAN) say('lean', 'Ствол начал клониться — смотри вид сбоку');
+  else if (round.tilt.length() < LEAN / 2) unsay('lean');
 
   if (!sec.intact.length) {
     const s = slope(sec);
@@ -279,16 +300,17 @@ function stand(dt) {
     say('creak', 'Недопил потрескивает — ещё немного');
   } else if (tip.ratio < 0.5) unsay('creak');
 
-  // Пропил под шиной: сжимается — закусывает, растянут — раскрывается.
-  if (mode !== 'cut' || saw.depth < 0.05) return;
+  // Щель под шиной: наклон ствола её сжимает или раскрывает.
+  round.gap = null;
+  if (!saw || saw.depth < 0.05) return;
   const b = basis(saw);
-  const load = kerfLoad(sec, c, b.origin.clone().addScaledVector(b.along, saw.depth));
-  if (load === null) return;
-  if (load > PINCH) {
-    say('pinch', 'Пропил сжимается — вес давит на шину, пилу начинает закусывать');
+  round.gap = kerfWidth(sec, round.tilt, b.origin.clone().addScaledVector(b.along, saw.depth));
+  if (mode !== 'cut') return;
+  if (round.gap < PINCH) {
+    say('pinch', 'Щель сжимается — вес давит на шину, пилу начинает закусывать');
     unsay('open');
-  } else if (load < 0) {
-    say('open', 'Пропил раскрывается — дерево тянет от пилы');
+  } else if (round.gap > OPEN) {
+    say('open', 'Щель раскрывается — ствол уходит от пилы');
     unsay('pinch');
   }
 }
@@ -495,7 +517,13 @@ function update(dt) {
   depthEl.style.visibility = saw ? 'visible' : 'hidden';
   if (saw) depthFillEl.style.width = `${(saw.depth / fullDepth(saw)) * 100}%`;
 
-  drawSection(forward, right, shown);
+  gapEl.hidden = round.gap === null || round.top;
+  if (!gapEl.hidden) {
+    const mm = round.gap;
+    gapEl.textContent = `Щель ${mm.toFixed(0)} мм${mm < 9 ? ' — сужается' : mm > 11 ? ' — расширяется' : ''}`;
+  }
+  sideCamera.position.copy(right).multiplyScalar(16).setY(6.5);
+  sideCamera.lookAt(0, 6.5, 0);
 
   let hx = 0, hy = 0;
   if (mode === 'cut') {
@@ -523,77 +551,6 @@ function hint(candidate) {
   }
   if (!candidate) return round.cuts.length ? '' : 'Подойди к стволу';
   return round.cuts.includes(candidate) ? 'ЛКМ — приставить пилу к пропилу' : 'ЛКМ — приставить пилу';
-}
-
-// Схема волокон ствола сверху, развёрнутая по взгляду: ты всегда снизу. Светлое — целые волокна
-// (недопил), коричневое — перерезаны тонким пропилом и только опираются, тёмное — выпилено.
-// Красная точка — куда тянет вес вместе с ветром, оранжевая черта — конец шины.
-const fibreCanvas = document.createElement('canvas');
-const fibreCtx = fibreCanvas.getContext('2d');
-let fibreVersion = -1;
-
-function drawFibres() {
-  const { voxels } = round;
-  const { n } = voxels;
-  fibreCanvas.width = fibreCanvas.height = n;
-  const img = fibreCtx.createImageData(n, n);
-  for (let col = 0; col < n * n; col++) {
-    if (!voxels.inside[col]) continue;
-    const gap = voxels.gap[col];
-    img.data.set(!gap ? [226, 191, 134, 255] : gap <= THIN ? [150, 98, 52, 255] : [42, 26, 14, 255], col * 4);
-  }
-  fibreCtx.putImageData(img, 0, 0);
-}
-
-function drawSection(forward, right, shown) {
-  const { n } = round.voxels;
-  if (fibreVersion !== round.voxels.version || fibreCanvas.width !== n) {
-    drawFibres();
-    fibreVersion = round.voxels.version;
-  }
-
-  // Кубик (i, k) лежит в мире в (x, z); на экране x идёт вдоль right, z — против forward.
-  const ctx = sectionCtx;
-  const size = sectionEl.width;
-  const scale = (size * 0.36) / TRUNK_R;
-  const px = scale * VOXEL;
-  const a = right.x * px, b = -forward.x * px, c = right.z * px, d = -forward.z * px;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, size, size);
-  ctx.imageSmoothingEnabled = false;
-  ctx.setTransform(a, b, c, d, size / 2 - ((a + c) * n) / 2, size / 2 - ((b + d) * n) / 2);
-  ctx.drawImage(fibreCanvas, 0, 0);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-  const toScreen = (x, z) => [
-    size / 2 + (x * right.x + z * right.z) * scale,
-    size / 2 - (x * forward.x + z * forward.z) * scale,
-  ];
-  const target = dirOf(round.targetAz);
-  ctx.strokeStyle = '#4cff6a';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(...toScreen(target.x * TRUNK_R * 1.1, target.z * TRUNK_R * 1.1));
-  ctx.lineTo(...toScreen(target.x * TRUNK_R * 1.35, target.z * TRUNK_R * 1.35));
-  ctx.stroke();
-
-  if (shown) {
-    const bs = basis(shown);
-    const tip = bs.origin.clone().addScaledVector(bs.along, shown.depth);
-    ctx.strokeStyle = '#ff9a2e';
-    ctx.beginPath();
-    ctx.moveTo(...toScreen(tip.x - (bs.side.x * BAR_L) / 2, tip.z - (bs.side.z * BAR_L) / 2));
-    ctx.lineTo(...toScreen(tip.x + (bs.side.x * BAR_L) / 2, tip.z + (bs.side.z * BAR_L) / 2));
-    ctx.stroke();
-  }
-
-  if (!round.fall) {
-    const com = centerOfMass().setY(0).clampLength(0, TRUNK_R * 1.3);
-    ctx.fillStyle = '#ff3b30';
-    ctx.beginPath();
-    ctx.arc(...toScreen(com.x, com.z), 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
 }
 
 function resize() {
@@ -655,5 +612,13 @@ newRound();
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   update(Math.min(clock.getDelta(), 0.05));
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
   renderer.render(scene, camera);
+  // Вид сбоку рисуем в рамку #side поверх основного, тем же рендером.
+  const r = sideEl.getBoundingClientRect();
+  renderer.setScissorTest(true);
+  renderer.setScissor(r.left, innerHeight - r.bottom, r.width, r.height);
+  renderer.setViewport(r.left, innerHeight - r.bottom, r.width, r.height);
+  renderer.render(scene, sideCamera);
+  renderer.setScissorTest(false);
 });
