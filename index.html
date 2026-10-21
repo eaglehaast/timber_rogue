@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Timber Rogue</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Пути относительные: игра должна открываться и с github.io, и архивом на itch. -->
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <div id="hud">
+    <div id="crosshair"></div>
+    <div id="hint"></div>
+    <div id="depth"><div id="depthFill"></div></div>
+    <img id="hands" src="assets/hands.png" alt="" draggable="false" />
+  </div>
+
+  <div id="result" hidden></div>
+
+  <div id="start">
+    <h1>Timber Rogue</h1>
+    <p>Урони дерево в зелёный сектор.</p>
+    <p>Дерево падает в ту сторону, откуда пилишь.<br />Встань на линию падения, допили и беги вбок.</p>
+    <p class="keys">WASD: ходить · Shift: бежать · мышь: смотреть<br />ЛКМ (зажать): пилить · R: новое дерево</p>
+    <p class="click">Кликни, чтобы начать</p>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
