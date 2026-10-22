@@ -4,6 +4,7 @@ import {
   section, tipping, closing, pivotHeight, tearAngle, slope, deflection, kerfWidth, FRICTION,
 } from './physics.js';
 import { makeYard, buildYard, struck, wreck, pushOut } from './yard.js';
+import { makeSaw, BAR_L } from './saw.js';
 
 const TRUNK_R = 0.3;
 const TREE_H = 12;
@@ -12,7 +13,6 @@ const MAX_ENTRY = 2.0;    // выше этого пилу к стволу не �
 // Низ ствола из вокселей: выше самой высокой точки входа ещё запас, чтобы полотно, наклонённое вверх, шло по древесине.
 const ZONE_H = 3.2;
 const SAW_SPEED = 0.2;    // метров глубины в секунду
-const BAR_L = 0.7;        // длина шины
 // Массы, кг: низ ствола, остальной ствол, крона. Крона тяжёлая и смещена — она и решает, куда тянет вес.
 const M_ZONE = 800, M_TRUNK = 1500, M_CROWN = 900;
 const PINCH = 3;          // мм: уже этого щель под шиной — закусывает
@@ -27,6 +27,8 @@ const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(10));
 // Хоть одна сторона, куда дерево ляжет чисто, — не дальше этого угла от направления крена.
 const REACH_SIDE = THREE.MathUtils.degToRad(75);
 const EYE = 1.7;
+// Где пила в руках: столько вперёд от глаз, ниже и левее — так мотор справа от взгляда.
+const HOLD_AHEAD = 0.8, HOLD_LOW = 0.6, HOLD_LEFT = 0.2;
 const G = 9.8;
 const MOUSE = 0.0022;
 
@@ -34,7 +36,6 @@ const canvas = document.getElementById('scene');
 const hintEl = document.getElementById('hint');
 const depthEl = document.getElementById('depth');
 const depthFillEl = document.getElementById('depthFill');
-const handsEl = document.getElementById('hands');
 const resultEl = document.getElementById('result');
 const logEl = document.getElementById('log');
 const startEl = document.getElementById('start');
@@ -67,18 +68,15 @@ const barkMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2b });
 const voxelMat = new THREE.MeshLambertMaterial({ vertexColors: true });
 const crownMat = new THREE.MeshLambertMaterial({ color: 0x2f5d2a });
 
-// Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил, и сама шина на текущей глубине.
+// Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 const aimPlane = new THREE.Mesh(
   new THREE.PlaneGeometry(BAR_L, 2 * TRUNK_R),
   new THREE.MeshBasicMaterial({
     color: 0xff9a2e, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false,
   }),
 );
-const bar = new THREE.Mesh(
-  new THREE.BoxGeometry(BAR_L, 0.05, 0.012),
-  new THREE.MeshLambertMaterial({ color: 0x9a9aa0 }),
-);
-scene.add(aimPlane, bar);
+const sawModel = makeSaw();
+scene.add(aimPlane, sawModel);
 
 // Направление на земле задаём азимутом: 0 — вдоль +x, против часовой стрелки при взгляде сверху
 // (так же, как поворот rotation.y у объектов).
@@ -198,15 +196,23 @@ function sawCandidate(forward) {
   }) ?? fresh;
 }
 
-function placeSaw(cut) {
+// Положение и поворот шины, стоящей в пропиле на его текущей глубине.
+function pose(cut) {
   const b = basis(cut);
-  const rotation = new THREE.Quaternion().setFromRotationMatrix(
-    new THREE.Matrix4().makeBasis(b.side, b.along, b.normal),
-  );
-  aimPlane.quaternion.copy(rotation);
-  aimPlane.position.copy(b.origin).addScaledVector(b.along, TRUNK_R);
-  bar.quaternion.copy(rotation);
-  bar.position.copy(b.origin).addScaledVector(b.along, cut.depth);
+  return {
+    position: b.origin.clone().addScaledVector(b.along, cut.depth),
+    quaternion: new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(b.side, b.along, b.normal)),
+  };
+}
+
+// Пилу держат горизонтально перед собой, шиной поперёк взгляда. У ствола она встаёт туда,
+// где пойдёт пропил, и переходит туда плавно: руки доворачивают пилу, а не она прыгает.
+function moveSaw(cut, shake, dt) {
+  const target = pose(cut);
+  target.position.add(shake);
+  const k = 1 - Math.exp(-15 * dt);
+  sawModel.position.lerp(target.position, k);
+  sawModel.quaternion.slerp(target.quaternion, k);
 }
 
 // Центр тяжести над срезом с поправкой на ветер, на наклон ствола и на то, куда съехал перерезанный верх.
@@ -499,8 +505,11 @@ function update(dt) {
 
   const shown = saw ?? candidate;
   aimPlane.visible = Boolean(shown) && mode !== 'cut';
-  bar.visible = Boolean(shown);
-  if (shown) placeSaw(shown);
+  if (shown) {
+    const plane = pose({ ...shown, depth: TRUNK_R });
+    aimPlane.position.copy(plane.position);
+    aimPlane.quaternion.copy(plane.quaternion);
+  }
 
   round.debris.forEach((piece) => fallPiece(piece, dt));
 
@@ -518,16 +527,16 @@ function update(dt) {
   sideCamera.position.copy(right).multiplyScalar(16).setY(6.5);
   sideCamera.lookAt(0, 6.5, 0);
 
-  let hx = 0, hy = 0;
+  // Пилящая пила дрожит, при ходьбе покачивается в руках.
+  const shake = new THREE.Vector3();
   if (mode === 'cut') {
-    hx = (Math.random() - 0.5) * 6;
-    hy = (Math.random() - 0.5) * 6;
+    shake.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.006);
   } else if (moving) {
     player.bob += dt * 10;
-    hx = Math.sin(player.bob) * 6;
-    hy = Math.abs(Math.cos(player.bob)) * 8;
+    shake.copy(right).multiplyScalar(Math.sin(player.bob) * 0.015).setY(-Math.abs(Math.cos(player.bob)) * 0.02);
   }
-  handsEl.style.transform = `translate(calc(-50% + ${hx}px), ${hy}px)`;
+  const held = player.pos.clone().addScaledVector(forward, HOLD_AHEAD).addScaledVector(right, -HOLD_LEFT).setY(EYE - HOLD_LOW);
+  moveSaw(shown ?? { origin: held, yaw: player.yaw, tilt: 0, depth: 0 }, shake, dt);
 
   camera.position.set(player.pos.x, EYE, player.pos.z);
   camera.rotation.set(player.pitch, player.yaw, 0);
