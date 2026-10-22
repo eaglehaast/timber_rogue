@@ -20,18 +20,6 @@ html, body {
   pointer-events: none;
 }
 
-#crosshair {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  margin: -3px 0 0 -3px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 0 2px #000;
-}
-
 #hint {
   position: absolute;
   left: 0;
@@ -86,6 +74,11 @@ html, body {
   height: 240px;
   border: 2px solid rgba(255, 255, 255, 0.6);
   border-radius: 6px;
+}
+
+#side.big {
+  width: 52vh;
+  height: 70vh;
 }
 
 #side span {
