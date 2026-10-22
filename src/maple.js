@@ -1,17 +1,21 @@
 import * as THREE from 'three';
-import { BARK } from './trunk.js';
+import { barkMaterial, BARK_TILE } from './bark.js';
 
 // Клён ясенелистный (американский) — сорняк: растёт быстро и как попало. От развилки ветви
 // разбегаются в стороны, крона широкая и кособокая. Пока ствол прямой, с развилкой наверху,
 // а листва — шапками на ветвях.
-const barkMat = new THREE.MeshLambertMaterial({ color: BARK });
 const leafMat = new THREE.MeshLambertMaterial({ color: 0x7fae47, flatShading: true });
 const UP = new THREE.Vector3(0, 1, 0);
 
-// Ветвь — сужающийся цилиндр от точки from до точки to.
+// Ветвь — сужающийся цилиндр от точки from до точки to. Кора на ней в том же масштабе, что на стволе.
 function limb(from, to, r0, r1) {
   const dir = to.clone().sub(from);
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, dir.length(), 10), barkMat);
+  const geometry = new THREE.CylinderGeometry(r1, r0, dir.length(), 10);
+  const uv = geometry.attributes.uv;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, (uv.getX(i) * Math.PI * (r0 + r1)) / BARK_TILE, (uv.getY(i) * dir.length()) / BARK_TILE);
+  }
+  const mesh = new THREE.Mesh(geometry, barkMaterial);
   mesh.position.copy(from).addScaledVector(dir, 0.5);
   mesh.quaternion.setFromUnitVectors(UP, dir.normalize());
   return mesh;
