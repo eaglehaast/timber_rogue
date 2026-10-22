@@ -15,8 +15,8 @@ const COUNT = 6;
 const NEAR = 4.5;  // ближе к стволу ничего не ставим: там работает лесоруб
 const FAR = 14;
 const TRUNK_HIT = 0.35;  // полутолщина лежащего ствола
-const CROWN_HIT = 2;     // радиус кроны
-const CROWN_AT = 3.5;    // центр кроны от вершины
+const CROWN_HIT = 3;     // радиус кроны
+const CROWN_AT = 3;      // центр кроны от вершины
 
 const box = (w, h, d, material, x = 0, y = h / 2, z = 0) => {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);

@@ -5,7 +5,7 @@ import * as THREE from 'three';
 export const VOXEL = 0.01;
 const CHUNK = 10; // слоёв в одном куске сетки; при пилении перестраиваются только задетые куски
 
-const BARK = new THREE.Color(0x6b4a2b);
+export const BARK = new THREE.Color(0x6e6253);
 const WOOD = new THREE.Color(0xe2bf86);
 
 // Углы грани кубика для каждого из шести направлений, по кругу снаружи.

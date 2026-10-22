@@ -5,6 +5,7 @@ import {
 } from './physics.js';
 import { makeYard, buildYard, struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L } from './saw.js';
+import { growMaple } from './maple.js';
 
 const TRUNK_R = 0.3;
 const TREE_H = 12;
@@ -70,9 +71,7 @@ const ground = new THREE.Mesh(
 ground.rotation.x = -Math.PI / 2;
 scene.add(ground);
 
-const barkMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2b });
 const voxelMat = new THREE.MeshLambertMaterial({ vertexColors: true });
-const crownMat = new THREE.MeshLambertMaterial({ color: 0x2f5d2a });
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 const aimPlane = new THREE.Mesh(
@@ -104,19 +103,16 @@ let mode = 'free';
 let saw = null;
 let round = null;
 
-// Ствол выше зоны пиления — обычный цилиндр, сужается к вершине. Дерево кривое: верх наклонён
-// от низа ствола, крона сидит набок. Цилиндр чуть заходит в кубики, чтобы на сгибе не было щели.
+// Выше зоны пиления — клён: ствол, развилка и крона. Дерево кривое: верх наклонён
+// от низа ствола, крона сидит набок. Ствол чуть заходит в кубики, чтобы на сгибе не было щели.
 function growTree() {
   const length = TREE_H - ZONE_H;
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(TRUNK_R * 0.6, TRUNK_R, length, 48), barkMat);
-  trunk.position.y = length / 2;
-  const crown = new THREE.Mesh(new THREE.ConeGeometry(2.2, 7, 12), crownMat);
   const leanAz = Math.random() * Math.PI * 2;
   const side = dirOf(leanAz + (Math.random() - 0.5) * 2).multiplyScalar(Math.random() * 0.8);
-  crown.position.set(side.x, length - 2, side.z);
+  const { tree, crown } = growMaple(length, TRUNK_R, side);
   const bend = new THREE.Group();
   bend.position.y = ZONE_H - 0.03;
-  bend.add(trunk, crown);
+  bend.add(tree);
   const lean = new THREE.Quaternion().setFromAxisAngle(
     new THREE.Vector3(0, 1, 0).cross(dirOf(leanAz)),
     THREE.MathUtils.degToRad(Math.random() * 5),
@@ -126,7 +122,7 @@ function growTree() {
   // Центр тяжести: низ ствола посередине, у сужающегося ствола — ниже середины, крона — где нарисована.
   const com = new THREE.Vector3(0, ZONE_H / 2, 0).multiplyScalar(M_ZONE)
     .addScaledVector(bend.localToWorld(new THREE.Vector3(0, 0.42 * length, 0)), M_TRUNK)
-    .addScaledVector(crown.getWorldPosition(new THREE.Vector3()), M_CROWN)
+    .addScaledVector(bend.localToWorld(crown), M_CROWN)
     .divideScalar(M_ZONE + M_TRUNK + M_CROWN);
   return { bend, lean, com, leanAz };
 }
