@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TrunkVoxels, trunkProfile, VOXEL } from './trunk.js';
+import { TrunkVoxels, trunkShape, VOXEL } from './trunk.js';
 import {
   section, tipping, closing, pivotHeight, tearAngle, slope, deflection, kerfWidth, FRICTION,
 } from './physics.js';
@@ -8,15 +8,13 @@ import { makeSaw, BAR_L, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
 
-const TRUNK_R = 0.3;
+const TRUNK_R = 0.3;      // радиус ствола выше корневых наплывов
 const TREE_H = 12;
 const REACH = 1.0;        // докуда достаёт пила от лица до коры
 const MAX_ENTRY = 2.0;    // выше этого пилу к стволу не приставить
 // Низ ствола из вокселей: выше самой высокой точки входа ещё запас, чтобы полотно, наклонённое вверх, шло по древесине.
 const ZONE_H = 3.2;
 const SAW_SPEED = 0.2;    // метров глубины в секунду
-// Масса низа ствола, кг. Остальное дерево взвешивается по объёму древесины (см. maple.js).
-const M_ZONE = DENSITY * Math.PI * TRUNK_R ** 2 * ZONE_H;
 const SEATING = 0.04;     // ствол прошёл такую долю пути до того, как сесть на пропил, — шину вот-вот закусит
 const PINCH = 3;          // мм: уже этого — закусило, цепь встала
 const SAWS = 2;           // пил на дерево: зажатую бросаешь в стволе и берёшь запасную
@@ -164,19 +162,25 @@ let saw = null;
 let round = null;
 
 // Выше зоны пиления — клён (maple.js): кривой ствол, ветви по всей высоте, иногда два ствола.
-// Ствол чуть заходит в кубики, чтобы на стыке не было щели.
-function growTree(profile) {
-  const { tree, com, mass } = growMaple(TREE_H - ZONE_H, TRUNK_R, Math.random() * Math.PI * 2, profile);
+// Он продолжает низ ствола с той же точки, в том же направлении и с тем же сечением
+// и чуть заходит в кубики, чтобы на стыке не было щели. Вес и того и другого — по объёму древесины.
+function growTree(voxels) {
+  const { shape } = voxels;
+  const s = shape.scale(ZONE_H);
+  const { tree, com, mass } = growMaple(
+    TREE_H - ZONE_H, TRUNK_R * s, shape.leanAz, (a) => s * shape.profile(a), shape.axis(ZONE_H),
+  );
   const bend = new THREE.Group();
-  bend.position.y = ZONE_H - 0.03;
+  bend.position.copy(shape.center(ZONE_H)).setY(ZONE_H - 0.03);
   bend.add(tree);
   bend.updateMatrixWorld(true);
-  // Центр тяжести: низ ствола посередине, остальное — как выросло.
+  const zone = voxels.measure();
+  const zoneMass = DENSITY * zone.volume;
   return {
     bend,
-    com: new THREE.Vector3(0, ZONE_H / 2, 0).multiplyScalar(M_ZONE)
-      .addScaledVector(bend.localToWorld(com), mass).divideScalar(M_ZONE + mass),
-    mass: M_ZONE + mass,
+    com: zone.center.multiplyScalar(zoneMass)
+      .addScaledVector(bend.localToWorld(com), mass).divideScalar(zoneMass + mass),
+    mass: zoneMass + mass,
   };
 }
 
@@ -190,9 +194,9 @@ function newRound() {
   if (round) scene.remove(round.root);
 
   dressBark();
-  const voxels = new TrunkVoxels(TRUNK_R, ZONE_H, 0, trunkProfile(TRUNK_R));
+  const voxels = new TrunkVoxels(trunkShape(TRUNK_R, ZONE_H, Math.random() * Math.PI * 2), ZONE_H);
   voxels.remesh();
-  const tree = growTree(voxels.profile);
+  const tree = growTree(voxels);
   const upper = new THREE.Group();
   upper.add(tree.bend);
 
@@ -235,11 +239,14 @@ function basis(cut) {
   return { origin: cut.edge, side: axis(1, 0, 0), along: axis(0, 1, 0), normal: axis(0, 0, 1) };
 }
 
-// Сколько пройти от точки p по направлению d (по плану), пока не войдёшь в ствол, и сколько — пока
-// не выйдешь из него. Сечение не круг, поэтому идём шажками. Не дошли до ствола за limit — null.
-function throughTrunk(p, d, limit) {
+// Сколько пройти по линии at(t), пока не войдёшь в ствол, и сколько — пока не выйдешь из него.
+// Ствол не цилиндр, поэтому идём шажками. Не дошли до ствола за limit — null.
+function throughTrunk(at, limit) {
   const step = VOXEL / 4;
-  const inside = (t) => round.voxels.contains(p.x + d.x * t, p.z + d.z * t);
+  const inside = (t) => {
+    const p = at(t);
+    return round.voxels.shape.contains(p.x, p.y, p.z);
+  };
   let t = 0;
   while (!inside(t)) if ((t += step) > limit) return null;
   const enter = t;
@@ -250,12 +257,18 @@ function throughTrunk(p, d, limit) {
 // Сколько древесины впереди кромки по ходу пилы — до коры на той стороне ствола.
 function ahead(cut) {
   const { origin, along } = basis(cut);
-  return throughTrunk(origin, along, BAR_W)?.exit ?? 0;
+  return throughTrunk((t) => origin.clone().addScaledVector(along, t), BAR_W)?.exit ?? 0;
 }
 
-// Расстояние по взгляду до коры, если взгляд (по горизонтали) упирается в ствол.
+// Высота, на которой пила войдёт в кору, если кора по горизонтали в bark от игрока.
+function entryHeight(bark) {
+  return THREE.MathUtils.clamp(player.eye + Math.tan(player.pitch) * bark, 0.05, MAX_ENTRY);
+}
+
+// Расстояние по горизонтали до коры там, куда упирается взгляд.
 function distanceToBark(forward) {
-  return throughTrunk(player.pos, forward, REACH)?.enter ?? null;
+  const at = (t) => player.pos.clone().addScaledVector(forward, t).setY(entryHeight(t));
+  return throughTrunk(at, REACH)?.enter ?? null;
 }
 
 // Куда встанет пила, если приставить её сейчас: точка на коре под прицелом, полотно горизонтально.
@@ -264,7 +277,7 @@ function sawCandidate(forward) {
   const bark = distanceToBark(forward);
   if (bark === null || bark > REACH) return null;
   const origin = player.pos.clone().addScaledVector(forward, bark);
-  origin.y = THREE.MathUtils.clamp(player.eye + Math.tan(player.pitch) * bark, 0.05, MAX_ENTRY);
+  origin.y = entryHeight(bark);
   const fresh = { origin, edge: origin.clone(), q: facing(player.yaw), depth: 0 };
   const f = basis(fresh);
   return round.cuts.find((c) => {
@@ -397,7 +410,7 @@ function stand(dt) {
   const b = basis(saw);
   for (let w = -BAR_L / 2; w <= BAR_L / 2; w += VOXEL) {
     const p = b.origin.clone().addScaledVector(b.side, w);
-    if (Math.hypot(p.x, p.z) > TRUNK_R) continue;
+    if (!round.voxels.shape.contains(p.x, p.y, p.z)) continue;
     const g = kerfWidth(sec, round.tilt, p);
     if (round.gap === null || g < round.gap) round.gap = g;
   }
@@ -609,8 +622,8 @@ function update(dt) {
     const lift = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
     saw.edge.y = saw.origin.y = THREE.MathUtils.clamp(saw.origin.y + lift * ENTRY_SPEED * (shift ? FINE : 1) * dt, 0.05, MAX_ENTRY);
   }
-  // Сквозь пень не пройти.
-  const minDist = TRUNK_R + 0.35;
+  // Сквозь пень не пройти: держимся от коры у земли.
+  const minDist = TRUNK_R * round.voxels.shape.scale(0) + 0.35;
   const dist = Math.hypot(player.pos.x, player.pos.z);
   if (dist < minDist) player.pos.multiplyScalar(minDist / dist);
   pushOut(round.yard, player.pos, 0.35);

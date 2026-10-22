@@ -17,15 +17,17 @@ const SHUT = Math.tan(THREE.MathUtils.degToRad(8)); // щель, что смык
 const DIRS = 36;
 
 // Срез ствола по колонкам: все и целые волокна. Для целых — центр и моменты инерции:
-// по ним считается, как недопил гнётся.
+// по ним считается, как недопил гнётся. Ствол кверху тоньшает и клонится, поэтому какие колонки
+// в стволе, смотрим на середине высоты, где прошла пила.
 export function section(voxels) {
   const { n } = voxels;
+  const at = Math.round((voxels.cutLow + voxels.cutHigh) / 2);
   const all = [], intact = [];
   for (let k = 0; k < n; k++) {
     for (let i = 0; i < n; i++) {
       const col = k * n + i;
-      if (!voxels.inside[col]) continue;
       const gap = voxels.gap[col];
+      if (!gap && !voxels.wood(i, at, k)) continue;
       const f = {
         x: voxels.x(i), z: voxels.z(k), gap,
         mid: ((voxels.gapLow[col] + voxels.gapHigh[col] + 1) / 2) * VOXEL,
