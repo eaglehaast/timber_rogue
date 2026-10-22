@@ -18,21 +18,38 @@ const FACES = [
   { dir: [0, 0, -1], corners: [[0, 1, 0], [1, 1, 0], [1, 0, 0], [0, 0, 0]] },
 ];
 
+// Сечение ствола — не круг: эллипс, вытянутый в случайную сторону, и бугры от старых сучков.
+// Возвращает радиус по направлению (азимут в плане); самый большой — radius.
+export function trunkProfile(radius) {
+  const flat = 0.04 + Math.random() * 0.08;
+  const turn = Math.random() * Math.PI;
+  const bumps = Array.from({ length: 2 + Math.floor(Math.random() * 3) }, () => ({
+    at: Math.random() * Math.PI * 2, h: 0.02 + Math.random() * 0.05, w: 0.15 + Math.random() * 0.25,
+  }));
+  const raw = (a) => bumps.reduce(
+    (r, b) => r + b.h * Math.exp(-((Math.atan2(Math.sin(a - b.at), Math.cos(a - b.at)) / b.w) ** 2)),
+    1 - (flat * (1 - Math.cos(2 * (a - turn)))) / 2,
+  );
+  let top = 0;
+  for (let i = 0; i < 360; i++) top = Math.max(top, raw((i / 180) * Math.PI));
+  return (a) => (radius * raw(a)) / top;
+}
+
 export class TrunkVoxels {
   // floor — с какого слоя (от земли) начинается сетка: у отвалившихся кусков она не с нуля.
-  constructor(radius, height, floor = 0) {
+  // profile — радиус сечения по направлению, не больше radius.
+  constructor(radius, height, floor = 0, profile = () => radius) {
     this.radius = radius;
+    this.profile = profile;
     this.floor = floor;
     this.n = Math.ceil((2 * radius) / VOXEL);
     this.ny = Math.round(height / VOXEL);
     this.half = (this.n * VOXEL) / 2;
 
-    // inside — клетки круга ствола в плане; снаружи от них грань кубика — кора, внутри — свежий срез.
+    // inside — клетки сечения ствола в плане; снаружи от них грань кубика — кора, внутри — свежий срез.
     this.inside = new Uint8Array(this.n * this.n);
     for (let k = 0; k < this.n; k++) {
-      for (let i = 0; i < this.n; i++) {
-        this.inside[k * this.n + i] = Math.hypot(this.x(i), this.z(k)) <= radius ? 1 : 0;
-      }
+      for (let i = 0; i < this.n; i++) this.inside[k * this.n + i] = this.contains(this.x(i), this.z(k)) ? 1 : 0;
     }
     this.data = new Uint8Array(this.n * this.n * this.ny);
     for (let j = 0; j < this.ny; j++) this.data.set(this.inside, j * this.n * this.n);
@@ -59,6 +76,9 @@ export class TrunkVoxels {
       this.chunks.push({ mesh, dirty: true });
     }
   }
+
+  // Точка (x, z) в плане — внутри сечения ствола.
+  contains(x, z) { return Math.hypot(x, z) <= this.profile(Math.atan2(z, x)); }
 
   x(i) { return (i + 0.5) * VOXEL - this.half; }
   y(j) { return (j + 0.5) * VOXEL; }
@@ -236,7 +256,7 @@ export class TrunkVoxels {
       jLow = Math.min(jLow, j);
       jHigh = Math.max(jHigh, j);
     }
-    const part = new TrunkVoxels(this.radius, (jHigh - jLow + 1) * VOXEL, this.floor + jLow);
+    const part = new TrunkVoxels(this.radius, (jHigh - jLow + 1) * VOXEL, this.floor + jLow, this.profile);
     part.data.fill(0);
     part.chunks.forEach((c) => { c.dirty = false; });
     const center = new THREE.Vector3();

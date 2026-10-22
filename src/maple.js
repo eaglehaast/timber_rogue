@@ -1,59 +1,111 @@
 import * as THREE from 'three';
 import { barkMaterial, BARK_TILE } from './bark.js';
 
-// Клён ясенелистный (американский) — сорняк: растёт быстро и как попало. От развилки ветви
-// разбегаются в стороны, крона широкая и кособокая. Пока ствол прямой, с развилкой наверху,
-// а листва — шапками на ветвях.
+// Клён ясенелистный (американский) — сорняк: растёт быстро и как попало. Ровно вверх почти никогда:
+// ствол клонится к свету, потом выгибается обратно вверх, часто раздваивается. Ветви растут по всей
+// высоте, больше — со светлой стороны, куда клонится ствол, и сами ветвятся. Вес дерева считается
+// по объёму древесины, поэтому кривой ствол и кособокая крона уводят центр тяжести от пня.
+export const DENSITY = 750; // кг/м³ — сырая древесина клёна
 const leafMat = new THREE.MeshLambertMaterial({ color: 0x7fae47, flatShading: true });
 const UP = new THREE.Vector3(0, 1, 0);
 
-// Ветвь — сужающийся цилиндр от точки from до точки to. Кора на ней в том же масштабе, что на стволе.
-function limb(from, to, r0, r1) {
-  const dir = to.clone().sub(from);
-  const geometry = new THREE.CylinderGeometry(r1, r0, dir.length(), 10);
+const rand = (a, b) => a + Math.random() * (b - a);
+const flat = (az) => new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
+
+// Кора на ветвях и узлах в том же масштабе, что на стволе: координаты текстуры в метрах.
+function barkMesh(geometry, around, along) {
   const uv = geometry.attributes.uv;
-  for (let i = 0; i < uv.count; i++) {
-    uv.setXY(i, (uv.getX(i) * Math.PI * (r0 + r1)) / BARK_TILE, (uv.getY(i) * dir.length()) / BARK_TILE);
-  }
-  const mesh = new THREE.Mesh(geometry, barkMaterial);
-  mesh.position.copy(from).addScaledVector(dir, 0.5);
-  mesh.quaternion.setFromUnitVectors(UP, dir.normalize());
-  return mesh;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * around) / BARK_TILE, (uv.getY(i) * along) / BARK_TILE);
+  return new THREE.Mesh(geometry, barkMaterial);
 }
 
-const rand = (a, b) => a + Math.random() * (b - a);
-
-// length — высота от низа до вершины, r — радиус ствола внизу, side — куда сдвинута крона
-// (вектор вдоль земли). Возвращает модель и центр листвы — по нему считается вес кроны.
-export function growMaple(length, r, side) {
+// leanAz — куда клонится ствол (азимут), r — радиус ствола внизу, length — высота от низа до вершины.
+// base — сечение низа ствола (радиус по азимуту, см. trunkProfile): ствол начинается с него и к первому изгибу круглеет.
+// Возвращает модель, центр тяжести (в её координатах) и массу.
+export function growMaple(length, r, leanAz, base) {
   const tree = new THREE.Group();
-  const forkY = length * rand(0.15, 0.3);
-  const fork = new THREE.Vector3(0, forkY, 0);
-  const forkR = r * 0.75;
-  tree.add(limb(new THREE.Vector3(), fork, r, forkR));
-  const crown = new THREE.Vector3();
-  let leaves = 0;
-  const count = 4 + Math.floor(Math.random() * 3);
-  for (let i = 0; i < count; i++) {
-    const az = ((i + rand(-0.3, 0.3)) / count) * Math.PI * 2;
-    const out = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az)).multiplyScalar(rand(1.8, 3)).add(side);
-    const tip = out.setY(rand(0.7, 1) * length);
-    // Ветвь изогнута: середина сбита в сторону.
-    const mid = fork.clone().lerp(tip, 0.5).add(new THREE.Vector3(rand(-0.4, 0.4), rand(-0.3, 0.3), rand(-0.4, 0.4)));
-    const midR = forkR * 0.35;
-    tree.add(limb(fork, mid, forkR * 0.55, midR), limb(mid, tip, midR, 0.03));
-    // Листва — шапками вдоль внешней половины ветви, к концу крупнее.
-    for (const t of [0, 0.5, 1]) {
-      const at = mid.clone().lerp(tip, t);
-      const size = rand(0.7, 1) + 0.3 * t;
-      const clump = new THREE.Mesh(new THREE.IcosahedronGeometry(size, 1), leafMat);
-      clump.position.copy(at);
-      clump.scale.y = 0.7;
-      clump.rotation.set(rand(0, 3), rand(0, 3), 0);
-      tree.add(clump);
-      crown.addScaledVector(at, size ** 3);
-      leaves += size ** 3;
+  const com = new THREE.Vector3();
+  let mass = 0;
+
+  // Кусок ветви — сужающийся цилиндр от a до b, в месте излома — шар, чтобы не было щели.
+  // shape — сечение у начала куска (радиус по азимуту), к концу кусок круглеет.
+  function piece(a, b, r0, r1, shape) {
+    const dir = b.clone().sub(a);
+    const len = dir.length();
+    const geometry = new THREE.CylinderGeometry(r1, r0, len, shape ? 48 : 10, shape ? 4 : 1);
+    if (shape) {
+      const v = geometry.attributes.position;
+      for (let i = 0; i < v.count; i++) {
+        const k = THREE.MathUtils.lerp(shape(Math.atan2(v.getZ(i), v.getX(i))) / r0, 1, v.getY(i) / len + 0.5);
+        v.setXYZ(i, v.getX(i) * k, v.getY(i), v.getZ(i) * k);
+      }
+      geometry.computeVertexNormals();
     }
+    const limb = barkMesh(geometry, Math.PI * (r0 + r1), len);
+    limb.position.copy(a).addScaledVector(dir, 0.5);
+    limb.quaternion.setFromUnitVectors(UP, dir.normalize());
+    const knot = barkMesh(new THREE.SphereGeometry(r1, 10, 6), 2 * Math.PI * r1, Math.PI * r1);
+    knot.position.copy(b);
+    tree.add(limb, knot);
+    // Усечённый конус: объём и центр, сдвинутый к толстому концу.
+    const m = DENSITY * (Math.PI / 3) * len * (r0 * r0 + r0 * r1 + r1 * r1);
+    const t = (r0 * r0 + 2 * r0 * r1 + 3 * r1 * r1) / (4 * (r0 * r0 + r0 * r1 + r1 * r1));
+    com.addScaledVector(a.clone().lerp(b, t), m);
+    mass += m;
   }
-  return { tree, crown: crown.divideScalar(leaves) };
+
+  // Листва — шапка на конце ветви. Веса почти не даёт, в счёт не идёт.
+  function leaves(at, size) {
+    const clump = new THREE.Mesh(new THREE.IcosahedronGeometry(size, 1), leafMat);
+    clump.position.copy(at);
+    clump.scale.y = 0.7;
+    clump.rotation.set(rand(0, 3), rand(0, 3), 0);
+    tree.add(clump);
+  }
+
+  // Ветвь (level 0 — ствол) растёт шагами: на каждом шаге чуть сворачивает вбок и тянется вверх.
+  // Ствол ещё и уводит к свету: от пня всё сильнее клонится, потом этот увод слабеет.
+  // split — на каком шаге ствол раздваивается (или -1), shape — сечение у основания.
+  function grow(from, dir, r0, rTip, len, level, split = -1, shape = null) {
+    const steps = level === 0 ? 8 : level === 1 ? 4 : 3;
+    const wiggle = level === 0 ? 0.1 : 0.25;
+    const rise = level === 0 ? rand(0.01, 0.04) : rand(0.02, 0.08);
+    const sweep = level === 0 ? rand(0.04, 0.16) : 0;
+    const p = from.clone();
+    const d = dir.clone();
+    let k = 1; // после развилки ствол тоньше
+    for (let i = 0; i < steps; i++) {
+      const ra = k * THREE.MathUtils.lerp(r0, rTip, i / steps);
+      const rb = k * THREE.MathUtils.lerp(r0, rTip, (i + 1) / steps);
+      d.add(new THREE.Vector3(rand(-1, 1), rand(-0.5, 0.5), rand(-1, 1)).multiplyScalar(wiggle))
+        .addScaledVector(UP, rise).addScaledVector(flat(leanAz), sweep * (1 - i / steps)).normalize();
+      const q = p.clone().addScaledVector(d, len / steps);
+      piece(p, q, ra, rb, i === 0 ? shape : null);
+      p.copy(q);
+      if (i === split) {
+        // Сдвоенный ствол: второй лидер уходит в сторону и дальше растёт сам, первый становится тоньше.
+        const side = new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)).normalize();
+        const other = d.clone().addScaledVector(side, rand(0.4, 0.7)).normalize();
+        d.addScaledVector(side, -rand(0.15, 0.3)).normalize();
+        grow(q, other, rb * 0.75, rTip, len * (1 - (i + 1) / steps) * rand(0.8, 1), 0);
+        k = 0.8;
+      }
+      // Ветви: у ствола — с первого шага, больше со светлой стороны; у ветвей — веточки.
+      if (level < 2 && i >= 1) {
+        const count = level === 0 ? 1 + (Math.random() < 0.5 ? 1 : 0) : Math.random() < 0.6 ? 1 : 0;
+        for (let n = 0; n < count; n++) {
+          const az = level === 0 ? leanAz + rand(-1, 1) * rand(0.5, 2.2) : Math.random() * Math.PI * 2;
+          const el = rand(0.05, 0.6);
+          const out = flat(az).multiplyScalar(Math.cos(el)).addScaledVector(UP, Math.sin(el)).lerp(d, 0.2).normalize();
+          const reach = level === 0 ? rand(2.5, 5) * (1 - 0.5 * (i / steps)) : rand(0.8, 1.8);
+          grow(q, out, rb * rand(0.3, 0.5), 0.02, reach, level + 1);
+        }
+      }
+    }
+    if (level > 0) leaves(p, level === 1 ? rand(0.4, 0.6) : rand(0.3, 0.5));
+  }
+
+  // Почти у половины деревьев ствол раздваивается.
+  grow(new THREE.Vector3(), UP, r, r * 0.25, length, 0, Math.random() < 0.45 ? 1 + Math.floor(Math.random() * 3) : -1, base);
+  return { tree, com: com.divideScalar(mass), mass };
 }
