@@ -50,7 +50,13 @@ scene.fog = new THREE.Fog(0x9cc4e4, 30, 90);
 const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 200);
 camera.rotation.order = 'YXZ';
 // Вид сбоку — справа от игрока, на всё дерево: видно, клонится ли ствол к тебе или от тебя.
-const sideCamera = new THREE.PerspectiveCamera(50, 0.75, 0.5, 200);
+// С зажатой ПКМ его можно обвести вокруг ствола, колесом — приблизить. Чем ближе камера,
+// тем ниже она смотрит: от середины дерева к месту, где пилят, — так видно щель.
+const sideCamera = new THREE.PerspectiveCamera(50, 0.75, 0.05, 200);
+const VIEW_FAR = 16, VIEW_NEAR = 0.8, VIEW_Y = 6.5;
+const VIEW_EL_MIN = THREE.MathUtils.degToRad(-10), VIEW_EL_MAX = THREE.MathUtils.degToRad(80);
+const view = { az: 0, el: 0, dist: VIEW_FAR };
+let inspecting = false;
 
 scene.add(new THREE.HemisphereLight(0xdfefff, 0x4a5a30, 1.2));
 const sun = new THREE.DirectionalLight(0xffffff, 1.5);
@@ -77,6 +83,12 @@ const aimPlane = new THREE.Mesh(
 );
 const sawModel = makeSaw();
 scene.add(aimPlane, sawModel);
+// Пила и прицел — на своём слое: их видит только взгляд игрока, а вид сбоку показывает
+// одно дерево, иначе мотор заслоняет пропил.
+const TOOLS = 1;
+aimPlane.layers.set(TOOLS);
+sawModel.traverse((part) => part.layers.set(TOOLS));
+camera.layers.enable(TOOLS);
 
 // Направление на земле задаём азимутом: 0 — вдоль +x, против часовой стрелки при взгляде сверху
 // (так же, как поворот rotation.y у объектов).
@@ -524,8 +536,11 @@ function update(dt) {
     const mm = round.gap;
     gapEl.textContent = `Щель ${mm.toFixed(0)} мм${mm < 9 ? ' — сужается' : mm > 11 ? ' — расширяется' : ''}`;
   }
-  sideCamera.position.copy(right).multiplyScalar(16).setY(6.5);
-  sideCamera.lookAt(0, 6.5, 0);
+  const focus = (saw ?? round.cuts.at(-1))?.origin.y ?? 1;
+  const target = new THREE.Vector3(0, THREE.MathUtils.mapLinear(view.dist, VIEW_NEAR, VIEW_FAR, focus, VIEW_Y), 0);
+  const look = right.clone().applyAxisAngle(THREE.Object3D.DEFAULT_UP, view.az).multiplyScalar(Math.cos(view.el)).setY(Math.sin(view.el));
+  sideCamera.position.copy(target).addScaledVector(look, view.dist);
+  sideCamera.lookAt(target);
 
   // Пилящая пила дрожит, при ходьбе покачивается в руках.
   const shake = new THREE.Vector3();
@@ -581,7 +596,9 @@ startEl.addEventListener('click', () => {
   startEl.hidden = true;
   lockPointer();
 });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 2) setInspecting(true);
   if (e.button !== 0) return;
   if (document.pointerLockElement !== canvas) lockPointer();
   if (mode === 'aim') mode = 'cut';
@@ -592,13 +609,26 @@ canvas.addEventListener('mousedown', (e) => {
 });
 addEventListener('mouseup', (e) => {
   if (e.button === 0 && mode === 'cut') mode = 'aim';
+  if (e.button === 2) setInspecting(false);
 });
+addEventListener('wheel', (e) => {
+  view.dist = THREE.MathUtils.clamp(view.dist * Math.exp(e.deltaY * 0.001), VIEW_NEAR, VIEW_FAR);
+});
+
+// Осмотр: рамка вида сбоку растёт, а мышь вместо взгляда водит камеру вокруг ствола.
+function setInspecting(on) {
+  inspecting = on;
+  sideEl.classList.toggle('big', on);
+}
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement !== canvas && mode === 'cut') mode = 'aim';
 });
 document.addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas) return;
-  if (mode === 'free') {
+  if (inspecting) {
+    view.az -= e.movementX * MOUSE * 2;
+    view.el = THREE.MathUtils.clamp(view.el + e.movementY * MOUSE * 2, VIEW_EL_MIN, VIEW_EL_MAX);
+  } else if (mode === 'free') {
     player.yaw -= e.movementX * MOUSE;
     player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * MOUSE, -1.5, 1.5);
   } else if (mode === 'aim' && saw.depth === 0) {
@@ -621,6 +651,8 @@ renderer.setAnimationLoop(() => {
   renderer.setScissorTest(true);
   renderer.setScissor(r.left, innerHeight - r.bottom, r.width, r.height);
   renderer.setViewport(r.left, innerHeight - r.bottom, r.width, r.height);
+  sideCamera.aspect = r.width / r.height;
+  sideCamera.updateProjectionMatrix();
   renderer.render(scene, sideCamera);
   renderer.setScissorTest(false);
 });
