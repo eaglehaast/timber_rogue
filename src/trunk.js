@@ -55,6 +55,7 @@ export class TrunkVoxels {
     this.chunks = [];
     for (let c = 0; c * CHUNK < this.ny; c++) {
       const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);
+      mesh.castShadow = mesh.receiveShadow = true;
       this.group.add(mesh);
       this.chunks.push({ mesh, dirty: true });
     }
