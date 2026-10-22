@@ -1,11 +1,11 @@
 import * as THREE from 'three';
-import { TrunkVoxels, VOXEL } from './trunk.js';
+import { TrunkVoxels, trunkProfile, VOXEL } from './trunk.js';
 import {
   section, tipping, closing, pivotHeight, tearAngle, slope, deflection, kerfWidth, FRICTION,
 } from './physics.js';
 import { makeYard, buildYard, struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
-import { growMaple } from './maple.js';
+import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
 
 const TRUNK_R = 0.3;
@@ -15,8 +15,8 @@ const MAX_ENTRY = 2.0;    // выше этого пилу к стволу не �
 // Низ ствола из вокселей: выше самой высокой точки входа ещё запас, чтобы полотно, наклонённое вверх, шло по древесине.
 const ZONE_H = 3.2;
 const SAW_SPEED = 0.2;    // метров глубины в секунду
-// Массы, кг: низ ствола, остальной ствол, крона. Крона тяжёлая и смещена — она и решает, куда тянет вес.
-const M_ZONE = 800, M_TRUNK = 1500, M_CROWN = 900;
+// Масса низа ствола, кг. Остальное дерево взвешивается по объёму древесины (см. maple.js).
+const M_ZONE = DENSITY * Math.PI * TRUNK_R ** 2 * ZONE_H;
 const PINCH = 3;          // мм: уже этого щель под шиной — закусывает
 const OPEN = 14;          // мм: шире — щель раскрывается
 const LEAN = THREE.MathUtils.degToRad(0.4); // настолько наклонился ствол — это уже заметно
@@ -161,28 +161,21 @@ let mode = 'free';
 let saw = null;
 let round = null;
 
-// Выше зоны пиления — клён: ствол, развилка и крона. Дерево кривое: верх наклонён
-// от низа ствола, крона сидит набок. Ствол чуть заходит в кубики, чтобы на сгибе не было щели.
-function growTree() {
-  const length = TREE_H - ZONE_H;
-  const leanAz = Math.random() * Math.PI * 2;
-  const side = dirOf(leanAz + (Math.random() - 0.5) * 2).multiplyScalar(Math.random() * 0.8);
-  const { tree, crown } = growMaple(length, TRUNK_R, side);
+// Выше зоны пиления — клён (maple.js): кривой ствол, ветви по всей высоте, иногда два ствола.
+// Ствол чуть заходит в кубики, чтобы на стыке не было щели.
+function growTree(profile) {
+  const { tree, com, mass } = growMaple(TREE_H - ZONE_H, TRUNK_R, Math.random() * Math.PI * 2, profile);
   const bend = new THREE.Group();
   bend.position.y = ZONE_H - 0.03;
   bend.add(tree);
-  const lean = new THREE.Quaternion().setFromAxisAngle(
-    new THREE.Vector3(0, 1, 0).cross(dirOf(leanAz)),
-    THREE.MathUtils.degToRad(Math.random() * 5),
-  );
-  bend.quaternion.copy(lean);
   bend.updateMatrixWorld(true);
-  // Центр тяжести: низ ствола посередине, у сужающегося ствола — ниже середины, крона — где нарисована.
-  const com = new THREE.Vector3(0, ZONE_H / 2, 0).multiplyScalar(M_ZONE)
-    .addScaledVector(bend.localToWorld(new THREE.Vector3(0, 0.42 * length, 0)), M_TRUNK)
-    .addScaledVector(bend.localToWorld(crown), M_CROWN)
-    .divideScalar(M_ZONE + M_TRUNK + M_CROWN);
-  return { bend, lean, com, leanAz };
+  // Центр тяжести: низ ствола посередине, остальное — как выросло.
+  return {
+    bend,
+    com: new THREE.Vector3(0, ZONE_H / 2, 0).multiplyScalar(M_ZONE)
+      .addScaledVector(bend.localToWorld(com), mass).divideScalar(M_ZONE + mass),
+    mass: M_ZONE + mass,
+  };
 }
 
 // Ветер налетает порывами: сумма несоизмеримых волн, обрезанная снизу, — от 0 до 1.
@@ -195,9 +188,9 @@ function newRound() {
   if (round) scene.remove(round.root);
 
   dressBark();
-  const voxels = new TrunkVoxels(TRUNK_R, ZONE_H);
+  const voxels = new TrunkVoxels(TRUNK_R, ZONE_H, 0, trunkProfile(TRUNK_R));
   voxels.remesh();
-  const tree = growTree();
+  const tree = growTree(voxels.profile);
   const upper = new THREE.Group();
   upper.add(tree.bend);
 
@@ -208,10 +201,9 @@ function newRound() {
   buildYard(yard, root);
   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
 
-  const mass = M_ZONE + M_TRUNK + M_CROWN;
   round = {
     root, voxels, upper, yard, ...tree,
-    weight: mass * G, mass,
+    weight: tree.mass * G,
     wind: { dir: dirOf(Math.random() * Math.PI * 2), max: 0.05 + Math.random() * 0.2, phase: Math.random() * 9 },
     time: 0, sway: new THREE.Vector3(), tilt: new THREE.Vector3(), gap: null,
     sec: null, secVersion: -1,
@@ -240,20 +232,27 @@ function basis(cut) {
   return { origin: cut.edge, side: axis(1, 0, 0), along: axis(0, 1, 0), normal: axis(0, 0, 1) };
 }
 
+// Сколько пройти от точки p по направлению d (по плану), пока не войдёшь в ствол, и сколько — пока
+// не выйдешь из него. Сечение не круг, поэтому идём шажками. Не дошли до ствола за limit — null.
+function throughTrunk(p, d, limit) {
+  const step = VOXEL / 4;
+  const inside = (t) => round.voxels.contains(p.x + d.x * t, p.z + d.z * t);
+  let t = 0;
+  while (!inside(t)) if ((t += step) > limit) return null;
+  const enter = t;
+  while (inside(t)) t += step;
+  return { enter, exit: t };
+}
+
 // Сколько древесины впереди кромки по ходу пилы — до коры на той стороне ствола.
 function ahead(cut) {
-  const { origin: p, along: d } = basis(cut);
-  const a = d.x ** 2 + d.z ** 2, b = p.x * d.x + p.z * d.z, c = p.x ** 2 + p.z ** 2 - TRUNK_R ** 2;
-  return Math.max(0, (-b + Math.sqrt(Math.max(0, b * b - a * c))) / a);
+  const { origin, along } = basis(cut);
+  return throughTrunk(origin, along, BAR_W)?.exit ?? 0;
 }
 
 // Расстояние по взгляду до коры, если взгляд (по горизонтали) упирается в ствол.
 function distanceToBark(forward) {
-  const along = -(player.pos.x * forward.x + player.pos.z * forward.z);
-  if (along <= 0) return null;
-  const perp2 = player.pos.x ** 2 + player.pos.z ** 2 - along ** 2;
-  if (perp2 > TRUNK_R ** 2) return null;
-  return along - Math.sqrt(TRUNK_R ** 2 - perp2);
+  return throughTrunk(player.pos, forward, REACH)?.enter ?? null;
 }
 
 // Куда встанет пила, если приставить её сейчас: точка на коре под прицелом, полотно горизонтально.
@@ -350,7 +349,7 @@ function stand(dt) {
   const tilt = new THREE.Quaternion().setFromAxisAngle(
     up.clone().cross(round.tilt).normalize(), Math.min(round.tilt.length(), SHOWN_TILT),
   );
-  round.bend.quaternion.copy(tilt).multiply(sway).multiply(round.lean);
+  round.bend.quaternion.copy(tilt).multiply(sway);
   if (!sec) return;
 
   const c = centerOfMass();
