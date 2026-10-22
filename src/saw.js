@@ -31,6 +31,7 @@ export function makeSaw() {
   for (const [x, y, z] of [[motor + 0.22, -0.02, 0.06], [motor - 0.05, -0.04, 0.22]]) {
     const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 8), skin);
     hand.position.set(x, y, z);
+    hand.name = 'hand';
     saw.add(hand);
   }
   return saw;

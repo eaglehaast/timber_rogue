@@ -16,7 +16,9 @@ const ZONE_H = 3.2;
 const SAW_SPEED = 0.2;    // метров глубины в секунду
 // Массы, кг: низ ствола, остальной ствол, крона. Крона тяжёлая и смещена — она и решает, куда тянет вес.
 const M_ZONE = 800, M_TRUNK = 1500, M_CROWN = 900;
-const PINCH = 3;          // мм: уже этого щель под шиной — закусывает
+const SEATING = 0.04;     // ствол прошёл такую долю пути до того, как сесть на пропил, — шину вот-вот закусит
+const PINCH = 3;          // мм: уже этого — закусило, цепь встала
+const SAWS = 2;           // пил на дерево: зажатую бросаешь в стволе и берёшь запасную
 const OPEN = 14;          // мм: шире — щель раскрывается
 const LEAN = THREE.MathUtils.degToRad(0.4); // настолько наклонился ствол — это уже заметно
 // Больше этого ствол стоя не наклоняется: недопил теряет устойчивость, и дальше его ведёт падение.
@@ -215,12 +217,13 @@ function newRound() {
     wind: { dir: dirOf(Math.random() * Math.PI * 2), max: 0.05 + Math.random() * 0.2, phase: Math.random() * 9 },
     time: 0, sway: new THREE.Vector3(), tilt: new THREE.Vector3(), gap: null,
     sec: null, secVersion: -1,
-    cuts: [], debris: [],
+    cuts: [], debris: [], saws: SAWS,
     top: false, slide: null, fall: null, done: false,
     said: {},
   };
   mode = 'free';
   saw = null;
+  sawModel.visible = true;
   resultEl.hidden = true;
   logEl.replaceChildren();
 }
@@ -266,6 +269,7 @@ function sawCandidate(forward) {
   const fresh = { origin, edge: origin.clone(), q: facing(player.yaw), depth: 0 };
   const f = basis(fresh);
   return round.cuts.find((c) => {
+    if (c.pinched) return false;
     const { normal, along } = basis(c);
     return normal.dot(f.normal) > SNAP_COS
       && along.dot(f.along) > SNAP_COS
@@ -277,6 +281,21 @@ function sawCandidate(forward) {
 function pose(cut, shift = -BAR_W / 2) {
   const b = basis(cut);
   return { position: b.origin.clone().addScaledVector(b.along, shift), quaternion: cut.q.clone() };
+}
+
+// Зажатую пилу бросаем в стволе: там остаётся её копия без рук, а в руках — запасная, если есть.
+function leaveSaw() {
+  const left = sawModel.clone();
+  left.remove(...left.children.filter((part) => part.name === 'hand'));
+  left.traverse((part) => part.layers.set(0));
+  const at = pose(saw);
+  left.position.copy(at.position);
+  left.quaternion.copy(at.quaternion);
+  round.root.add(left);
+  round.saws--;
+  sawModel.visible = round.saws > 0;
+  unsay('pinch');
+  unsay('narrow');
 }
 
 // Пилу держат горизонтально перед собой, шиной поперёк взгляда. У ствола она встаёт туда,
@@ -372,17 +391,41 @@ function stand(dt) {
     say('creak', 'Недопил потрескивает — ещё немного');
   } else if (tip.ratio < 0.5) unsay('creak');
 
-  // Щель под шиной: наклон ствола её сжимает или раскрывает.
+  // Щель под шиной: наклон ствола её сжимает или раскрывает. Шина лежит поперёк ствола, и когда он
+  // клонится вбок, у одного её конца щель смыкается раньше — берём самое узкое место там, где шина в древесине.
   round.gap = null;
   if (!saw || saw.depth < 0.05) return;
-  round.gap = kerfWidth(sec, round.tilt, saw.edge);
+  const b = basis(saw);
+  for (let w = -BAR_L / 2; w <= BAR_L / 2; w += VOXEL) {
+    const p = b.origin.clone().addScaledVector(b.side, w);
+    if (Math.hypot(p.x, p.z) > TRUNK_R) continue;
+    const g = kerfWidth(sec, round.tilt, p);
+    if (round.gap === null || g < round.gap) round.gap = g;
+  }
+  if (round.gap === null) return;
+  // Ствол клонится, пока щель где-то не сомкнётся, — тогда он сел на пропил. Если шина с той стороны,
+  // куда он клонится, щель над ней сужается, а когда сел, вес прижимает её к шине до конца:
+  // древесина не камень, под весом проминается.
+  const squeezed = round.gap < VOXEL * 1000;
+  const lean = round.tilt.length();
+  let seat = 0;
+  if (lean) {
+    const dir = round.tilt.clone().divideScalar(lean);
+    seat = lean / closing(sec, dir, sec.x0 * dir.x + sec.z0 * dir.z, 0);
+  }
+  if (squeezed && seat >= 1 - 1e-6) round.gap = 0;
   if (mode !== 'cut') return;
+  // Сужение — предупреждение. Кто пилит дальше, тот зажимает шину: цепь встаёт, пилу не вынуть.
   if (round.gap < PINCH) {
-    say('pinch', 'Щель сжимается — вес давит на шину, пилу начинает закусывать');
+    saw.pinched = true;
+    mode = 'aim';
+    say('pinch', 'Шину зажало: щель сомкнулась, цепь встала. Пилу не вынуть');
+  } else if (squeezed && seat > SEATING) {
+    say('narrow', 'Щель сужается — вес давит на шину, сейчас закусит');
     unsay('open');
   } else if (round.gap > OPEN) {
     say('open', 'Щель раскрывается — ствол уходит от пилы');
-    unsay('pinch');
+    unsay('narrow');
   }
 }
 
@@ -537,6 +580,8 @@ function land() {
 }
 
 function showResult(title, notes) {
+  const lost = SAWS - round.saws;
+  if (lost) notes.push(lost > 1 ? 'Обе пилы остались в пне' : 'Одна пила осталась в пне');
   resultEl.innerHTML = `${title}${notes.map((n) => `<small>${n}</small>`).join('')}<small>R — новое дерево</small>`;
   resultEl.hidden = false;
 }
@@ -571,7 +616,7 @@ function update(dt) {
   if (dist < minDist) player.pos.multiplyScalar(minDist / dist);
   pushOut(round.yard, player.pos, 0.35);
 
-  const candidate = mode === 'free' && !round.top ? sawCandidate(forward) : null;
+  const candidate = mode === 'free' && !round.top && round.saws ? sawCandidate(forward) : null;
 
   if (mode === 'cut') {
     if (!round.cuts.includes(saw)) round.cuts.push(saw);
@@ -665,9 +710,10 @@ function setFlying(on) {
 // Повернуть пилу вокруг её оси axis (TURN, TILT или ROLL) на angle. Пила поворачивается вокруг
 // кромки. В плоскости полотна — свободно: конец шины, что идёт в древесину, выбирает бегущая цепь.
 // Из плоскости шина упирается в стенки щели: едва вошла — крути как хочешь, вошла целиком — чуть-чуть.
-// Зажатую щелью шину не повернуть никак.
+// На ходу из плоскости не повернуть: иначе бегущая цепь шаг за шагом расширяет щель под новый угол
+// и закручивает пропил винтом. Зажатую шину не повернуть никак.
 function steer(axis, angle) {
-  if (round.gap !== null && round.gap < PINCH) return;
+  if (saw.pinched || (mode === 'cut' && axis !== TURN)) return;
   // Шагами, чтобы конец шины за шаг сдвигался не больше чем на полкубика: так цепь не оставит
   // недопиленных клиньев, а шина не проскочит сквозь стенку щели.
   const steps = saw.depth > 0 ? Math.ceil((Math.abs(angle) * BAR_L) / VOXEL) : 1;
@@ -716,12 +762,13 @@ function hint(candidate) {
     const deg = (a) => THREE.MathUtils.radToDeg(a).toFixed(1);
     const { along, side } = basis(saw);
     let angles = `Поворот ${deg(angleDiff(yawOf(along), player.yaw))}° · наклон ${deg(Math.asin(along.y))}° · крен ${deg(Math.asin(-side.y))}°`;
-    if (round.gap !== null && round.gap < PINCH) angles += ' · шину зажало';
-    else if (saw.stuck) angles += ' · шина упёрлась в стенку пропила';
+    if (saw.pinched) return `Шину зажало · Space — бросить пилу в стволе${round.saws > 1 ? ' и взять запасную' : ''}`;
+    if (saw.stuck) angles += ' · шина упёрлась в стенку пропила';
     if (mode === 'cut') return angles;
     const move = saw.depth > 0 ? '' : ' · W/S — выше-ниже';
     return `${angles} · мышь, стрелки, Q/E — повернуть (Shift — точно)${move} · ЛКМ — пилить · Space — убрать пилу`;
   }
+  if (!round.saws) return 'Пил не осталось · R — новое дерево';
   if (!candidate) return round.cuts.length ? '' : 'Подойди к стволу';
   return round.cuts.includes(candidate) ? 'ЛКМ — приставить пилу к пропилу' : 'ЛКМ — приставить пилу';
 }
@@ -753,7 +800,9 @@ addEventListener('keydown', (e) => {
   if (fly) return;
   if (e.code === 'KeyC') player.crouch = !player.crouch;
   // Space при приставленной пиле — шаг назад: пила убрана, ходить снова можно.
+  // Зажатая остаётся в стволе, в руках — запасная.
   if (e.code === 'Space' && mode !== 'free') {
+    if (saw.pinched) leaveSaw();
     mode = 'free';
     saw = null;
   }
@@ -775,11 +824,11 @@ canvas.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   if (document.pointerLockElement !== canvas) lockPointer();
   if (fly) return;
-  if (mode === 'aim') {
+  if (mode === 'aim' && !saw.pinched) {
     // Входим в древесину по середине слоя кубиков: тогда щель лежит вокруг полотна поровну.
     if (saw.depth === 0) saw.edge.y = saw.origin.y = (Math.floor(saw.origin.y / VOXEL) + 0.5) * VOXEL;
     mode = 'cut';
-  } else if (mode === 'free' && !round.top) {
+  } else if (mode === 'free' && !round.top && round.saws) {
     saw = sawCandidate(forwardOf(player.yaw));
     if (saw) mode = 'aim';
   }
