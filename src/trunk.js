@@ -18,41 +18,68 @@ const FACES = [
   { dir: [0, 0, -1], corners: [[0, 1, 0], [1, 1, 0], [1, 0, 0], [0, 0, 0]] },
 ];
 
-// Сечение ствола — не круг: эллипс, вытянутый в случайную сторону, и бугры от старых сучков.
-// Возвращает радиус по направлению (азимут в плане); самый большой — radius.
-export function trunkProfile(radius) {
-  const flat = 0.04 + Math.random() * 0.08;
+const rand = (a, b) => a + Math.random() * (b - a);
+const ANGLES = 720;
+const TAPER = 0.04; // настолько (доля радиуса) ствол тоньшает на каждый метр вверх
+
+// Низ ствола до высоты height. Сечение — не круг: эллипс, вытянутый в случайную сторону, и бугры
+// от старых сучков (profile — радиус по азимуту, самый большой — radius). У земли ствол раздаётся
+// корневыми наплывами, кверху тоньшает и клонится в сторону leanAz, всё круче.
+export function trunkShape(radius, height, leanAz) {
+  const flat = rand(0.04, 0.12);
   const turn = Math.random() * Math.PI;
   const bumps = Array.from({ length: 2 + Math.floor(Math.random() * 3) }, () => ({
-    at: Math.random() * Math.PI * 2, h: 0.02 + Math.random() * 0.05, w: 0.15 + Math.random() * 0.25,
+    at: Math.random() * Math.PI * 2, h: rand(0.02, 0.07), w: rand(0.15, 0.4),
   }));
   const raw = (a) => bumps.reduce(
     (r, b) => r + b.h * Math.exp(-((Math.atan2(Math.sin(a - b.at), Math.cos(a - b.at)) / b.w) ** 2)),
     1 - (flat * (1 - Math.cos(2 * (a - turn)))) / 2,
   );
-  let top = 0;
-  for (let i = 0; i < 360; i++) top = Math.max(top, raw((i / 180) * Math.PI));
-  return (a) => (radius * raw(a)) / top;
+  // Сечение считается при каждой проверке кубика, поэтому оно заранее разложено по углам.
+  const table = Float32Array.from({ length: ANGLES }, (_, i) => raw((i / ANGLES) * 2 * Math.PI));
+  const top = Math.max(...table);
+  const profile = (a) => (radius * table[Math.round((a / (2 * Math.PI)) * ANGLES + ANGLES) % ANGLES]) / top;
+
+  const flare = rand(0.15, 0.3);
+  const slope = Math.tan(THREE.MathUtils.degToRad(rand(1, 4)));
+  const bow = rand(0, 0.02);
+  const scale = (y) => 1 + flare * Math.exp(-y / 0.3) - TAPER * y;
+  const off = (y) => slope * y + (bow * y * y) / 2;
+  const lean = new THREE.Vector3(Math.cos(leanAz), 0, -Math.sin(leanAz));
+  const center = (y) => lean.clone().multiplyScalar(off(y));
+  return {
+    radius, leanAz, profile, scale, center,
+    // Направление оси ствола на высоте y.
+    axis: (y) => lean.clone().multiplyScalar(slope + bow * y).setY(1).normalize(),
+    contains(x, y, z) {
+      const dx = x - lean.x * off(y), dz = z - lean.z * off(y);
+      return Math.hypot(dx, dz) <= scale(y) * profile(Math.atan2(dz, dx));
+    },
+    // Квадрат в плане, в который ствол помещается на всей высоте: середина и полуширина.
+    mid: center(height / 2).setY(0),
+    reach: radius * (1 + flare) + off(height) / 2 + VOXEL,
+  };
 }
 
 export class TrunkVoxels {
-  // floor — с какого слоя (от земли) начинается сетка: у отвалившихся кусков она не с нуля.
-  // profile — радиус сечения по направлению, не больше radius.
-  constructor(radius, height, floor = 0, profile = () => radius) {
-    this.radius = radius;
-    this.profile = profile;
+  // shape — форма ствола (trunkShape): по ней кубики заполняются, а грань, за которой форма кончается, —
+  // кора, остальные открытые грани — свежий срез. floor — с какого слоя (от земли) начинается сетка:
+  // у отвалившихся кусков она не с нуля, но сетка в плане у всех кусков одна.
+  constructor(shape, height, floor = 0) {
+    this.shape = shape;
+    this.radius = shape.radius;
     this.floor = floor;
-    this.n = Math.ceil((2 * radius) / VOXEL);
+    this.n = Math.ceil((2 * shape.reach) / VOXEL);
     this.ny = Math.round(height / VOXEL);
-    this.half = (this.n * VOXEL) / 2;
+    this.x0 = shape.mid.x - (this.n * VOXEL) / 2;
+    this.z0 = shape.mid.z - (this.n * VOXEL) / 2;
 
-    // inside — клетки сечения ствола в плане; снаружи от них грань кубика — кора, внутри — свежий срез.
-    this.inside = new Uint8Array(this.n * this.n);
-    for (let k = 0; k < this.n; k++) {
-      for (let i = 0; i < this.n; i++) this.inside[k * this.n + i] = this.contains(this.x(i), this.z(k)) ? 1 : 0;
-    }
     this.data = new Uint8Array(this.n * this.n * this.ny);
-    for (let j = 0; j < this.ny; j++) this.data.set(this.inside, j * this.n * this.n);
+    for (let j = 0, id = 0; j < this.ny; j++) {
+      for (let k = 0; k < this.n; k++) {
+        for (let i = 0; i < this.n; i++, id++) this.data[id] = this.wood(i, j, k) ? 1 : 0;
+      }
+    }
     // Волокна идут вдоль ствола, по колонкам кубиков. Для каждой колонки: сколько в ней выпилено,
     // нижний и верхний край выреза и наклон пропила, что её перерезал. version растёт с каждым кубиком.
     this.gap = new Uint16Array(this.n * this.n);
@@ -77,12 +104,12 @@ export class TrunkVoxels {
     }
   }
 
-  // Точка (x, z) в плане — внутри сечения ствола.
-  contains(x, z) { return Math.hypot(x, z) <= this.profile(Math.atan2(z, x)); }
+  // Кубик внутри формы ствола: древесина, пока её не выпилили.
+  wood(i, j, k) { return this.shape.contains(this.x(i), (this.floor + j + 0.5) * VOXEL, this.z(k)); }
 
-  x(i) { return (i + 0.5) * VOXEL - this.half; }
+  x(i) { return this.x0 + (i + 0.5) * VOXEL; }
   y(j) { return (j + 0.5) * VOXEL; }
-  z(k) { return (k + 0.5) * VOXEL - this.half; }
+  z(k) { return this.z0 + (k + 0.5) * VOXEL; }
   at(i, j, k) { return this.data[(j * this.n + k) * this.n + i]; }
 
   neighbours(id) {
@@ -115,9 +142,9 @@ export class TrunkVoxels {
 
   // Есть ли древесина в точке p.
   solid(p) {
-    const i = Math.floor((p.x + this.half) / VOXEL);
+    const i = Math.floor((p.x - this.x0) / VOXEL);
     const j = Math.floor(p.y / VOXEL) - this.floor;
-    const k = Math.floor((p.z + this.half) / VOXEL);
+    const k = Math.floor((p.z - this.z0) / VOXEL);
     if (i < 0 || k < 0 || j < 0 || i >= this.n || k >= this.n || j >= this.ny) return false;
     return this.at(i, j, k) === 1;
   }
@@ -136,7 +163,6 @@ export class TrunkVoxels {
     const { n } = this;
     for (let k = 0; k < n; k++) {
       for (let i = 0; i < n; i++) {
-        if (!this.inside[k * n + i]) continue;
         const dx = this.x(i) - origin.x;
         const dz = this.z(k) - origin.z;
         const t = (origin.y - (halfT + dx * nx + dz * nz) / ny) / VOXEL - 0.5;
@@ -256,27 +282,40 @@ export class TrunkVoxels {
       jLow = Math.min(jLow, j);
       jHigh = Math.max(jHigh, j);
     }
-    const part = new TrunkVoxels(this.radius, (jHigh - jLow + 1) * VOXEL, this.floor + jLow, this.profile);
+    const part = new TrunkVoxels(this.shape, (jHigh - jLow + 1) * VOXEL, this.floor + jLow);
     part.data.fill(0);
     part.chunks.forEach((c) => { c.dirty = false; });
-    const center = new THREE.Vector3();
     for (const id of ids) {
       const j = Math.floor(id / layer);
-      const rest = id - j * layer;
-      const k = Math.floor(rest / this.n);
-      center.x += this.x(rest - k * this.n);
-      center.y += (this.floor + j + 0.5) * VOXEL;
-      center.z += this.z(k);
       part.data[id - jLow * layer] = 1;
       part.chunks[Math.floor((j - jLow) / CHUNK)].dirty = true;
       this.data[id] = 0;
       this.chunks[Math.floor(j / CHUNK)].dirty = true;
     }
-    part.center = center.divideScalar(ids.length);
+    part.center = part.measure().center;
     part.low = part.floor * VOXEL;
     part.remesh();
     this.remesh();
     return part;
+  }
+
+  // Объём древесины и её центр (в координатах ствола).
+  measure() {
+    const { n, data } = this;
+    const center = new THREE.Vector3();
+    let count = 0;
+    for (let j = 0, id = 0; j < this.ny; j++) {
+      for (let k = 0; k < n; k++) {
+        for (let i = 0; i < n; i++, id++) {
+          if (!data[id]) continue;
+          center.x += this.x(i);
+          center.y += (this.floor + j + 0.5) * VOXEL;
+          center.z += this.z(k);
+          count++;
+        }
+      }
+    }
+    return { volume: count * VOXEL ** 3, center: center.divideScalar(count) };
   }
 
   remesh() {
@@ -290,14 +329,15 @@ export class TrunkVoxels {
 
   // Рисуем только грани между древесиной и пустотой. Кора гладкая: нормаль у неё радиальная,
   // а не по грани кубика, иначе ствол выглядит лесенкой из светлых и тёмных полос.
-  // Текстура коры натянута на цилиндр: u — вдоль окружности, v — по высоте от земли, обе в метрах.
+  // Текстура коры натянута на цилиндр вокруг оси ствола: u — вдоль окружности, v — по высоте от земли, обе в метрах.
   // Кора и свежий срез — две группы граней со своими материалами.
   // Кусок перестраивается каждый кадр пиления, поэтому пишем в заранее выделенные массивы, без push.
   buildChunk(j0, j1) {
-    const { n, ny, data, inside, half } = this;
+    const { n, ny, data, x0, z0 } = this;
     const out = scratch;
     out.faces = 0;
     for (let j = j0; j < j1; j++) {
+      const axis = this.shape.center((this.floor + j + 0.5) * VOXEL);
       for (let k = 0; k < n; k++) {
         for (let i = 0; i < n; i++) {
           if (!data[(j * n + k) * n + i]) continue;
@@ -307,9 +347,9 @@ export class TrunkVoxels {
             if (jj < 0 || jj >= ny) continue; // снизу земля, сверху продолжается ствол
             const outside = ii < 0 || kk < 0 || ii >= n || kk >= n;
             if (!outside && data[(jj * n + kk) * n + ii]) continue;
-            const bark = outside || !inside[kk * n + ii];
+            const bark = outside || !this.wood(ii, jj, kk);
             let nx = dir[0], nyy = dir[1], nz = dir[2];
-            const a = Math.atan2(this.z(k), this.x(i));
+            const a = Math.atan2(this.z(k) - axis.z, this.x(i) - axis.x);
             if (bark) {
               nx = Math.cos(a); nyy = 0; nz = Math.sin(a);
             }
@@ -318,12 +358,13 @@ export class TrunkVoxels {
             let v = out.faces * 12, t = out.faces * 8;
             for (let c = 0; c < 4; c++, v += 3, t += 2) {
               const corner = corners[c];
-              const px = (i + corner[0]) * VOXEL - half, pz = (k + corner[2]) * VOXEL - half;
+              const px = x0 + (i + corner[0]) * VOXEL, pz = z0 + (k + corner[2]) * VOXEL;
               out.pos[v] = px;
               out.pos[v + 1] = (j + corner[1]) * VOXEL;
               out.pos[v + 2] = pz;
               out.nor[v] = nx; out.nor[v + 1] = nyy; out.nor[v + 2] = nz;
-              const turn = a + Math.atan2(Math.sin(Math.atan2(pz, px) - a), Math.cos(Math.atan2(pz, px) - a));
+              const around = Math.atan2(pz - axis.z, px - axis.x);
+              const turn = a + Math.atan2(Math.sin(around - a), Math.cos(around - a));
               out.uv[t] = (turn * this.radius) / BARK_TILE;
               out.uv[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / BARK_TILE;
             }
