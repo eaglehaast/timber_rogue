@@ -94,9 +94,18 @@ export class TrunkVoxels {
     this.version++;
   }
 
+  // Есть ли древесина в точке p.
+  solid(p) {
+    const i = Math.floor((p.x + this.half) / VOXEL);
+    const j = Math.floor(p.y / VOXEL) - this.floor;
+    const k = Math.floor((p.z + this.half) / VOXEL);
+    if (i < 0 || k < 0 || j < 0 || i >= this.n || k >= this.n || j >= this.ny) return false;
+    return this.at(i, j, k) === 1;
+  }
+
   // Вырезает щель пилы: кубики, чьи центры лежат в плоскости полотна (толщина — один кубик без дыр
-  // при любом наклоне), не дальше depth по ходу пилы и в пределах длины шины.
-  carve({ origin, along, side, normal }, depth, barLength) {
+  // при любом наклоне), от from до to по ходу пилы от origin и в пределах длины шины.
+  carve({ origin, along, side, normal }, from, to, barLength) {
     const halfT = 0.5 * VOXEL * (Math.abs(normal.x) + Math.abs(normal.y) + Math.abs(normal.z));
     // Плоскость пологая (наклон не больше 60°): в каждой колонке её пересекают единицы кубиков —
     // те, чьи центры лежат в полуинтервале [низ, верх). Нормаль смотрим вверх, чтобы низ был снизу.
@@ -120,7 +129,7 @@ export class TrunkVoxels {
           const dy = this.y(j) - origin.y;
           const s = dx * along.x + dy * along.y + dz * along.z;
           const w = dx * side.x + dy * side.y + dz * side.z;
-          if (s > depth || Math.abs(w) > barLength / 2) continue;
+          if (s < from || s > to || Math.abs(w) > barLength / 2) continue;
           this.data[id] = 0;
           this.cutFibre(id, normal);
           this.chunks[Math.floor(j / CHUNK)].dirty = true;
