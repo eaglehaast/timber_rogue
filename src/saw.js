@@ -4,6 +4,7 @@ import * as THREE from 'three';
 // держаться тех же осей: x — вдоль шины (мотор на +x), y — куда шина идёт в древесину,
 // z — перпендикуляр к полотну (при горизонтальном резе — вверх). Начало координат — середина шины.
 export const BAR_L = 0.7;  // длина шины: столько она перекрывает поперёк пропила
+export const BAR_W = 0.05; // ширина шины: столько её позади режущей кромки сидит в щели
 
 const box = (w, h, d, material, x, y = 0, z = 0) => {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
@@ -19,7 +20,7 @@ export function makeSaw() {
   const motor = BAR_L / 2 + 0.12;
   const saw = new THREE.Group();
   saw.add(
-    box(BAR_L, 0.05, 0.012, steel, 0),
+    box(BAR_L, BAR_W, 0.012, steel, 0),
     box(0.24, 0.16, 0.18, orange, motor, -0.02, 0.03),
     // Задняя рукоять — за мотором, передняя — дугой над ним.
     box(0.16, 0.03, 0.03, black, motor + 0.2, -0.02, 0.06),
