@@ -105,14 +105,6 @@ html, body {
   text-shadow: 0 1px 3px #000;
 }
 
-#hands {
-  position: absolute;
-  left: 50%;
-  bottom: 0;
-  width: min(70vw, 640px);
-  transform: translateX(-50%);
-}
-
 #result {
   position: fixed;
   left: 0;
