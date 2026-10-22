@@ -3,6 +3,7 @@ import { TrunkVoxels, VOXEL } from './trunk.js';
 import {
   section, tipping, closing, pivotHeight, tearAngle, slope, deflection, kerfWidth, FRICTION,
 } from './physics.js';
+import { makeYard, buildYard, struck, wreck, pushOut } from './yard.js';
 
 const TRUNK_R = 0.3;
 const TREE_H = 12;
@@ -23,7 +24,8 @@ const MAX_TILT = THREE.MathUtils.degToRad(60);
 const MAX_TURN = THREE.MathUtils.degToRad(30);
 const SNAP_DIST = 0.03;   // прицел прилипает к начатому пропилу, если почти совпал с ним
 const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(10));
-const TOLERANCE = THREE.MathUtils.degToRad(10);
+// Хоть одна сторона, куда дерево ляжет чисто, — не дальше этого угла от направления крена.
+const REACH_SIDE = THREE.MathUtils.degToRad(75);
 const EYE = 1.7;
 const G = 9.8;
 const MOUSE = 0.0022;
@@ -64,9 +66,6 @@ scene.add(ground);
 const barkMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2b });
 const voxelMat = new THREE.MeshLambertMaterial({ vertexColors: true });
 const crownMat = new THREE.MeshLambertMaterial({ color: 0x2f5d2a });
-const targetMat = new THREE.MeshBasicMaterial({
-  color: 0x4cff6a, transparent: true, opacity: 0.35, depthWrite: false,
-});
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил, и сама шина на текущей глубине.
 const aimPlane = new THREE.Mesh(
@@ -81,8 +80,8 @@ const bar = new THREE.Mesh(
 );
 scene.add(aimPlane, bar);
 
-// Направление на земле задаём азимутом: 0 — вдоль +x, против часовой стрелки при взгляде сверху.
-// Так же считают углы RingGeometry после поворота на землю, поэтому сектор цели совпадает с азимутом.
+// Направление на земле задаём азимутом: 0 — вдоль +x, против часовой стрелки при взгляде сверху
+// (так же, как поворот rotation.y у объектов).
 const dirOf = (az) => new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
 const azimuthOf = (v) => Math.atan2(-v.z, v.x);
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
@@ -137,22 +136,15 @@ function newRound() {
   const upper = new THREE.Group();
   upper.add(tree.bend);
 
-  // Валить приходится не строго по крену: цель — в пределах 75° от него.
-  const targetAz = tree.leanAz + (Math.random() - 0.5) * THREE.MathUtils.degToRad(150);
-  const target = new THREE.Mesh(
-    new THREE.RingGeometry(1, TREE_H + 2, 32, 1, targetAz - TOLERANCE, TOLERANCE * 2),
-    targetMat,
-  );
-  target.rotation.x = -Math.PI / 2;
-  target.position.y = 0.02;
-
   const root = new THREE.Group();
-  root.add(voxels.group, upper, target);
+  root.add(voxels.group, upper);
   scene.add(root);
+  const yard = makeYard(azimuthOf(tree.com), REACH_SIDE, TREE_H);
+  buildYard(yard, root);
 
   const mass = M_ZONE + M_TRUNK + M_CROWN;
   round = {
-    root, voxels, upper, targetAz, ...tree,
+    root, voxels, upper, yard, ...tree,
     weight: mass * G, mass,
     wind: { dir: dirOf(Math.random() * Math.PI * 2), max: 0.05 + Math.random() * 0.2, phase: Math.random() * 9 },
     time: 0, sway: new THREE.Vector3(), tilt: new THREE.Vector3(), gap: null,
@@ -457,16 +449,16 @@ function land() {
   const dz = player.pos.z - pivot.position.z;
   const along = dx * f.x + dz * f.z;
   const squashed = along > 0 && along < len && Math.abs(dx * f.z - dz * f.x) < 1;
-  const miss = Math.abs(THREE.MathUtils.radToDeg(angleDiff(azimuthOf(f), round.targetAz)));
-  const deg = Math.round(miss);
+  const hit = struck(round.yard, pivot.position, f, len);
+  hit.forEach(wreck);
 
-  if (squashed) showResult('ПРИШИБЛО', 'Не стой на линии падения');
-  else if (miss <= THREE.MathUtils.radToDeg(TOLERANCE)) showResult('ЗБС!', `Отклонение ${deg}°`);
-  else showResult('ФУУ', `Мимо на ${deg}°`);
+  if (squashed) showResult('ПРИШИБЛО', ['Не стой на линии падения']);
+  else if (hit.length) showResult('ОЙ', hit.map((o) => o.kind.verdict));
+  else showResult('ЧИСТО!', ['Дерево легло и ничего не задело']);
 }
 
-function showResult(title, note) {
-  resultEl.innerHTML = `${title}<small>${note}</small><small>R — новое дерево</small>`;
+function showResult(title, notes) {
+  resultEl.innerHTML = `${title}${notes.map((n) => `<small>${n}</small>`).join('')}<small>R — новое дерево</small>`;
   resultEl.hidden = false;
 }
 
@@ -491,6 +483,7 @@ function update(dt) {
   const minDist = TRUNK_R + 0.35;
   const dist = Math.hypot(player.pos.x, player.pos.z);
   if (dist < minDist) player.pos.multiplyScalar(minDist / dist);
+  pushOut(round.yard, player.pos, 0.35);
 
   const candidate = mode === 'free' && !round.top ? sawCandidate(forward) : null;
 
