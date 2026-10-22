@@ -6,6 +6,7 @@ import {
 import { makeYard, buildYard, struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
 import { growMaple } from './maple.js';
+import { dressBark } from './bark.js';
 
 const TRUNK_R = 0.3;
 const TREE_H = 12;
@@ -127,8 +128,6 @@ ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-const voxelMat = new THREE.MeshLambertMaterial({ vertexColors: true });
-
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 const aimPlane = new THREE.Mesh(
   new THREE.PlaneGeometry(BAR_L, 2 * TRUNK_R),
@@ -195,7 +194,8 @@ function gust(t, phase) {
 function newRound() {
   if (round) scene.remove(round.root);
 
-  const voxels = new TrunkVoxels(TRUNK_R, ZONE_H, voxelMat);
+  dressBark();
+  const voxels = new TrunkVoxels(TRUNK_R, ZONE_H);
   voxels.remesh();
   const tree = growTree();
   const upper = new THREE.Group();

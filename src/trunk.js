@@ -1,12 +1,12 @@
 import * as THREE from 'three';
+import { barkMaterial, BARK_TILE } from './bark.js';
 
 // Низ ствола — сетка кубиков-вокселей: древесина есть или выпилена.
 // Пила вырезает из неё настоящую щель, по оставшимся кубикам считается, держит ли недопил.
 export const VOXEL = 0.01;
 const CHUNK = 10; // слоёв в одном куске сетки; при пилении перестраиваются только задетые куски
 
-export const BARK = new THREE.Color(0x6e6253);
-const WOOD = new THREE.Color(0xe2bf86);
+const woodMaterial = new THREE.MeshLambertMaterial({ color: 0xe2bf86 });
 
 // Углы грани кубика для каждого из шести направлений, по кругу снаружи.
 const FACES = [
@@ -20,13 +20,12 @@ const FACES = [
 
 export class TrunkVoxels {
   // floor — с какого слоя (от земли) начинается сетка: у отвалившихся кусков она не с нуля.
-  constructor(radius, height, material, floor = 0) {
+  constructor(radius, height, floor = 0) {
     this.radius = radius;
     this.floor = floor;
     this.n = Math.ceil((2 * radius) / VOXEL);
     this.ny = Math.round(height / VOXEL);
     this.half = (this.n * VOXEL) / 2;
-    this.material = material;
 
     // inside — клетки круга ствола в плане; снаружи от них грань кубика — кора, внутри — свежий срез.
     this.inside = new Uint8Array(this.n * this.n);
@@ -54,7 +53,7 @@ export class TrunkVoxels {
     this.group.position.y = floor * VOXEL;
     this.chunks = [];
     for (let c = 0; c * CHUNK < this.ny; c++) {
-      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), [barkMaterial, woodMaterial]);
       mesh.castShadow = mesh.receiveShadow = true;
       this.group.add(mesh);
       this.chunks.push({ mesh, dirty: true });
@@ -237,7 +236,7 @@ export class TrunkVoxels {
       jLow = Math.min(jLow, j);
       jHigh = Math.max(jHigh, j);
     }
-    const part = new TrunkVoxels(this.radius, (jHigh - jLow + 1) * VOXEL, this.material, this.floor + jLow);
+    const part = new TrunkVoxels(this.radius, (jHigh - jLow + 1) * VOXEL, this.floor + jLow);
     part.data.fill(0);
     part.chunks.forEach((c) => { c.dirty = false; });
     const center = new THREE.Vector3();
@@ -271,6 +270,8 @@ export class TrunkVoxels {
 
   // Рисуем только грани между древесиной и пустотой. Кора гладкая: нормаль у неё радиальная,
   // а не по грани кубика, иначе ствол выглядит лесенкой из светлых и тёмных полос.
+  // Текстура коры натянута на цилиндр: u — вдоль окружности, v — по высоте от земли, обе в метрах.
+  // Кора и свежий срез — две группы граней со своими материалами.
   // Кусок перестраивается каждый кадр пиления, поэтому пишем в заранее выделенные массивы, без push.
   buildChunk(j0, j1) {
     const { n, ny, data, inside, half } = this;
@@ -288,20 +289,23 @@ export class TrunkVoxels {
             if (!outside && data[(jj * n + kk) * n + ii]) continue;
             const bark = outside || !inside[kk * n + ii];
             let nx = dir[0], nyy = dir[1], nz = dir[2];
+            const a = Math.atan2(this.z(k), this.x(i));
             if (bark) {
-              const x = this.x(i), z = this.z(k), r = Math.hypot(x, z);
-              nx = x / r; nyy = 0; nz = z / r;
+              nx = Math.cos(a); nyy = 0; nz = Math.sin(a);
             }
             out.reserve();
-            const color = bark ? BARK : WOOD;
-            let v = out.faces * 12;
-            for (let c = 0; c < 4; c++, v += 3) {
+            out.bark[out.faces] = bark ? 1 : 0;
+            let v = out.faces * 12, t = out.faces * 8;
+            for (let c = 0; c < 4; c++, v += 3, t += 2) {
               const corner = corners[c];
-              out.pos[v] = (i + corner[0]) * VOXEL - half;
+              const px = (i + corner[0]) * VOXEL - half, pz = (k + corner[2]) * VOXEL - half;
+              out.pos[v] = px;
               out.pos[v + 1] = (j + corner[1]) * VOXEL;
-              out.pos[v + 2] = (k + corner[2]) * VOXEL - half;
+              out.pos[v + 2] = pz;
               out.nor[v] = nx; out.nor[v + 1] = nyy; out.nor[v + 2] = nz;
-              out.col[v] = color.r; out.col[v + 1] = color.g; out.col[v + 2] = color.b;
+              const turn = a + Math.atan2(Math.sin(Math.atan2(pz, px) - a), Math.cos(Math.atan2(pz, px) - a));
+              out.uv[t] = (turn * this.radius) / BARK_TILE;
+              out.uv[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / BARK_TILE;
             }
             out.faces++;
           }
@@ -310,15 +314,23 @@ export class TrunkVoxels {
     }
     const verts = out.faces * 12;
     const index = new Uint32Array(out.faces * 6);
-    for (let f = 0; f < out.faces; f++) {
-      const v = f * 4;
-      index.set([v, v + 1, v + 2, v, v + 2, v + 3], f * 6);
+    let at = 0, barkFaces = 0;
+    for (const pass of [1, 0]) {
+      for (let f = 0; f < out.faces; f++) {
+        if (out.bark[f] !== pass) continue;
+        const v = f * 4;
+        index.set([v, v + 1, v + 2, v, v + 2, v + 3], at);
+        at += 6;
+        barkFaces += pass;
+      }
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(out.pos.slice(0, verts), 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(out.nor.slice(0, verts), 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(out.col.slice(0, verts), 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(out.uv.slice(0, out.faces * 8), 2));
     geometry.setIndex(new THREE.BufferAttribute(index, 1));
+    geometry.addGroup(0, barkFaces * 6, 0);
+    geometry.addGroup(barkFaces * 6, (out.faces - barkFaces) * 6, 1);
     return geometry;
   }
 }
@@ -328,11 +340,12 @@ const scratch = {
   faces: 0,
   pos: new Float32Array(12 * 8192),
   nor: new Float32Array(12 * 8192),
-  col: new Float32Array(12 * 8192),
+  uv: new Float32Array(8 * 8192),
+  bark: new Uint8Array(8192),
   reserve() {
     if ((this.faces + 1) * 12 <= this.pos.length) return;
-    for (const key of ['pos', 'nor', 'col']) {
-      const grown = new Float32Array(this[key].length * 2);
+    for (const key of ['pos', 'nor', 'uv', 'bark']) {
+      const grown = new this[key].constructor(this[key].length * 2);
       grown.set(this[key]);
       this[key] = grown;
     }
