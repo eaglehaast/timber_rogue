@@ -45,10 +45,20 @@ const sideEl = document.getElementById('side');
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x9cc4e4);
-scene.fog = new THREE.Fog(0x9cc4e4, 30, 90);
-const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 200);
+// Свет: тёплое низкое солнце и холодная тень от неба, у горизонта — дымка. Даль тонет в ней,
+// и глазу проще: что далеко, то бледнее.
+const HAZE = 0xcfdbe3, ZENITH = 0x5d8fcf;
+scene.fog = new THREE.Fog(HAZE, 25, 110);
+// Угол обзора по вертикали. Широкий угол у ствола растягивает картинку и укачивает,
+// поэтому по умолчанию он умеренный, а клавиши − и = его меняют.
+const FOV_MIN = 40, FOV_MAX = 75;
+let fov = 55;
+try { fov = THREE.MathUtils.clamp(Number(localStorage.getItem('fov')) || fov, FOV_MIN, FOV_MAX); } catch {}
+const camera = new THREE.PerspectiveCamera(fov, 1, 0.05, 200);
 camera.rotation.order = 'YXZ';
 // Вид сбоку — справа от игрока, на всё дерево: видно, клонится ли ствол к тебе или от тебя.
 // С зажатой ПКМ его можно обвести вокруг ствола, колесом — приблизить. Чем ближе камера,
@@ -56,19 +66,55 @@ camera.rotation.order = 'YXZ';
 const sideCamera = new THREE.PerspectiveCamera(50, 0.75, 0.05, 200);
 const VIEW_FAR = 16, VIEW_NEAR = 0.8, VIEW_Y = 6.5;
 const VIEW_EL_MIN = THREE.MathUtils.degToRad(-10), VIEW_EL_MAX = THREE.MathUtils.degToRad(80);
-const view = { az: 0, el: 0, dist: VIEW_FAR };
+const view = { base: 0, az: 0, el: 0, dist: VIEW_FAR };
 let inspecting = false;
 
-scene.add(new THREE.HemisphereLight(0xdfefff, 0x4a5a30, 1.2));
-const sun = new THREE.DirectionalLight(0xffffff, 1.5);
-sun.position.set(20, 30, 10);
+scene.add(new THREE.HemisphereLight(0xb4ccec, 0x5a4a32, 1.1));
+const sun = new THREE.DirectionalLight(0xffe2b8, 2.4);
+sun.position.set(20, 18, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = sun.shadow.camera.bottom = -24;
+sun.shadow.camera.right = sun.shadow.camera.top = 24;
+sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
+// Небо — сфера изнутри: от дымки у горизонта к синеве в зените.
+const skyGeo = new THREE.SphereGeometry(150, 32, 16);
+const skyColors = [];
+for (let i = 0; i < skyGeo.attributes.position.count; i++) {
+  const up = Math.max(0, skyGeo.attributes.position.getY(i) / 150);
+  const c = new THREE.Color(HAZE).lerp(new THREE.Color(ZENITH), Math.sqrt(up));
+  skyColors.push(c.r, c.g, c.b);
+}
+skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
+scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
+
+// Трава — пятнистая, а не заливка: по пятнам глаз видит, как ты идёшь и поворачиваешь.
+// Заглушка до нарисованной текстуры.
+function grassTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#5b7d36';
+  g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 1800; i++) {
+    g.fillStyle = `hsl(${80 + Math.random() * 25}, ${30 + Math.random() * 15}%, ${26 + Math.random() * 10}%)`;
+    g.fillRect(Math.random() * 256, Math.random() * 256, 2 + Math.random() * 5, 2 + Math.random() * 5);
+  }
+  const texture = new THREE.CanvasTexture(c);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(100, 100);
+  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return texture;
+}
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(200, 200),
-  new THREE.MeshLambertMaterial({ color: 0x5d8a3a }),
+  new THREE.MeshLambertMaterial({ map: grassTexture() }),
 );
 ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
 scene.add(ground);
 
 const voxelMat = new THREE.MeshLambertMaterial({ vertexColors: true });
@@ -147,6 +193,7 @@ function newRound() {
   scene.add(root);
   const yard = makeYard(azimuthOf(tree.com), REACH_SIDE, TREE_H);
   buildYard(yard, root);
+  root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
 
   const mass = M_ZONE + M_TRUNK + M_CROWN;
   round = {
@@ -534,7 +581,11 @@ function update(dt) {
   }
   const focus = (saw ?? round.cuts.at(-1))?.origin.y ?? 1;
   const target = new THREE.Vector3(0, THREE.MathUtils.mapLinear(view.dist, VIEW_NEAR, VIEW_FAR, focus, VIEW_Y), 0);
-  const look = right.clone().applyAxisAngle(THREE.Object3D.DEFAULT_UP, view.az).multiplyScalar(Math.cos(view.el)).setY(Math.sin(view.el));
+  // Вид сбоку стоит справа от линии «ты — ствол», а не от взгляда: крутишь головой — он
+  // неподвижен, обходишь дерево — он плавно идёт следом.
+  const bearing = player.pos.clone().setY(0).normalize();
+  view.base += angleDiff(azimuthOf(new THREE.Vector3(bearing.z, 0, -bearing.x)), view.base) * (1 - Math.exp(-3 * dt));
+  const look = dirOf(view.base + view.az).multiplyScalar(Math.cos(view.el)).setY(Math.sin(view.el));
   sideCamera.position.copy(target).addScaledVector(look, view.dist);
   sideCamera.lookAt(target);
 
@@ -581,6 +632,14 @@ addEventListener('resize', resize);
 addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'KeyR') newRound();
+  if (e.code === 'Minus' || e.code === 'Equal') {
+    fov = THREE.MathUtils.clamp(fov + (e.code === 'Minus' ? -5 : 5), FOV_MIN, FOV_MAX);
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+    try { localStorage.setItem('fov', fov); } catch {}
+    unsay('fov');
+    say('fov', `Угол обзора ${fov}°`);
+  }
   // S при приставленной пиле — шаг назад: пила убрана, ходить снова можно.
   if (e.code === 'KeyS' && mode !== 'free') {
     mode = 'free';
