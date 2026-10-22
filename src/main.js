@@ -27,7 +27,14 @@ const SNAP_DIST = 0.03;   // прицел прилипает к начатому
 const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(10));
 // Хоть одна сторона, куда дерево ляжет чисто, — не дальше этого угла от направления крена.
 const REACH_SIDE = THREE.MathUtils.degToRad(75);
-const EYE = 1.7;
+// Глаза стоя и присев: присев можно пилить у самой земли.
+const EYE = 1.7, EYE_CROUCH = 1.0;
+// Точная настройка пилы: шаг стрелками и замедление мыши с зажатым Shift.
+const STEP = THREE.MathUtils.degToRad(0.5);
+const FINE = 0.2;
+const ENTRY_SPEED = 0.15;  // м/с: так пила, ещё не вошедшая в древесину, едет по коре вверх-вниз
+// Летающая камера для осмотра: медленная, чтобы можно было влезть в щель, и не дальше FLY_R от ствола.
+const FLY_SPEED = 0.5, FLY_R = 4, FLY_NEAR = 0.005, NEAR = 0.05;
 // Где пила в руках: столько вперёд от глаз, ниже и левее — так мотор справа от взгляда.
 const HOLD_AHEAD = 0.8, HOLD_LOW = 0.6, HOLD_LEFT = 0.2;
 const G = 9.8;
@@ -58,7 +65,7 @@ scene.fog = new THREE.Fog(HAZE, 25, 110);
 const FOV_MIN = 40, FOV_MAX = 75;
 let fov = 55;
 try { fov = THREE.MathUtils.clamp(Number(localStorage.getItem('fov')) || fov, FOV_MIN, FOV_MAX); } catch {}
-const camera = new THREE.PerspectiveCamera(fov, 1, 0.05, 200);
+const camera = new THREE.PerspectiveCamera(fov, 1, NEAR, 200);
 camera.rotation.order = 'YXZ';
 // Вид сбоку — справа от игрока, на всё дерево: видно, клонится ли ствол к тебе или от тебя.
 // С зажатой ПКМ его можно обвести вокруг ствола, колесом — приблизить. Чем ближе камера,
@@ -142,7 +149,14 @@ const azimuthOf = (v) => Math.atan2(-v.z, v.x);
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 const forwardOf = (yaw) => new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
 
-const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0 };
+const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0, eye: EYE, crouch: false };
+// Осмотр с летающей камерой: игрок и пила замирают, камера летает сама по себе.
+let fly = null;
+// Сколько ещё можно повернуть пилу до следующего кадра. Стоящая цепь в пропиле не режет —
+// пилу не повернуть. Бегущая режет вбок, но за кадр конец шины сдвигается не больше чем на кубик,
+// иначе между кадрами останется недопиленный клин. Поэтому чем глубже пила, тем медленнее она
+// поворачивается, а у самой коры — почти свободно.
+let steerLeft = Infinity;
 const keys = new Set();
 // free — ходим и смотрим; aim — пила приставлена, мышь крутит полотно; cut — пилим.
 let mode = 'free';
@@ -240,7 +254,7 @@ function sawCandidate(forward) {
   const bark = distanceToBark(forward);
   if (bark === null || bark > REACH) return null;
   const origin = player.pos.clone().addScaledVector(forward, bark);
-  origin.y = THREE.MathUtils.clamp(EYE + Math.tan(player.pitch) * bark, 0.05, MAX_ENTRY);
+  origin.y = THREE.MathUtils.clamp(player.eye + Math.tan(player.pitch) * bark, 0.05, MAX_ENTRY);
   const fresh = { origin, yaw: player.yaw, tilt: 0, depth: 0 };
   const freshNormal = basis(fresh).normal;
   return round.cuts.find((c) => {
@@ -527,9 +541,10 @@ function update(dt) {
   const forward = forwardOf(player.yaw);
   const right = new THREE.Vector3(-forward.z, 0, forward.x);
 
-  // Ходить можно, только пока пила не приставлена к стволу.
+  const shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
+  // Ходить можно, только пока пила не приставлена к стволу и камера не летает.
   const move = new THREE.Vector3();
-  if (mode === 'free') {
+  if (mode === 'free' && !fly) {
     if (keys.has('KeyW')) move.add(forward);
     if (keys.has('KeyS')) move.sub(forward);
     if (keys.has('KeyD')) move.add(right);
@@ -537,8 +552,15 @@ function update(dt) {
   }
   const moving = move.lengthSq() > 0;
   if (moving) {
-    const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6 : 3;
+    const speed = player.crouch ? 1.5 : shift ? 6 : 3;
     player.pos.addScaledVector(move.normalize(), speed * dt);
+  }
+  player.eye += ((player.crouch ? EYE_CROUCH : EYE) - player.eye) * (1 - Math.exp(-8 * dt));
+  steerLeft = mode === 'cut' ? VOXEL / Math.max(saw.depth, VOXEL) : Infinity;
+  // Пила у коры, но ещё не вошла: W и S везут её вверх-вниз по стволу.
+  if (mode === 'aim' && saw.depth === 0 && !fly) {
+    const lift = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
+    saw.origin.y = THREE.MathUtils.clamp(saw.origin.y + lift * ENTRY_SPEED * (shift ? FINE : 1) * dt, 0.05, MAX_ENTRY);
   }
   // Сквозь пень не пройти.
   const minDist = TRUNK_R + 0.35;
@@ -597,21 +619,68 @@ function update(dt) {
     player.bob += dt * 10;
     shake.copy(right).multiplyScalar(Math.sin(player.bob) * 0.015).setY(-Math.abs(Math.cos(player.bob)) * 0.02);
   }
-  const held = player.pos.clone().addScaledVector(forward, HOLD_AHEAD).addScaledVector(right, -HOLD_LEFT).setY(EYE - HOLD_LOW);
+  const held = player.pos.clone().addScaledVector(forward, HOLD_AHEAD).addScaledVector(right, -HOLD_LEFT).setY(player.eye - HOLD_LOW);
   moveSaw(shown ?? { origin: held, yaw: player.yaw, tilt: 0, depth: 0 }, shake, dt);
 
-  camera.position.set(player.pos.x, EYE, player.pos.z);
-  camera.rotation.set(player.pitch, player.yaw, 0);
+  if (fly) {
+    flyCamera(dt, shift);
+  } else {
+    camera.position.set(player.pos.x, player.eye, player.pos.z);
+    camera.rotation.set(player.pitch, player.yaw, 0);
+  }
+}
+
+// Летающая камера: куда смотришь, туда и летишь; Space — вверх, C — вниз, Shift — ещё медленнее.
+function flyCamera(dt, shift) {
+  const look = new THREE.Vector3(-Math.sin(fly.yaw) * Math.cos(fly.pitch), Math.sin(fly.pitch), -Math.cos(fly.yaw) * Math.cos(fly.pitch));
+  const right = new THREE.Vector3(-look.z, 0, look.x).normalize();
+  const move = new THREE.Vector3();
+  if (keys.has('KeyW')) move.add(look);
+  if (keys.has('KeyS')) move.sub(look);
+  if (keys.has('KeyD')) move.add(right);
+  if (keys.has('KeyA')) move.sub(right);
+  if (keys.has('Space')) move.y += 1;
+  if (keys.has('KeyC')) move.y -= 1;
+  if (move.lengthSq()) fly.pos.addScaledVector(move.normalize(), FLY_SPEED * (shift ? FINE : 1) * dt);
+  const flat = Math.hypot(fly.pos.x, fly.pos.z);
+  if (flat > FLY_R) fly.pos.multiplyScalar(FLY_R / flat);
+  fly.pos.y = THREE.MathUtils.clamp(fly.pos.y, 0.02, ZONE_H + 1);
+  camera.position.copy(fly.pos);
+  camera.rotation.set(fly.pitch, fly.yaw, 0);
+}
+
+function setFlying(on) {
+  fly = on ? { pos: camera.position.clone(), yaw: player.yaw, pitch: player.pitch } : null;
+  if (on && mode === 'cut') mode = 'aim';
+  camera.near = on ? FLY_NEAR : NEAR;
+  camera.updateProjectionMatrix();
+}
+
+// Повернуть пилу: вбок — вокруг вертикали, вверх-вниз — наклон полотна. Поворачивать можно
+// и в пропиле, пока цепь бежит: пила качается вокруг точки входа и выбирает веер.
+function steer(turn, tilt) {
+  if (mode === 'aim' && saw.depth > 0) return;
+  const want = Math.max(Math.abs(turn), Math.abs(tilt));
+  if (!want) return;
+  const k = Math.min(1, steerLeft / want);
+  steerLeft -= want * k;
+  turn *= k;
+  tilt *= k;
+  saw.yaw = player.yaw + THREE.MathUtils.clamp(angleDiff(saw.yaw + turn, player.yaw), -MAX_TURN, MAX_TURN);
+  saw.tilt = THREE.MathUtils.clamp(saw.tilt + tilt, -MAX_TILT, MAX_TILT);
 }
 
 function hint(candidate) {
   if (round.slide) return 'Съезжает! Отойди!';
   if (round.fall) return round.done ? '' : 'Падает! Беги!';
-  if (mode === 'cut') return '';
-  if (mode === 'aim') {
-    if (saw.depth > 0) return 'ЛКМ — пилить дальше · S — убрать пилу';
-    const tilt = Math.round(THREE.MathUtils.radToDeg(saw.tilt));
-    return `Наклон ${tilt}° · мышь — наклон и поворот · ЛКМ — пилить · S — убрать пилу`;
+  if (fly) return 'Осмотр · WASD, Space и C — лететь · Shift — медленно · F — вернуться';
+  if (mode !== 'free') {
+    const deg = (a) => THREE.MathUtils.radToDeg(a).toFixed(1);
+    const angles = `Поворот ${deg(angleDiff(saw.yaw, player.yaw))}° · наклон ${deg(saw.tilt)}°`;
+    if (mode === 'cut') return angles;
+    if (saw.depth > 0) return `${angles} · пила в пропиле: повернуть можно только на ходу, с зажатой ЛКМ · Space — убрать пилу`;
+    const move = ' · W/S — выше-ниже';
+    return `${angles} · мышь или стрелки — повернуть (Shift — точно)${move} · ЛКМ — пилить · Space — убрать пилу`;
   }
   if (!candidate) return round.cuts.length ? '' : 'Подойди к стволу';
   return round.cuts.includes(candidate) ? 'ЛКМ — приставить пилу к пропилу' : 'ЛКМ — приставить пилу';
@@ -640,11 +709,17 @@ addEventListener('keydown', (e) => {
     unsay('fov');
     say('fov', `Угол обзора ${fov}°`);
   }
-  // S при приставленной пиле — шаг назад: пила убрана, ходить снова можно.
-  if (e.code === 'KeyS' && mode !== 'free') {
+  if (e.code === 'KeyF') setFlying(!fly);
+  if (fly) return;
+  if (e.code === 'KeyC') player.crouch = !player.crouch;
+  // Space при приставленной пиле — шаг назад: пила убрана, ходить снова можно.
+  if (e.code === 'Space' && mode !== 'free') {
     mode = 'free';
     saw = null;
   }
+  // Стрелки — пила поворачивается на полградуса за нажатие.
+  const arrows = { ArrowLeft: [STEP, 0], ArrowRight: [-STEP, 0], ArrowUp: [0, -STEP], ArrowDown: [0, STEP] };
+  if (arrows[e.code] && mode !== 'free') steer(...arrows[e.code]);
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 startEl.addEventListener('click', () => {
@@ -656,6 +731,7 @@ canvas.addEventListener('mousedown', (e) => {
   if (e.button === 2) setInspecting(true);
   if (e.button !== 0) return;
   if (document.pointerLockElement !== canvas) lockPointer();
+  if (fly) return;
   if (mode === 'aim') mode = 'cut';
   else if (mode === 'free' && !round.top) {
     saw = sawCandidate(forwardOf(player.yaw));
@@ -683,14 +759,16 @@ document.addEventListener('mousemove', (e) => {
   if (inspecting) {
     view.az -= e.movementX * MOUSE * 2;
     view.el = THREE.MathUtils.clamp(view.el + e.movementY * MOUSE * 2, VIEW_EL_MIN, VIEW_EL_MAX);
+  } else if (fly) {
+    fly.yaw -= e.movementX * MOUSE;
+    fly.pitch = THREE.MathUtils.clamp(fly.pitch - e.movementY * MOUSE, -1.5, 1.5);
   } else if (mode === 'free') {
     player.yaw -= e.movementX * MOUSE;
     player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * MOUSE, -1.5, 1.5);
-  } else if (mode === 'aim' && saw.depth === 0) {
-    // Пока пила не вошла в древесину, мышь крутит полотно: вбок — поворот, вверх-вниз — наклон.
-    const turn = THREE.MathUtils.clamp(angleDiff(saw.yaw - e.movementX * MOUSE, player.yaw), -MAX_TURN, MAX_TURN);
-    saw.yaw = player.yaw + turn;
-    saw.tilt = THREE.MathUtils.clamp(saw.tilt + e.movementY * MOUSE, -MAX_TILT, MAX_TILT);
+  } else {
+    // Мышь водит пилу: вбок — поворот, вверх-вниз — наклон; с Shift — в пять раз точнее.
+    const k = MOUSE * (keys.has('ShiftLeft') || keys.has('ShiftRight') ? FINE : 1);
+    steer(-e.movementX * k, e.movementY * k);
   }
 });
 
