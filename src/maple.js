@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { barkMaterial, BARK_TILE } from './bark.js';
+import { random } from './random.js';
 
 // Клён ясенелистный (американский) — сорняк: растёт быстро и как попало. Ровно вверх почти никогда:
 // ствол клонится к свету, потом выгибается обратно вверх, часто раздваивается. Ветви растут по всей
@@ -9,7 +10,7 @@ export const DENSITY = 750; // кг/м³ — сырая древесина кл�
 const leafMat = new THREE.MeshLambertMaterial({ color: 0x7fae47, flatShading: true });
 const UP = new THREE.Vector3(0, 1, 0);
 
-const rand = (a, b) => a + Math.random() * (b - a);
+const rand = (a, b) => a + random() * (b - a);
 const flat = (az) => new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
 
 // Кора на ветвях и узлах в том же масштабе, что на стволе: координаты текстуры в метрах.
@@ -98,9 +99,9 @@ export function growMaple(length, r, leanAz, base, start) {
       }
       // Ветви: у ствола — с первого шага, больше со светлой стороны; у ветвей — веточки.
       if (level < 2 && i >= 1) {
-        const count = level === 0 ? 1 + (Math.random() < 0.5 ? 1 : 0) : Math.random() < 0.6 ? 1 : 0;
+        const count = level === 0 ? 1 + (random() < 0.5 ? 1 : 0) : random() < 0.6 ? 1 : 0;
         for (let n = 0; n < count; n++) {
-          const az = level === 0 ? leanAz + rand(-1, 1) * rand(0.5, 2.2) : Math.random() * Math.PI * 2;
+          const az = level === 0 ? leanAz + rand(-1, 1) * rand(0.5, 2.2) : random() * Math.PI * 2;
           const el = rand(0.05, 0.6);
           const out = flat(az).multiplyScalar(Math.cos(el)).addScaledVector(UP, Math.sin(el)).lerp(d, 0.2).normalize();
           const reach = level === 0 ? rand(2.5, 5) * (1 - 0.5 * (i / steps)) : rand(0.8, 1.8);
@@ -112,6 +113,6 @@ export function growMaple(length, r, leanAz, base, start) {
   }
 
   // Почти у половины деревьев ствол раздваивается.
-  grow(new THREE.Vector3(), start, r, r * 0.25, length, 0, Math.random() < 0.45 ? 1 + Math.floor(Math.random() * 3) : -1, base);
+  grow(new THREE.Vector3(), start, r, r * 0.25, length, 0, random() < 0.45 ? 1 + Math.floor(random() * 3) : -1, base);
   return { tree, com: com.divideScalar(mass), mass, spin };
 }
