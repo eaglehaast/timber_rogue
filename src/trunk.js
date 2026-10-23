@@ -93,42 +93,79 @@ const TAPER = 0.04; // настолько (доля радиуса) ствол �
 
 // Низ ствола до высоты height. Сечение — не круг: эллипс, вытянутый в случайную сторону, и бугры
 // от старых сучков (profile — радиус по азимуту, самый большой — radius). У земли ствол раздаётся
-// корневыми наплывами, кверху тоньшает и клонится в сторону leanAz, всё круче.
+// корневыми лапами: 4–7 рёбер, между ними впадины. Кверху лапы сходят на нет рёбрами по стволу,
+// а у земли уходят в стороны корнями (lobes — где и какие, по ним растут корни, см. maple.js).
+// Кверху ствол тоньшает и клонится в сторону leanAz, всё круче.
+// outline(a, y) — радиус ствола на высоте y по азимуту a от оси.
 export function trunkShape(radius, height, leanAz) {
   const flat = rand(0.04, 0.12);
   const turn = random() * Math.PI;
   const bumps = Array.from({ length: 2 + Math.floor(random() * 3) }, () => ({
     at: random() * Math.PI * 2, h: rand(0.02, 0.07), w: rand(0.15, 0.4),
   }));
+  const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
   const raw = (a) => bumps.reduce(
-    (r, b) => r + b.h * Math.exp(-((Math.atan2(Math.sin(a - b.at), Math.cos(a - b.at)) / b.w) ** 2)),
+    (r, b) => r + b.h * Math.exp(-((wrap(a - b.at) / b.w) ** 2)),
     1 - (flat * (1 - Math.cos(2 * (a - turn)))) / 2,
   );
   // Сечение считается при каждой проверке кубика, поэтому оно заранее разложено по углам.
-  const table = Float32Array.from({ length: ANGLES }, (_, i) => raw((i / ANGLES) * 2 * Math.PI));
-  const top = Math.max(...table);
-  const profile = (a) => (radius * table[Math.round((a / (2 * Math.PI)) * ANGLES + ANGLES) % ANGLES]) / top;
+  const table = (f) => Float32Array.from({ length: ANGLES }, (_, i) => f((i / ANGLES) * 2 * Math.PI));
+  const index = (a) => Math.round((a / (2 * Math.PI)) * ANGLES + ANGLES) % ANGLES;
+  const shapeTable = table(raw);
+  const top = Math.max(...shapeTable);
+  const profile = (a) => (radius * shapeTable[index(a)]) / top;
 
-  const flare = rand(0.15, 0.3);
+  // Лапы стоят примерно поровну по кругу. size — насколько лапа у земли выступает (доля радиуса),
+  // fade — за какую высоту она ослабевает в e раз, w — её ширина по углу.
+  const count = 4 + Math.floor(random() * 4);
+  const phase = random() * Math.PI * 2;
+  const lobes = Array.from({ length: count }, (_, i) => {
+    const at = phase + ((i + rand(-0.3, 0.3)) / count) * 2 * Math.PI;
+    const w = rand(0.18, 0.32);
+    return { at, size: rand(0.3, 0.8), fade: rand(0.2, 0.45), w, ridge: table((a) => Math.exp(-((wrap(a - at) / w) ** 2))) };
+  });
+
+  const flare = rand(0.08, 0.15);
   const slope = Math.tan(THREE.MathUtils.degToRad(rand(1, 4)));
   const bow = rand(0, 0.02);
   const scale = (y) => 1 + flare * Math.exp(-y / 0.3) - TAPER * y;
+  // Кубики проверяются слой за слоем, поэтому для последнего слоя запоминаем высоты лап и границы:
+  // дальше far — точно не ствол, ближе near — точно ствол, считать контур нужно только между ними.
+  const low = Math.min(...shapeTable) / top;
+  const lobeR = new Float32Array(count);
+  let layerY = NaN, near = 0, far = 0;
+  const layer = (y) => {
+    if (y === layerY) return;
+    layerY = y;
+    far = scale(y) * radius;
+    lobes.forEach((l, n) => { lobeR[n] = radius * l.size * Math.exp(-y / l.fade); far += lobeR[n]; });
+    near = scale(y) * radius * low;
+  };
+  const outline = (a, y) => {
+    layer(y);
+    const i = index(a);
+    let r = scale(y) * profile(a);
+    for (let n = 0; n < count; n++) r += lobeR[n] * lobes[n].ridge[i];
+    return r;
+  };
   const off = (y) => slope * y + (bow * y * y) / 2;
   const lean = new THREE.Vector3(Math.cos(leanAz), 0, -Math.sin(leanAz));
   const center = (y) => lean.clone().multiplyScalar(off(y));
   return {
-    radius, leanAz, profile, scale, center,
+    radius, leanAz, profile, scale, outline, center, lobes,
     // Направление оси ствола на высоте y.
     axis: (y) => lean.clone().multiplyScalar(slope + bow * y).setY(1).normalize(),
-    // Под землёй ствола нет: там наплывы раздувались бы без конца.
+    // Под землёй ствола нет: там лапы раздувались бы без конца.
     contains(x, y, z) {
       if (y < 0) return false;
       const dx = x - lean.x * off(y), dz = z - lean.z * off(y);
-      return Math.hypot(dx, dz) <= scale(y) * profile(Math.atan2(dz, dx));
+      const d = Math.hypot(dx, dz);
+      layer(y);
+      return d <= near || (d <= far && d <= outline(Math.atan2(dz, dx), y));
     },
     // Квадрат в плане, в который ствол помещается на всей высоте: середина и полуширина.
     mid: center(height / 2).setY(0),
-    reach: radius * (1 + flare) + off(height) / 2 + VOXEL,
+    reach: radius * (1 + flare + Math.max(...lobes.map((l) => l.size))) + off(height) / 2 + VOXEL,
   };
 }
 
@@ -501,7 +538,8 @@ export class TrunkVoxels {
     out.faces = 0;
     for (let j = j0; j < j1; j++) {
       const axis = this.shape.center((this.floor + j + 0.5) * VOXEL);
-      const size = this.shape.scale((this.floor + j + 0.5) * VOXEL);
+      const y = (this.floor + j + 0.5) * VOXEL;
+      const size = this.shape.scale(y);
       for (let k = 0; k < n; k++) {
         for (let i = 0; i < n; i++) {
           if (!data[(j * n + k) * n + i]) continue;
@@ -538,9 +576,9 @@ export class TrunkVoxels {
                 out.uv[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / BARK_TILE;
               } else {
                 // Древесина — в полярных координатах: u — доля оборота, v — от коры (0) к сердцевине (1).
-                // Радиус меряем долей профиля, поэтому годичные кольца повторяют форму ствола.
+                // Радиус меряем долей контура, поэтому годичные кольца повторяют форму ствола, и лапы тоже.
                 out.uv[t] = turn / (2 * Math.PI);
-                out.uv[t + 1] = 1 - Math.hypot(px - axis.x, pz - axis.z) / (size * this.shape.profile(around));
+                out.uv[t + 1] = 1 - Math.hypot(px - axis.x, pz - axis.z) / this.shape.outline(around, y);
                 out.pith[t] = 0.5 + (px - axis.x) / (PITH * size * this.shape.radius);
                 out.pith[t + 1] = 0.5 + (pz - axis.z) / (PITH * size * this.shape.radius);
                 // Волокна: u — по горизонтали вдоль сглаженной плоскости грани, v — по высоте.

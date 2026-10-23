@@ -5,7 +5,7 @@ import {
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
-import { growMaple, DENSITY } from './maple.js';
+import { growMaple, growRoots, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
@@ -170,7 +170,7 @@ function growTree(voxels) {
   const { shape } = voxels;
   const s = shape.scale(ZONE_H);
   const { tree, com, mass, spin } = growMaple(
-    TREE_H - ZONE_H, TRUNK_R * s, shape.leanAz, (a) => s * shape.profile(a), shape.axis(ZONE_H),
+    TREE_H - ZONE_H, TRUNK_R * s, shape.leanAz, (a) => shape.outline(a, ZONE_H), shape.axis(ZONE_H),
   );
   const bend = new THREE.Group();
   bend.position.copy(shape.center(ZONE_H)).setY(ZONE_H - 0.03);
@@ -209,7 +209,7 @@ function newRound(treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   const root = new THREE.Group();
   voxels.standing = true;
   upper.add(voxels.lift);
-  root.add(voxels.group, upper);
+  root.add(voxels.group, upper, growRoots(voxels.shape));
   scene.add(root);
   const yard = []; // постройки (yard.js) пока убраны: отвлекают от дерева
   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
@@ -813,7 +813,7 @@ function update(dt) {
     const c = shape.center(y);
     const dx = player.pos.x - c.x, dz = player.pos.z - c.z;
     const dist = Math.hypot(dx, dz);
-    const minDist = shape.scale(y) * shape.profile(Math.atan2(dz, dx)) + 0.35;
+    const minDist = shape.outline(Math.atan2(dz, dx), y) + 0.35;
     if (dist < minDist) player.pos.set(c.x + (dx / dist) * minDist, player.pos.y, c.z + (dz / dist) * minDist);
   }
   pushOut(round.yard, player.pos, 0.35);

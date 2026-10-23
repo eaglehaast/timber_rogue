@@ -116,3 +116,34 @@ export function growMaple(length, r, leanAz, base, start) {
   grow(new THREE.Vector3(), start, r, r * 0.25, length, 0, random() < 0.45 ? 1 + Math.floor(random() * 3) : -1, base);
   return { tree, com: com.divideScalar(mass), mass, spin };
 }
+
+// Поверхностные корни: каждая лапа у земли уходит в сторону корнем — толстым, сужающимся, полузарытым.
+// Корни клёна неглубокие, поэтому выходят наружу на полметра-метр, извиваясь, и ныряют в землю.
+// Они только для вида: пилят ствол выше, а вес и прочность корней в счёт не идут.
+export function growRoots(shape) {
+  const roots = new THREE.Group();
+  for (const lobe of shape.lobes) {
+    const r0 = shape.radius * lobe.size * 0.5;
+    const reach = rand(0.4, 1.1);
+    let az = lobe.at;
+    const p = flat(az).multiplyScalar(shape.outline(az, 0) - r0).setY(-0.4 * r0);
+    const steps = 3;
+    for (let i = 0; i < steps; i++) {
+      const ra = THREE.MathUtils.lerp(r0, 0.4 * r0, i / steps);
+      const rb = THREE.MathUtils.lerp(r0, 0.4 * r0, (i + 1) / steps);
+      az += rand(-0.25, 0.25);
+      const q = p.clone().add(flat(az).multiplyScalar(reach / steps));
+      q.y = -rb * (i + 1 === steps ? 1.2 : rand(0.3, 0.6)); // в конце корень уходит под землю
+      const dir = q.clone().sub(p);
+      const len = dir.length();
+      const limb = barkMesh(new THREE.CylinderGeometry(rb, ra, len, 10, 1), Math.PI * (ra + rb), len);
+      limb.position.copy(p).addScaledVector(dir, 0.5);
+      limb.quaternion.setFromUnitVectors(UP, dir.normalize());
+      const knot = barkMesh(new THREE.SphereGeometry(rb, 10, 6), 2 * Math.PI * rb, Math.PI * rb);
+      knot.position.copy(q);
+      roots.add(limb, knot);
+      p.copy(q);
+    }
+  }
+  return roots;
+}
