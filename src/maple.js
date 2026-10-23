@@ -22,11 +22,12 @@ function barkMesh(geometry, around, along) {
 // leanAz — куда клонится ствол (азимут), r — радиус ствола внизу, length — высота от низа до вершины.
 // base — сечение низа ствола (радиус по азимуту, см. trunkShape): ствол начинается с него и к первому изгибу круглеет.
 // start — направление, в котором ствол выходит снизу.
-// Возвращает модель, центр тяжести (в её координатах) и массу.
+// Возвращает модель, центр тяжести (в её координатах), массу и момент инерции вокруг вертикали через низ ствола
+// (каждый кусок — точка в своём центре тяжести): так тяжело крону раскрутить.
 export function growMaple(length, r, leanAz, base, start) {
   const tree = new THREE.Group();
   const com = new THREE.Vector3();
-  let mass = 0;
+  let mass = 0, spin = 0;
 
   // Кусок ветви — сужающийся цилиндр от a до b, в месте излома — шар, чтобы не было щели.
   // shape — сечение у начала куска (радиус по азимуту), к концу кусок круглеет.
@@ -51,8 +52,10 @@ export function growMaple(length, r, leanAz, base, start) {
     // Усечённый конус: объём и центр, сдвинутый к толстому концу.
     const m = DENSITY * (Math.PI / 3) * len * (r0 * r0 + r0 * r1 + r1 * r1);
     const t = (r0 * r0 + 2 * r0 * r1 + 3 * r1 * r1) / (4 * (r0 * r0 + r0 * r1 + r1 * r1));
-    com.addScaledVector(a.clone().lerp(b, t), m);
+    const at = a.clone().lerp(b, t);
+    com.addScaledVector(at, m);
     mass += m;
+    spin += m * (at.x * at.x + at.z * at.z);
   }
 
   // Листва — шапка на конце ветви. Веса почти не даёт, в счёт не идёт.
@@ -108,5 +111,5 @@ export function growMaple(length, r, leanAz, base, start) {
 
   // Почти у половины деревьев ствол раздваивается.
   grow(new THREE.Vector3(), start, r, r * 0.25, length, 0, Math.random() < 0.45 ? 1 + Math.floor(Math.random() * 3) : -1, base);
-  return { tree, com: com.divideScalar(mass), mass };
+  return { tree, com: com.divideScalar(mass), mass, spin };
 }

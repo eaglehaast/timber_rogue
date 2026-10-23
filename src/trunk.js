@@ -51,7 +51,9 @@ export function trunkShape(radius, height, leanAz) {
     radius, leanAz, profile, scale, center,
     // Направление оси ствола на высоте y.
     axis: (y) => lean.clone().multiplyScalar(slope + bow * y).setY(1).normalize(),
+    // Под землёй ствола нет: там наплывы раздувались бы без конца.
     contains(x, y, z) {
+      if (y < 0) return false;
       const dx = x - lean.x * off(y), dz = z - lean.z * off(y);
       return Math.hypot(dx, dz) <= scale(y) * profile(Math.atan2(dz, dx));
     },
