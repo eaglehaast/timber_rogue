@@ -95,14 +95,33 @@ export class TrunkVoxels {
 
     this.group = new THREE.Group();
     this.group.position.y = floor * VOXEL;
+    // Стоящий ствол (standing) клонится над пропилом: что выше пропила, рисуется в lift,
+    // и его поворачивают вместе с верхом. Кусок, где проходит пропил, делится на две сетки.
+    this.standing = false;
+    this.lift = new THREE.Group();
+    this.lift.position.y = floor * VOXEL;
+    this.band = '';
     this.chunks = [];
+    const mesh = () => {
+      const m = new THREE.Mesh(new THREE.BufferGeometry(), [barkMaterial, woodMaterial]);
+      m.castShadow = m.receiveShadow = true;
+      return m;
+    };
     for (let c = 0; c * CHUNK < this.ny; c++) {
-      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), [barkMaterial, woodMaterial]);
-      mesh.castShadow = mesh.receiveShadow = true;
-      this.group.add(mesh);
-      this.chunks.push({ mesh, dirty: true });
+      const chunk = { mesh: mesh(), top: mesh(), dirty: true, state: 'still' };
+      this.group.add(chunk.mesh);
+      this.lift.add(chunk.top);
+      this.chunks.push(chunk);
     }
   }
+
+  // Кубик над пропилом — часть верха: в перерезанной колонке выше выреза, в целой — от высоты tear.
+  above(j, col, tear) {
+    return this.gap[col] ? j > this.gapHigh[col] : j >= tear;
+  }
+
+  // Слой, где ломается недопил стоящего ствола: середина полосы, где прошла пила.
+  get middle() { return Math.round((this.cutLow + this.cutHigh) / 2); }
 
   // Кубик внутри формы ствола: древесина, пока её не выпилили.
   wood(i, j, k) { return this.shape.contains(this.x(i), (this.floor + j + 0.5) * VOXEL, this.z(k)); }
@@ -243,6 +262,7 @@ export class TrunkVoxels {
   splitTop(h, tongue = new Set(), split = 0) {
     const { n, data, gap, gapLow, gapHigh } = this;
     const layer = n * n;
+    this.standing = false;
     const tear = Math.round(h / VOXEL);
     const tongueTear = Math.max(0, Math.round((h - split) / VOXEL));
     const top = new Uint8Array(data.length);
@@ -256,7 +276,7 @@ export class TrunkVoxels {
       if (!data[id]) continue;
       const j = Math.floor(id / layer);
       const col = id - j * layer;
-      if (gap[col] ? j > gapHigh[col] : j >= (tongue.has(col) ? tongueTear : tear)) {
+      if (this.above(j, col, tongue.has(col) ? tongueTear : tear)) {
         top[id] = 1;
         stack.push(id);
       }
@@ -342,12 +362,26 @@ export class TrunkVoxels {
     return { volume: count * VOXEL ** 3, center: center.divideScalar(count) };
   }
 
+  // Кусок целиком над полосой пропилов клонится весь, целиком под ней — стоит, а через который
+  // она проходит, делится на две сетки и перестраивается, когда полоса меняется.
   remesh() {
+    const cut = this.standing && this.cutHigh >= 0;
+    const band = cut ? `${this.cutLow} ${this.cutHigh}` : '';
+    const moved = band !== this.band;
+    this.band = band;
     this.chunks.forEach((chunk, c) => {
+      const state = !cut || (c + 1) * CHUNK <= this.cutLow ? 'still' : c * CHUNK > this.cutHigh ? 'lifted' : 'split';
+      if (state === 'split' && moved) chunk.dirty = true;
+      if ((state === 'split') !== (chunk.state === 'split')) chunk.dirty = true;
+      chunk.state = state;
+      (state === 'lifted' ? this.lift : this.group).add(chunk.mesh);
       if (!chunk.dirty) return;
       chunk.dirty = false;
       chunk.mesh.geometry.dispose();
-      chunk.mesh.geometry = this.buildChunk(c * CHUNK, Math.min((c + 1) * CHUNK, this.ny));
+      chunk.top.geometry.dispose();
+      const [still, top] = this.buildChunk(c * CHUNK, Math.min((c + 1) * CHUNK, this.ny), state === 'split');
+      chunk.mesh.geometry = still;
+      chunk.top.geometry = top;
     });
   }
 
@@ -356,15 +390,18 @@ export class TrunkVoxels {
   // Текстура коры натянута на цилиндр вокруг оси ствола: u — вдоль окружности, v — по высоте от земли, обе в метрах.
   // Кора и свежий срез — две группы граней со своими материалами.
   // Кусок перестраивается каждый кадр пиления, поэтому пишем в заранее выделенные массивы, без push.
-  buildChunk(j0, j1) {
+  // split — разделить грани на две сетки: под пропилом и над ним (above).
+  buildChunk(j0, j1, split) {
     const { n, ny, data, x0, z0 } = this;
     const out = scratch;
+    const tear = this.middle;
     out.faces = 0;
     for (let j = j0; j < j1; j++) {
       const axis = this.shape.center((this.floor + j + 0.5) * VOXEL);
       for (let k = 0; k < n; k++) {
         for (let i = 0; i < n; i++) {
           if (!data[(j * n + k) * n + i]) continue;
+          const lifted = split && this.above(j, k * n + i, tear);
           for (let f = 0; f < 6; f++) {
             const { dir, corners } = FACES[f];
             const ii = i + dir[0], jj = j + dir[1], kk = k + dir[2];
@@ -379,6 +416,7 @@ export class TrunkVoxels {
             }
             out.reserve();
             out.bark[out.faces] = bark ? 1 : 0;
+            out.lift[out.faces] = lifted ? 1 : 0;
             let v = out.faces * 12, t = out.faces * 8;
             for (let c = 0; c < 4; c++, v += 3, t += 2) {
               const corner = corners[c];
@@ -398,25 +436,33 @@ export class TrunkVoxels {
       }
     }
     const verts = out.faces * 12;
-    const index = new Uint32Array(out.faces * 6);
-    let at = 0, barkFaces = 0;
-    for (const pass of [1, 0]) {
-      for (let f = 0; f < out.faces; f++) {
-        if (out.bark[f] !== pass) continue;
-        const v = f * 4;
-        index.set([v, v + 1, v + 2, v, v + 2, v + 3], at);
-        at += 6;
-        barkFaces += pass;
+    const position = new THREE.BufferAttribute(out.pos.slice(0, verts), 3);
+    const normal = new THREE.BufferAttribute(out.nor.slice(0, verts), 3);
+    const uv = new THREE.BufferAttribute(out.uv.slice(0, out.faces * 8), 2);
+    // Две сетки на одних вершинах: в каждой свои грани, сначала кора, потом срез.
+    let lifted = 0;
+    for (let f = 0; f < out.faces; f++) lifted += out.lift[f];
+    return [0, 1].map((lift) => {
+      const index = new Uint32Array((lift ? lifted : out.faces - lifted) * 6);
+      let at = 0, barkFaces = 0;
+      for (const pass of [1, 0]) {
+        for (let f = 0; f < out.faces; f++) {
+          if (out.bark[f] !== pass || out.lift[f] !== lift) continue;
+          const v = f * 4;
+          index.set([v, v + 1, v + 2, v, v + 2, v + 3], at);
+          at += 6;
+          barkFaces += pass;
+        }
       }
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(out.pos.slice(0, verts), 3));
-    geometry.setAttribute('normal', new THREE.BufferAttribute(out.nor.slice(0, verts), 3));
-    geometry.setAttribute('uv', new THREE.BufferAttribute(out.uv.slice(0, out.faces * 8), 2));
-    geometry.setIndex(new THREE.BufferAttribute(index, 1));
-    geometry.addGroup(0, barkFaces * 6, 0);
-    geometry.addGroup(barkFaces * 6, (out.faces - barkFaces) * 6, 1);
-    return geometry;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', position);
+      geometry.setAttribute('normal', normal);
+      geometry.setAttribute('uv', uv);
+      geometry.setIndex(new THREE.BufferAttribute(index, 1));
+      geometry.addGroup(0, barkFaces * 6, 0);
+      geometry.addGroup(barkFaces * 6, index.length - barkFaces * 6, 1);
+      return geometry;
+    });
   }
 }
 
@@ -427,9 +473,10 @@ const scratch = {
   nor: new Float32Array(12 * 8192),
   uv: new Float32Array(8 * 8192),
   bark: new Uint8Array(8192),
+  lift: new Uint8Array(8192),
   reserve() {
     if ((this.faces + 1) * 12 <= this.pos.length) return;
-    for (const key of ['pos', 'nor', 'uv', 'bark']) {
+    for (const key of ['pos', 'nor', 'uv', 'bark', 'lift']) {
       const grown = new this[key].constructor(this[key].length * 2);
       grown.set(this[key]);
       this[key] = grown;

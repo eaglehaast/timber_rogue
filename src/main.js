@@ -202,6 +202,8 @@ function newRound() {
   upper.add(tree.bend);
 
   const root = new THREE.Group();
+  voxels.standing = true;
+  upper.add(voxels.lift);
   root.add(voxels.group, upper);
   scene.add(root);
   const yard = makeYard(azimuthOf(tree.com), REACH_SIDE, TREE_H);
@@ -393,8 +395,8 @@ function stand(dt) {
   const { sec } = round;
   if (sec) round.tilt = deflection(sec, round.com.clone().add(round.sway), round.weight, round.com.y, round.split);
 
-  // Крона качается вокруг сгиба: смещение веса делим на высоту над сгибом. Наклон недопила
-  // рисуем там же — на глаз разницы с поворотом у пропила при таких углах нет.
+  // Крона качается вокруг сгиба: смещение веса делим на высоту над сгибом. А весь верх над
+  // пропилом клонится вокруг центра недопила — так щель видно смыкающейся там, где она сомкнулась.
   // Наклон больше SHOWN_TILT бывает, только когда недопил потерял устойчивость: дерево в этом
   // же кадре начинает падать, и дальше его поворачивает падение.
   const up = new THREE.Vector3(0, 1, 0);
@@ -404,8 +406,11 @@ function stand(dt) {
   const tilt = new THREE.Quaternion().setFromAxisAngle(
     up.clone().cross(round.tilt).normalize(), Math.min(round.tilt.length(), SHOWN_TILT),
   );
-  round.bend.quaternion.copy(tilt).multiply(sway);
+  round.bend.quaternion.copy(sway);
   if (!sec) return;
+  const hinge = new THREE.Vector3(sec.x0, (round.voxels.middle + 0.5) * VOXEL, sec.z0);
+  round.upper.quaternion.copy(tilt);
+  round.upper.position.copy(hinge).sub(hinge.clone().applyQuaternion(tilt));
 
   const c = centerOfMass();
   if (g > 0.8) say('gust', 'Порыв ветра качнул крону');
