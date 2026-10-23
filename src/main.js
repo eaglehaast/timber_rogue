@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { TrunkVoxels, trunkShape, VOXEL } from './trunk.js';
 import {
-  section, tipping, closing, pivotHeight, tearAngle, slope, deflection, kerfWidth, FRICTION,
+  section, tipping, closing, pivotHeight, tearAngle, slope, deflection, kerfWidth, splitLength, pulledFibres, FRICTION,
 } from './physics.js';
 import { makeYard, buildYard, struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
@@ -18,6 +18,7 @@ const SAW_SPEED = 0.2;    // метров глубины в секунду
 const SEATING = 0.04;     // ствол прошёл такую долю пути до того, как сесть на пропил, — шину вот-вот закусит
 const PINCH = 3;          // мм: уже этого — закусило, цепь встала
 const SAWS = 2;           // пил на дерево: зажатую бросаешь в стволе и берёшь запасную
+const SPLIT_MIN = 0.02;   // м: отщеп короче этого — волосяная трещина, её не видно и она ничего не меняет
 const OPEN = 14;          // мм: шире — щель раскрывается
 const LEAN = THREE.MathUtils.degToRad(0.4); // настолько наклонился ствол — это уже заметно
 // Больше этого ствол стоя не наклоняется: недопил теряет устойчивость, и дальше его ведёт падение.
@@ -213,6 +214,7 @@ function newRound() {
     wind: { dir: dirOf(Math.random() * Math.PI * 2), max: 0.05 + Math.random() * 0.2, phase: Math.random() * 9 },
     time: 0, sway: new THREE.Vector3(), tilt: new THREE.Vector3(), gap: null,
     sec: null, secVersion: -1,
+    split: 0, tongue: new Set(), // на сколько недопил отщепился вниз и какие его колонки
     cuts: [], debris: [], saws: SAWS,
     top: false, slide: null, fall: null, done: false,
     said: {},
@@ -368,7 +370,7 @@ function stand(dt) {
     round.secVersion = round.voxels.version;
   }
   const { sec } = round;
-  if (sec) round.tilt = deflection(sec, round.com.clone().add(round.sway), round.weight, round.com.y);
+  if (sec) round.tilt = deflection(sec, round.com.clone().add(round.sway), round.weight, round.com.y, round.split);
 
   // Крона качается вокруг сгиба: смещение веса делим на высоту над сгибом. Наклон недопила
   // рисуем там же — на глаз разницы с поворотом у пропила при таких углах нет.
@@ -396,6 +398,8 @@ function stand(dt) {
   }
   const tip = tipping(sec, c, round.weight);
   if (tip.net > 0) return startFall(tip, c);
+
+  splitHinge(sec, tip, Math.min(1, tip.ratio));
 
   if (!sec.intact.length) say('free', 'Ствол перерезан насквозь, но стоит: вес пока над пнём');
   else if (tip.ratio > 0.7) {
@@ -441,6 +445,19 @@ function stand(dt) {
   }
 }
 
+// Дерево висит на недопиле: тот тянет пень вверх с долей load от своей прочности и отщепляется
+// от кромки пропила вниз (splitLength). Трещина не зарастает: отщеп только растёт.
+function splitHinge(sec, tip, load) {
+  const split = splitLength(sec, tip, load);
+  if (split < SPLIT_MIN || split < round.split + VOXEL) return;
+  round.split = split;
+  round.tongue = new Set(pulledFibres(sec, tip).map((f) => f.col));
+  round.voxels.splinter(round.tongue, split);
+  round.voxels.remesh();
+  crack(0.5);
+  say('split', 'Треск вдоль ствола — недопил отщепляется от пня');
+}
+
 // Верх перерезан по косой круче, чем держит трение, — он съезжает по срезу.
 function startSlide(s) {
   round.upper.add(round.voxels.splitTop(0).group);
@@ -472,7 +489,9 @@ function startFall(tip, c, slip = 0) {
   const { sec } = round;
   const hinge = sec.intact.length > 0;
   const h = pivotHeight(sec, tip.u, tip.p);
-  if (!round.top) round.upper.add(round.voxels.splitTop(h).group);
+  // Падая, дерево тянет недопил, пока тот не порвётся, то есть до полной прочности.
+  if (hinge) splitHinge(sec, tip, 1);
+  if (!round.top) round.upper.add(round.voxels.splitTop(h, round.tongue, round.split).group);
   round.top = true;
   const pivot = new THREE.Group();
   pivot.position.copy(tip.u).multiplyScalar(tip.p).setY(h);
@@ -485,7 +504,7 @@ function startFall(tip, c, slip = 0) {
     angle: 0, speed: 0, hinge,
     a, b: round.com.y + round.upper.position.y - h, // съехавший верх опустился
     hold: tip.hold,
-    tear: hinge ? tearAngle(sec, tip.u) : 0,
+    tear: hinge ? tearAngle(sec, tip.u, round.split) : 0,
     shut: hinge ? closing(sec, tip.u, tip.p) : Infinity,
     edge: Math.max(...sec.all.map((f) => f.x * tip.u.x + f.z * tip.u.z)),
     lateral: c.clone().setY(0).addScaledVector(tip.u, -c.dot(tip.u)),

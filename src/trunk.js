@@ -237,12 +237,14 @@ export class TrunkVoxels {
   }
 
   // Отделяет верхушку, которая падает; здесь остаётся пень. Перерезанная колонка делится по выпилу:
-  // что выше него — верх. Целые колонки недопила рвутся на высоте h. Кусок между двумя пропилами
-  // в одной колонке уходит с верхом, если держится за него сбоку, иначе остаётся на пне.
-  splitTop(h) {
+  // что выше него — верх. Целые колонки недопила рвутся на высоте h, а отщепившиеся (tongue —
+  // их номера) — ниже на длину отщепа split: полоса уходит с верхом, в пне остаётся жёлоб.
+  // Кусок между двумя пропилами в одной колонке уходит с верхом, если держится за него сбоку, иначе остаётся на пне.
+  splitTop(h, tongue = new Set(), split = 0) {
     const { n, data, gap, gapLow, gapHigh } = this;
     const layer = n * n;
     const tear = Math.round(h / VOXEL);
+    const tongueTear = Math.max(0, Math.round((h - split) / VOXEL));
     const top = new Uint8Array(data.length);
     const between = (id) => {
       const j = Math.floor(id / layer);
@@ -254,7 +256,7 @@ export class TrunkVoxels {
       if (!data[id]) continue;
       const j = Math.floor(id / layer);
       const col = id - j * layer;
-      if (gap[col] ? j > gapHigh[col] : j >= tear) {
+      if (gap[col] ? j > gapHigh[col] : j >= (tongue.has(col) ? tongueTear : tear)) {
         top[id] = 1;
         stack.push(id);
       }
@@ -270,6 +272,28 @@ export class TrunkVoxels {
     const ids = [];
     for (let id = 0; id < data.length; id++) if (top[id]) ids.push(id);
     return this.detach(ids);
+  }
+
+  // Трещина отщепа: вдоль кромки пропила, в перерезанных колонках рядом с отщепляющимися (tongue),
+  // древесина под пропилом расходится вниз на split. Это раскол, а не пропил: волокна колонок
+  // уже перерезаны, считать их заново не нужно.
+  splinter(tongue, split) {
+    const { n, data, gap, gapLow } = this;
+    const depth = Math.round(split / VOXEL);
+    for (const col of tongue) {
+      const i = col % n, k = (col - i) / n;
+      for (const [di, dk] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ii = i + di, kk = k + dk;
+        if (ii < 0 || kk < 0 || ii >= n || kk >= n) continue;
+        const nb = kk * n + ii;
+        if (!gap[nb]) continue;
+        for (let j = Math.max(0, gapLow[nb] - depth); j < gapLow[nb]; j++) {
+          if (!data[j * n * n + nb]) continue;
+          data[j * n * n + nb] = 0;
+          this.chunks[Math.floor(j / CHUNK)].dirty = true;
+        }
+      }
+    }
   }
 
   // Переносит перечисленные кубики в новую сетку высотой ровно в их слои — отдельное тело.
