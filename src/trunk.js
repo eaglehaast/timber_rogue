@@ -12,7 +12,9 @@ const CHUNK = 10; // слоёв в одном куске сетки; при пи
 // У каждого дерева своя полоса и своя сердцевина.
 // Грани вдоль ствола (стенки отщепа и раскола) колец не видят — там волокна, своя картинка в мировом масштабе,
 // квадрат SPLIT_TILE метров, волокна вертикально. Торец и стенка смешиваются по нормали: крутая грань — волокна.
+// У самой коры и на стенке остаётся край полосы колец — желтоватая кромка камбия толщиной RIM радиуса.
 const SPLIT_TILE = 0.25;
+const RIM = 0.05;
 const PITH = 0.5; // сторона квадрата сердцевины — доля радиуса ствола
 const loader = new THREE.TextureLoader();
 const load = (file) => {
@@ -60,7 +62,8 @@ woodMaterial.onBeforeCompile = (shader) => {
     .replace('#include <map_fragment>', `#include <map_fragment>
       vec4 pithColor = texture2D(pithMap, vPith);
       diffuseColor.rgb = mix(diffuseColor.rgb, pithColor.rgb, pithColor.a);
-      diffuseColor.rgb = mix(texture2D(splitMap, vGrain + splitShift).rgb, diffuseColor.rgb, vEnd);`);
+      float ringsWeight = max(vEnd, 1.0 - smoothstep(${(RIM * 0.7).toFixed(3)}, ${(RIM * 1.3).toFixed(3)}, vMapUv.y));
+      diffuseColor.rgb = mix(texture2D(splitMap, vGrain + splitShift).rgb, diffuseColor.rgb, ringsWeight);`);
 };
 
 // Новое дерево — новый срез: какая полоса колец и какая сердцевина.
