@@ -7,6 +7,7 @@ import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
+import { watch, note, beat } from './watch.js';
 
 const TRUNK_R = 0.3;      // радиус ствола выше корневых наплывов
 const TREE_H = 12;
@@ -251,18 +252,25 @@ function planeY({ origin, normal }, f) {
 }
 
 // Сколько пройти по линии at(t), пока не войдёшь в ствол, и сколько — пока не выйдешь из него.
-// Ствол не цилиндр, поэтому идём шажками. Не дошли до ствола за limit — null, дальше limit не смотрим.
+// Ствол не цилиндр, поэтому идём шагами в кубик, а где перешагнули кору — делим шаг пополам до 1 мм.
+// Не дошли до ствола за limit — null, дальше limit не смотрим.
 function throughTrunk(at, limit) {
-  const step = VOXEL / 4;
   const inside = (t) => {
     const p = at(t);
     return round.voxels.shape.contains(p.x, p.y, p.z);
   };
-  let t = 0;
-  while (!inside(t)) if ((t += step) > limit) return null;
-  const enter = t;
-  while (inside(t) && t < limit) t += step;
-  return { enter, exit: t };
+  const cross = (t, into) => {
+    while (inside(t) !== into) if ((t += VOXEL) > limit + VOXEL) return Infinity;
+    let lo = Math.max(0, t - VOXEL);
+    while (t - lo > VOXEL / 10) {
+      const mid = (lo + t) / 2;
+      if (inside(mid) === into) t = mid;
+      else lo = mid;
+    }
+    return t;
+  };
+  const enter = cross(0, true);
+  return enter <= limit ? { enter, exit: Math.min(cross(enter, false), limit) } : null;
 }
 
 // То же для всей кромки шины: она прямая, а ствол круглый и не по центру, поэтому в кору первой
@@ -610,7 +618,7 @@ function startFall(tip, c, slip = 0, speed = 0) {
   const a = c.dot(tip.u) - tip.p;
   const given = Math.max(0, round.give.tilt.dot(tip.u));
   round.fall = {
-    pivot, u: tip.u, p: tip.p, axis: UP.clone().cross(tip.u),
+    pivot, u: tip.u.clone(), p: tip.p, axis: UP.clone().cross(tip.u),
     angle: 0, speed, hinge,
     a, b: round.com.y + round.upper.position.y - h, // съехавший верх опустился
     hold: tip.hold,
@@ -621,11 +629,27 @@ function startFall(tip, c, slip = 0, speed = 0) {
     lateral: c.clone().setY(0).addScaledVector(tip.u, -c.dot(tip.u)),
     len: TREE_H - h,
     slip: Math.max(0, slip),
+    knots: [],
   };
+  round.bend.traverse((o) => { if (o.name === 'trunk') round.fall.knots.push(o); });
   mode = 'free';
   saw = null;
   crack(1);
   say('go', hinge ? 'Хруст! Пропил за недопилом раскрылся — дерево пошло' : 'Дерево пошло!');
+}
+
+// Повернуть падающий верх вокруг оси падения ещё на angle.
+function tip(f, angle) {
+  f.angle += angle;
+  f.pivot.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(f.axis, angle));
+}
+
+// Дерево легло, когда стволом коснулось земли (узлы ствола — шары на его изломах); ветви под ним ломаются.
+// Не по углу: клён кривой, и клонившийся туда же, куда падает, ложится раньше, чем повернётся на 90°.
+function grounded(f) {
+  round.upper.updateWorldMatrix(true, true);
+  const at = new THREE.Vector3();
+  return f.knots.some((k) => k.getWorldPosition(at).y <= k.geometry.parameters.radius);
 }
 
 // Недопила больше нет: дерево уже никто не держит в плоскости, и вбок его уводит
@@ -652,14 +676,17 @@ function fallTop(dt) {
   const hold = f.hinge ? f.hold * Math.max(0, 1 - f.angle / f.tear) : 0;
   const inertia = (4 / 3) * round.mass * (f.a ** 2 + f.b ** 2);
   f.speed += ((round.weight * lever - hold) / inertia) * dt;
-  const step = Math.min(f.speed * dt, Math.PI / 2 - f.angle);
-  f.angle += step;
-  f.pivot.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(f.axis, step));
+  const step = f.speed * dt;
+  tip(f, step);
   // Провернувшийся верх крутится вокруг вертикали, а площадки разгоняют его, пока он на них сидит:
-  // пока дальний край не поднялся над ними на ширину пропила.
+  // пока дальний край не поднялся над ними на ширину пропила. Куда он валится, поворачивается вместе с ним.
   if (f.spin) {
     if (f.angle * round.voxels.radius < VOXEL) f.spin.speed += f.spin.push * dt;
-    f.pivot.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(UP, f.spin.speed * dt));
+    const spin = new THREE.Quaternion().setFromAxisAngle(UP, f.spin.speed * dt);
+    f.pivot.quaternion.premultiply(spin);
+    f.u.applyQuaternion(spin);
+    f.axis.applyQuaternion(spin);
+    f.lateral.applyQuaternion(spin);
   }
 
   if (f.hinge && f.angle >= f.shut) {
@@ -680,7 +707,18 @@ function fallTop(dt) {
     say('tear', 'Недопил оторвался — дальше дерево летит само');
     release(f);
   }
-  if (f.angle >= Math.PI / 2) land();
+  if (grounded(f)) {
+    // За кадр вершина проходит до метра: возвращаем поворот назад, делением шага пополам, до касания.
+    let lo = f.angle - step, hi = f.angle;
+    for (let i = 0; i < 8; i++) {
+      const mid = (lo + hi) / 2;
+      tip(f, mid - f.angle);
+      if (grounded(f)) hi = mid;
+      else lo = mid;
+    }
+    tip(f, hi - f.angle);
+    land();
+  }
 }
 
 // Отпиленный кусок отваливается от ствола наружу, кувыркаясь, и ложится на землю.
@@ -784,6 +822,7 @@ function update(dt) {
     round.voxels.breakLoose().forEach(dropPiece);
     round.voxels.remesh();
   }
+  if (saw?.loose) rest(saw);
   if (!round.top) stand(dt);
   else if (round.slide) slideTop(dt);
 
@@ -880,12 +919,14 @@ function steer(axis, angle) {
     saw.q.copy(q);
     if (mode === 'cut') round.voxels.carve(basis(saw), -VOXEL, 0, BAR_L);
   }
-  if (!saw.depth) rest(saw);
+  // Мышь шлёт сотни событий в секунду, а кромку на кору кладём раз за кадр (rest в update).
+  if (!saw.depth) saw.loose = true;
 }
 
 // Пила ещё не в древесине: повёрнутая кромка не может войти в ствол сама и не висит в воздухе,
 // а ложится на кору — туда, где первой её коснётся, если подвести её по ходу пилы.
 function rest(cut) {
+  cut.loose = false;
   const { along, side } = basis(cut);
   const from = cut.edge.clone().addScaledVector(along, -REACH);
   const hit = acrossBar(from, along, side, 2 * REACH);
@@ -942,6 +983,7 @@ function lockPointer() {
 
 addEventListener('resize', resize);
 addEventListener('keydown', (e) => {
+  if (!e.repeat) note(e.code);
   keys.add(e.code);
   if (e.code === 'KeyR') newRound();
   if (e.code === 'Minus' || e.code === 'Equal') {
@@ -970,6 +1012,7 @@ startEl.addEventListener('click', () => {
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('mousedown', (e) => {
+  note(`mouse${e.button} ${mode}`);
   if (e.button === 2) setInspecting(true);
   if (e.button !== 0) return;
   if (document.pointerLockElement !== canvas) lockPointer();
@@ -984,6 +1027,7 @@ canvas.addEventListener('mousedown', (e) => {
   }
 });
 addEventListener('mouseup', (e) => {
+  note(`up${e.button} ${mode}`);
   if (e.button === 0 && mode === 'cut') mode = 'aim';
   if (e.button === 2) setInspecting(false);
 });
@@ -1021,7 +1065,21 @@ document.addEventListener('mousemove', (e) => {
 resize();
 newRound();
 const clock = new THREE.Clock();
-renderer.setAnimationLoop(() => {
+// Что записать в бортовой журнал сторожа зависаний (watch.js): режим, игрок, пила, дерево и все пропилы.
+const r3 = (a) => a.map((v) => +v.toFixed(3));
+watch(() => ({
+  mode,
+  player: r3([player.pos.x, player.pos.z, player.yaw, player.pitch, player.eye]),
+  saw: saw && { edge: r3(saw.edge.toArray()), q: r3(saw.q.toArray()), depth: +saw.depth.toFixed(3), pinched: !!saw.pinched },
+  tree: {
+    time: +round.time.toFixed(2), mass: Math.round(round.mass), com: r3(round.com.toArray()),
+    top: round.top, slide: !!round.slide, fall: round.fall && r3([round.fall.angle, round.fall.speed]),
+    cuts: round.cuts.map((c) => ({ origin: r3(c.origin.toArray()), q: r3(c.q.toArray()), depth: +c.depth.toFixed(3) })),
+  },
+}));
+
+renderer.setAnimationLoop((now) => {
+  if (startEl.hidden) beat(now);
   update(Math.min(clock.getDelta(), 0.05));
   renderer.setViewport(0, 0, innerWidth, innerHeight);
   renderer.render(scene, camera);

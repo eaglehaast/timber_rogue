@@ -31,7 +31,8 @@ export function growMaple(length, r, leanAz, base, start) {
 
   // Кусок ветви — сужающийся цилиндр от a до b, в месте излома — шар, чтобы не было щели.
   // shape — сечение у начала куска (радиус по азимуту), к концу кусок круглеет.
-  function piece(a, b, r0, r1, shape) {
+  // Узлы ствола помечены: по ним падающее дерево ложится на землю.
+  function piece(a, b, r0, r1, shape, trunk) {
     const dir = b.clone().sub(a);
     const len = dir.length();
     const geometry = new THREE.CylinderGeometry(r1, r0, len, shape ? 48 : 10, shape ? 4 : 1);
@@ -48,6 +49,7 @@ export function growMaple(length, r, leanAz, base, start) {
     limb.quaternion.setFromUnitVectors(UP, dir.normalize());
     const knot = barkMesh(new THREE.SphereGeometry(r1, 10, 6), 2 * Math.PI * r1, Math.PI * r1);
     knot.position.copy(b);
+    if (trunk) knot.name = 'trunk';
     tree.add(limb, knot);
     // Усечённый конус: объём и центр, сдвинутый к толстому концу.
     const m = DENSITY * (Math.PI / 3) * len * (r0 * r0 + r0 * r1 + r1 * r1);
@@ -84,7 +86,7 @@ export function growMaple(length, r, leanAz, base, start) {
       d.add(new THREE.Vector3(rand(-1, 1), rand(-0.5, 0.5), rand(-1, 1)).multiplyScalar(wiggle))
         .addScaledVector(UP, rise).addScaledVector(flat(leanAz), sweep * (1 - i / steps)).normalize();
       const q = p.clone().addScaledVector(d, len / steps);
-      piece(p, q, ra, rb, i === 0 ? shape : null);
+      piece(p, q, ra, rb, i === 0 ? shape : null, level === 0);
       p.copy(q);
       if (i === split) {
         // Сдвоенный ствол: второй лидер уходит в сторону и дальше растёт сам, первый становится тоньше.
