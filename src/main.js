@@ -251,18 +251,25 @@ function planeY({ origin, normal }, f) {
 }
 
 // Сколько пройти по линии at(t), пока не войдёшь в ствол, и сколько — пока не выйдешь из него.
-// Ствол не цилиндр, поэтому идём шажками. Не дошли до ствола за limit — null, дальше limit не смотрим.
+// Ствол не цилиндр, поэтому идём шагами в кубик, а где перешагнули кору — делим шаг пополам до 1 мм.
+// Не дошли до ствола за limit — null, дальше limit не смотрим.
 function throughTrunk(at, limit) {
-  const step = VOXEL / 4;
   const inside = (t) => {
     const p = at(t);
     return round.voxels.shape.contains(p.x, p.y, p.z);
   };
-  let t = 0;
-  while (!inside(t)) if ((t += step) > limit) return null;
-  const enter = t;
-  while (inside(t) && t < limit) t += step;
-  return { enter, exit: t };
+  const cross = (t, into) => {
+    while (inside(t) !== into) if ((t += VOXEL) > limit + VOXEL) return Infinity;
+    let lo = Math.max(0, t - VOXEL);
+    while (t - lo > VOXEL / 10) {
+      const mid = (lo + t) / 2;
+      if (inside(mid) === into) t = mid;
+      else lo = mid;
+    }
+    return t;
+  };
+  const enter = cross(0, true);
+  return enter <= limit ? { enter, exit: Math.min(cross(enter, false), limit) } : null;
 }
 
 // То же для всей кромки шины: она прямая, а ствол круглый и не по центру, поэтому в кору первой
@@ -784,6 +791,7 @@ function update(dt) {
     round.voxels.breakLoose().forEach(dropPiece);
     round.voxels.remesh();
   }
+  if (saw?.loose) rest(saw);
   if (!round.top) stand(dt);
   else if (round.slide) slideTop(dt);
 
@@ -880,12 +888,14 @@ function steer(axis, angle) {
     saw.q.copy(q);
     if (mode === 'cut') round.voxels.carve(basis(saw), -VOXEL, 0, BAR_L);
   }
-  if (!saw.depth) rest(saw);
+  // Мышь шлёт сотни событий в секунду, а кромку на кору кладём раз за кадр (rest в update).
+  if (!saw.depth) saw.loose = true;
 }
 
 // Пила ещё не в древесине: повёрнутая кромка не может войти в ствол сама и не висит в воздухе,
 // а ложится на кору — туда, где первой её коснётся, если подвести её по ходу пилы.
 function rest(cut) {
+  cut.loose = false;
   const { along, side } = basis(cut);
   const from = cut.edge.clone().addScaledVector(along, -REACH);
   const hit = acrossBar(from, along, side, 2 * REACH);
