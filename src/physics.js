@@ -11,6 +11,7 @@ import { VOXEL } from './trunk.js';
 const THIN = 3;               // столько выпиленных кубиков в колонке — тонкий пропил, а не вырез (для косого среза)
 export const FRICTION = 0.3;  // трение спила о спил: круче atan(0.3) ≈ 17° верх соскальзывает
 const FIBRE = 3000;          // Н: держит колонка 1×1 см (≈30 МПа — прочность древесины вдоль волокон)
+const SHEAR = 7e6;            // Па: на скалывание вдоль волокон древесина держит в разы слабее
 const E = 1e10;               // Па: модуль упругости сырой древесины вдоль волокон
 const WEAK_H = 0.05;          // м: высота ослабленного участка у недопила — он и гнётся
 const SHUT = Math.tan(THREE.MathUtils.degToRad(8)); // щель, что смыкается раньше 8° наклона, — опора
@@ -29,7 +30,7 @@ export function section(voxels) {
       const gap = voxels.gap[col];
       if (!gap && !voxels.wood(i, at, k)) continue;
       const f = {
-        x: voxels.x(i), z: voxels.z(k), gap,
+        col, x: voxels.x(i), z: voxels.z(k), gap,
         mid: ((voxels.gapLow[col] + voxels.gapHigh[col] + 1) / 2) * VOXEL,
         normal: voxels.normals.subarray(col * 3, col * 3 + 3),
       };
@@ -89,7 +90,7 @@ function hinge(sec, u, weight) {
     b++;
   }
   const q = b * BIN - half;
-  return { q, hold: FIBRE * (aheadX - q * ahead + q * behind - behindX) };
+  return { q, pulled: behind, hold: FIBRE * (aheadX - q * ahead + q * behind - behindX) };
 }
 
 // Куда дерево опрокинется: побеждает сторона с наибольшим перевесом тянущего над держащим.
@@ -99,9 +100,9 @@ function hinge(sec, u, weight) {
 export function tipping(sec, c, weight) {
   const at = (az) => {
     const u = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
-    const { q, hold } = hinge(sec, u, weight);
+    const { q, pulled, hold } = hinge(sec, u, weight);
     const pull = weight * (along(c, u) - q);
-    return { az, u, p: q, hold, pull, net: pull - hold };
+    return { az, u, p: q, pulled, hold, pull, net: pull - hold };
   };
   let best = at(0);
   let ratio = 0;
@@ -137,14 +138,34 @@ export function pivotHeight(sec, u, p) {
   return from.reduce((s, f) => s + f.mid, 0) / from.length;
 }
 
+// Целые волокна недопила позади оси: они растянуты, на них дерево и висит.
+export const pulledFibres = (sec, tip) => sec.intact.filter((f) => along(f, tip.u) < tip.p);
+
+// Отщеп. Растянутые волокна недопила тянут с силой T, и в пень она уходит через вертикальную
+// плоскость вдоль кромки пропила шириной w. Скалывается древесина легко, поэтому плоскость
+// расходится вниз на длину T / (SHEAR·w) — пока площади хватит, чтобы передать силу.
+// load — какую долю своей прочности волокна сейчас держат.
+export function splitLength(sec, tip, load) {
+  let lo = Infinity, hi = -Infinity;
+  for (const f of pulledFibres(sec, tip)) {
+    const w = f.z * tip.u.x - f.x * tip.u.z;
+    lo = Math.min(lo, w);
+    hi = Math.max(hi, w);
+  }
+  if (hi < lo) return 0;
+  return (FIBRE * tip.pulled * load) / (SHEAR * (hi - lo + VOXEL));
+}
+
 // Недопил гнётся, пока дерево наклоняется, и рвётся тем позже, чем он толще: 3 см — на 15°, от 5° до 35°.
-export function tearAngle(sec, u) {
+// Отщепившийся на длину split недопил — длинная полоса: гнётся дальше во столько раз, во сколько длиннее, до 70°.
+export function tearAngle(sec, u, split = 0) {
   let lo = Infinity, hi = -Infinity;
   for (const f of sec.intact) {
     lo = Math.min(lo, along(f, u));
     hi = Math.max(hi, along(f, u));
   }
-  return THREE.MathUtils.degToRad(THREE.MathUtils.clamp((hi - lo + VOXEL) / 0.06, 0.33, 2.33) * 15);
+  const angle = THREE.MathUtils.clamp((hi - lo + VOXEL) / 0.06, 0.33, 2.33) * 15 * Math.max(1, split / WEAK_H);
+  return THREE.MathUtils.degToRad(Math.min(angle, 70));
 }
 
 // Наклон поверхности, на которой стоит перерезанный верх: средняя нормаль тонких пропилов.
@@ -162,15 +183,16 @@ export function slope(sec) {
 }
 
 // Упругий наклон ствола над недопилом — вектор вдоль земли: куда и на сколько радиан.
-// Недопил — пружина: жёсткость E·I/WEAK_H, где I — моменты инерции целых волокон. Гнёт её вес,
+// Недопил — пружина: жёсткость E·I/H, где I — моменты инерции целых волокон, H — высота, на которой
+// он гнётся: WEAK_H, а у отщепившегося на split — вся длина отщепа. Гнёт её вес,
 // смещённый от центра недопила, и чем сильнее ствол наклонился, тем дальше уходит вес:
 // (K − W·H)·θ = W·(c − центр), где H — высота центра тяжести. Если недопил так тонок,
 // что K < W·H, равновесия нет: ствол валится туда, куда его клонит.
 // Наклон останавливается, когда смыкается щель впереди — ствол садится на пропил.
-export function deflection(sec, c, weight, height) {
+export function deflection(sec, c, weight, height, split = 0) {
   const theta = new THREE.Vector3();
   if (!sec.intact.length) return theta;
-  const k = (E * VOXEL * VOXEL) / WEAK_H;
+  const k = (E * VOXEL * VOXEL) / Math.max(WEAK_H, split);
   const a = k * sec.ixx - weight * height;
   const b = k * sec.ixz;
   const d = k * sec.izz - weight * height;
