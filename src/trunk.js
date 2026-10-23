@@ -6,7 +6,12 @@ import { barkMaterial, BARK_TILE } from './bark.js';
 export const VOXEL = 0.01;
 const CHUNK = 10; // слоёв в одном куске сетки; при пилении перестраиваются только задетые куски
 
-const woodMaterial = new THREE.MeshLambertMaterial({ color: 0xe2bf86 });
+// Срез — полоса колец в полярных координатах: по ширине один оборот вокруг оси, сверху сердцевина, снизу кора.
+const endGrain = new THREE.TextureLoader().load('assets/textures/end-grain-1.jpg');
+endGrain.colorSpace = THREE.SRGBColorSpace;
+endGrain.wrapS = THREE.RepeatWrapping;
+endGrain.anisotropy = 8;
+const woodMaterial = new THREE.MeshLambertMaterial({ map: endGrain });
 
 // Углы грани кубика для каждого из шести направлений, по кругу снаружи.
 const FACES = [
@@ -115,6 +120,15 @@ export class TrunkVoxels {
     }
   }
 
+  // Кубик слоя j появился или пропал: перестроить его кусок сетки и соседний, если слой на краю, —
+  // грань между слоями рисует тот кусок, где лежит оставшийся кубик.
+  touch(j) {
+    const c = Math.floor(j / CHUNK), at = j - c * CHUNK;
+    for (const k of [at === 0 ? c - 1 : c, c, at === CHUNK - 1 ? c + 1 : c]) {
+      if (this.chunks[k]) this.chunks[k].dirty = true;
+    }
+  }
+
   // Кубик над пропилом — часть верха: в перерезанной колонке выше выреза, в целой — от высоты tear.
   above(j, col, tear) {
     return this.gap[col] ? j > this.gapHigh[col] : j >= tear;
@@ -196,7 +210,7 @@ export class TrunkVoxels {
           if (s < from || s > to || Math.abs(w) > barLength / 2) continue;
           this.data[id] = 0;
           this.cutFibre(id, normal);
-          this.chunks[Math.floor(j / CHUNK)].dirty = true;
+          this.touch(j);
           this.cutLow = Math.min(this.cutLow, j);
           this.cutHigh = Math.max(this.cutHigh, j);
           this.removed.push(id);
@@ -310,7 +324,7 @@ export class TrunkVoxels {
         for (let j = Math.max(0, gapLow[nb] - depth); j < gapLow[nb]; j++) {
           if (!data[j * n * n + nb]) continue;
           data[j * n * n + nb] = 0;
-          this.chunks[Math.floor(j / CHUNK)].dirty = true;
+          this.touch(j);
         }
       }
     }
@@ -332,9 +346,9 @@ export class TrunkVoxels {
     for (const id of ids) {
       const j = Math.floor(id / layer);
       part.data[id - jLow * layer] = 1;
-      part.chunks[Math.floor((j - jLow) / CHUNK)].dirty = true;
+      part.touch(j - jLow);
       this.data[id] = 0;
-      this.chunks[Math.floor(j / CHUNK)].dirty = true;
+      this.touch(j);
     }
     part.center = part.measure().center;
     part.low = part.floor * VOXEL;
@@ -398,6 +412,7 @@ export class TrunkVoxels {
     out.faces = 0;
     for (let j = j0; j < j1; j++) {
       const axis = this.shape.center((this.floor + j + 0.5) * VOXEL);
+      const size = this.shape.scale((this.floor + j + 0.5) * VOXEL);
       for (let k = 0; k < n; k++) {
         for (let i = 0; i < n; i++) {
           if (!data[(j * n + k) * n + i]) continue;
@@ -427,8 +442,15 @@ export class TrunkVoxels {
               out.nor[v] = nx; out.nor[v + 1] = nyy; out.nor[v + 2] = nz;
               const around = Math.atan2(pz - axis.z, px - axis.x);
               const turn = a + Math.atan2(Math.sin(around - a), Math.cos(around - a));
-              out.uv[t] = (turn * this.radius) / BARK_TILE;
-              out.uv[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / BARK_TILE;
+              if (bark) {
+                out.uv[t] = (turn * this.radius) / BARK_TILE;
+                out.uv[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / BARK_TILE;
+              } else {
+                // Древесина — в полярных координатах: u — доля оборота, v — от коры (0) к сердцевине (1).
+                // Радиус меряем долей профиля, поэтому годичные кольца повторяют форму ствола.
+                out.uv[t] = turn / (2 * Math.PI);
+                out.uv[t + 1] = 1 - Math.hypot(px - axis.x, pz - axis.z) / (size * this.shape.profile(around));
+              }
             }
             out.faces++;
           }
