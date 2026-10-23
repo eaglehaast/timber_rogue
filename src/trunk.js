@@ -10,6 +10,11 @@ const CHUNK = 10; // слоёв в одном куске сетки; при пи
 // Срез — полоса колец в полярных координатах: по ширине один оборот вокруг оси, сверху сердцевина, снизу кора.
 // Поверх в середине — сердцевина: плоская картинка с прозрачным краем, квадрат в полрадиуса ствола.
 // У каждого дерева своя полоса и своя сердцевина.
+// Грани вдоль ствола (стенки отщепа и раскола) колец не видят — там волокна, своя картинка в мировом масштабе,
+// квадрат SPLIT_TILE метров, волокна вертикально. Торец и стенка смешиваются по нормали: крутая грань — волокна.
+// У самой коры и на стенке остаётся край полосы колец — желтоватая кромка камбия толщиной RIM радиуса.
+const SPLIT_TILE = 0.25;
+const RIM = 0.05;
 const PITH = 0.5; // сторона квадрата сердцевины — доля радиуса ствола
 const loader = new THREE.TextureLoader();
 const load = (file) => {
@@ -24,24 +29,49 @@ const rings = [1, 2, 3, 4, 5].map((i) => {
   return texture;
 });
 const piths = [1, 2, 3, 4, 5].map((i) => load(`assets/textures/pith-${i}.png`));
+const splits = [1].map((i) => {
+  const texture = load(`assets/textures/split-${i}.jpg`);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  return texture;
+});
 const pithMap = { value: piths[0] };
+const splitMap = { value: splits[0] };
+const splitShift = { value: new THREE.Vector2() }; // откуда начинается узор волокон у этого дерева
 const woodMaterial = new THREE.MeshLambertMaterial({ map: rings[0] });
 woodMaterial.onBeforeCompile = (shader) => {
-  shader.uniforms.pithMap = pithMap;
+  Object.assign(shader.uniforms, { pithMap, splitMap, splitShift });
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', '#include <common>\nattribute vec2 pith;\nvarying vec2 vPith;')
-    .replace('#include <uv_vertex>', '#include <uv_vertex>\nvPith = pith;');
+    .replace('#include <common>', `#include <common>
+      attribute vec2 pith;
+      attribute vec2 grain;
+      varying vec2 vPith;
+      varying vec2 vGrain;
+      varying float vEnd;`)
+    .replace('#include <uv_vertex>', `#include <uv_vertex>
+      vPith = pith;
+      vGrain = grain;
+      vEnd = smoothstep(0.5, 0.8, abs(normal.y));`);
   shader.fragmentShader = shader.fragmentShader
-    .replace('#include <common>', '#include <common>\nuniform sampler2D pithMap;\nvarying vec2 vPith;')
+    .replace('#include <common>', `#include <common>
+      uniform sampler2D pithMap;
+      uniform sampler2D splitMap;
+      uniform vec2 splitShift;
+      varying vec2 vPith;
+      varying vec2 vGrain;
+      varying float vEnd;`)
     .replace('#include <map_fragment>', `#include <map_fragment>
       vec4 pithColor = texture2D(pithMap, vPith);
-      diffuseColor.rgb = mix(diffuseColor.rgb, pithColor.rgb, pithColor.a);`);
+      diffuseColor.rgb = mix(diffuseColor.rgb, pithColor.rgb, pithColor.a);
+      float ringsWeight = max(vEnd, 1.0 - smoothstep(${(RIM * 0.7).toFixed(3)}, ${(RIM * 1.3).toFixed(3)}, vMapUv.y));
+      diffuseColor.rgb = mix(texture2D(splitMap, vGrain + splitShift).rgb, diffuseColor.rgb, ringsWeight);`);
 };
 
 // Новое дерево — новый срез: какая полоса колец и какая сердцевина.
 export function dressWood() {
   woodMaterial.map = rings[Math.floor(Math.random() * rings.length)];
   pithMap.value = piths[Math.floor(Math.random() * piths.length)];
+  splitMap.value = splits[Math.floor(Math.random() * splits.length)];
+  splitShift.value.set(Math.random(), Math.random());
 }
 
 // Углы грани кубика для каждого из шести направлений, по кругу снаружи.
@@ -510,6 +540,10 @@ export class TrunkVoxels {
                 out.uv[t + 1] = 1 - Math.hypot(px - axis.x, pz - axis.z) / (size * this.shape.profile(around));
                 out.pith[t] = 0.5 + (px - axis.x) / (PITH * size * this.shape.radius);
                 out.pith[t + 1] = 0.5 + (pz - axis.z) / (PITH * size * this.shape.radius);
+                // Волокна: u — по горизонтали вдоль сглаженной плоскости грани, v — по высоте.
+                const h = Math.hypot(nx, nz);
+                out.grain[t] = (h > 1e-3 ? (pz * nx - px * nz) / h : px) / SPLIT_TILE;
+                out.grain[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / SPLIT_TILE;
               }
             }
             out.faces++;
@@ -522,6 +556,7 @@ export class TrunkVoxels {
     const normal = new THREE.BufferAttribute(out.nor.slice(0, verts), 3);
     const uv = new THREE.BufferAttribute(out.uv.slice(0, out.faces * 8), 2);
     const pith = new THREE.BufferAttribute(out.pith.slice(0, out.faces * 8), 2);
+    const grain = new THREE.BufferAttribute(out.grain.slice(0, out.faces * 8), 2);
     // Две сетки на одних вершинах: в каждой свои грани, сначала кора, потом срез.
     let lifted = 0;
     for (let f = 0; f < out.faces; f++) lifted += out.lift[f];
@@ -542,6 +577,7 @@ export class TrunkVoxels {
       geometry.setAttribute('normal', normal);
       geometry.setAttribute('uv', uv);
       geometry.setAttribute('pith', pith);
+      geometry.setAttribute('grain', grain);
       geometry.setIndex(new THREE.BufferAttribute(index, 1));
       geometry.addGroup(0, barkFaces * 6, 0);
       geometry.addGroup(barkFaces * 6, index.length - barkFaces * 6, 1);
@@ -557,11 +593,12 @@ const scratch = {
   nor: new Float32Array(12 * 8192),
   uv: new Float32Array(8 * 8192),
   pith: new Float32Array(8 * 8192),
+  grain: new Float32Array(8 * 8192),
   bark: new Uint8Array(8192),
   lift: new Uint8Array(8192),
   reserve() {
     if ((this.faces + 1) * 12 <= this.pos.length) return;
-    for (const key of ['pos', 'nor', 'uv', 'pith', 'bark', 'lift']) {
+    for (const key of ['pos', 'nor', 'uv', 'pith', 'grain', 'bark', 'lift']) {
       const grown = new this[key].constructor(this[key].length * 2);
       grown.set(this[key]);
       this[key] = grown;
