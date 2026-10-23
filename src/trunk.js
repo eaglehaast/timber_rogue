@@ -10,13 +10,12 @@ const CHUNK = 10; // слоёв в одном куске сетки; при пи
 // Срез — полоса колец в полярных координатах: по ширине один оборот вокруг оси, сверху сердцевина, снизу кора.
 // Поверх в середине — сердцевина: плоская картинка с прозрачным краем, квадрат в полрадиуса ствола.
 // У каждого дерева своя полоса и своя сердцевина.
-// Грани вдоль ствола (стенки отщепа и раскола) колец не видят — там волокна, своя картинка в мировом масштабе,
-// квадрат SPLIT_TILE метров, волокна вертикально. Торец и стенка смешиваются по нормали: крутая грань — волокна.
-// У коры стенка берёт внешний край полосы колец (кора, камбий, заболонь — BAND её высоты) и растягивает его
-// на RIM радиуса: сам камбий тоньше кубика, и у стенки из кубиков без растяжки кромка пропадает.
-const SPLIT_TILE = 0.5;
-const BAND = 0.03;
-const RIM = 0.06;
+// На гранях вдоль ствола (стенки отщепа и раскола) та же полоса колец сама вытягивается по высоте: годичные
+// слои идут полосами во всю длину стенки, у коры — кромка камбия. Поверх них — рельеф рваных волокон:
+// яркость картинки-сплита, плитка SPLIT_W × SPLIT_H метров, вытянутая по высоте, как сами волокна.
+// Торец и стенка смешиваются по нормали: чем круче грань, тем больше рельефа волокон.
+const SPLIT_W = 0.3, SPLIT_H = 1.2;
+const FIBRE = 0.6; // насколько рельеф волокон темнит и светлит полосы колец
 const PITH = 0.5; // сторона квадрата сердцевины — доля радиуса ствола
 const loader = new THREE.TextureLoader();
 const load = (file) => {
@@ -63,10 +62,10 @@ woodMaterial.onBeforeCompile = (shader) => {
       varying float vEnd;`)
     .replace('#include <map_fragment>', `#include <map_fragment>
       vec4 pithColor = texture2D(pithMap, vPith);
-      diffuseColor.rgb = mix(diffuseColor.rgb, pithColor.rgb, pithColor.a);
-      vec3 rim = texture2D(map, vec2(vMapUv.x, vMapUv.y * ${(BAND / RIM).toFixed(3)})).rgb;
-      vec3 side = mix(rim, texture2D(splitMap, vGrain + splitShift).rgb, smoothstep(${(RIM * 0.8).toFixed(3)}, ${RIM.toFixed(3)}, vMapUv.y));
-      diffuseColor.rgb = mix(side, diffuseColor.rgb, vEnd);`);
+      diffuseColor.rgb = mix(diffuseColor.rgb, pithColor.rgb, pithColor.a * vEnd);
+      const vec3 luma = vec3(0.299, 0.587, 0.114);
+      float fibre = dot(texture2D(splitMap, vGrain + splitShift).rgb, luma) / dot(textureLod(splitMap, vec2(0.5), 12.0).rgb, luma);
+      diffuseColor.rgb *= mix(1.0, fibre, ${FIBRE.toFixed(2)} * (1.0 - vEnd));`);
 };
 
 // Новое дерево — новый срез: какая полоса колец и какая сердцевина.
@@ -543,10 +542,10 @@ export class TrunkVoxels {
                 out.uv[t + 1] = 1 - Math.hypot(px - axis.x, pz - axis.z) / (size * this.shape.profile(around));
                 out.pith[t] = 0.5 + (px - axis.x) / (PITH * size * this.shape.radius);
                 out.pith[t + 1] = 0.5 + (pz - axis.z) / (PITH * size * this.shape.radius);
-                // Волокна: u — по горизонтали вдоль сглаженной плоскости грани, v — по высоте.
+                // Рельеф волокон: u — по горизонтали вдоль сглаженной плоскости грани, v — по высоте.
                 const h = Math.hypot(nx, nz);
-                out.grain[t] = (h > 1e-3 ? (pz * nx - px * nz) / h : px) / SPLIT_TILE;
-                out.grain[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / SPLIT_TILE;
+                out.grain[t] = (h > 1e-3 ? (pz * nx - px * nz) / h : px) / SPLIT_W;
+                out.grain[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / SPLIT_H;
               }
             }
             out.faces++;
