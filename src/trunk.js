@@ -6,7 +6,12 @@ import { barkMaterial, BARK_TILE } from './bark.js';
 export const VOXEL = 0.01;
 const CHUNK = 10; // слоёв в одном куске сетки; при пилении перестраиваются только задетые куски
 
-const woodMaterial = new THREE.MeshLambertMaterial({ color: 0xe2bf86 });
+// Срез — полоса колец в полярных координатах: по ширине один оборот вокруг оси, сверху сердцевина, снизу кора.
+const endGrain = new THREE.TextureLoader().load('assets/textures/end-grain-1.jpg');
+endGrain.colorSpace = THREE.SRGBColorSpace;
+endGrain.wrapS = THREE.RepeatWrapping;
+endGrain.anisotropy = 8;
+const woodMaterial = new THREE.MeshLambertMaterial({ map: endGrain });
 
 // Углы грани кубика для каждого из шести направлений, по кругу снаружи.
 const FACES = [
