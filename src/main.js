@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { TrunkVoxels, trunkShape, VOXEL } from './trunk.js';
 import {
-  section, tipping, closing, pivotHeight, tearAngle, slope, deflection, kerfWidth, splitLength, pulledFibres, FRICTION,
+  section, tipping, closing, contact, pivotHeight, tearAngle, slope, deflection, kerfWidth, splitLength, pulledFibres, FRICTION,
 } from './physics.js';
 import { makeYard, buildYard, struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
@@ -241,6 +241,11 @@ function basis(cut) {
   return { origin: cut.edge, side: axis(1, 0, 0), along: axis(0, 1, 0), normal: axis(0, 0, 1) };
 }
 
+// Высота плоскости пропила над точкой (x, z) волокна f.
+function planeY({ origin, normal }, f) {
+  return origin.y - ((f.x - origin.x) * normal.x + (f.z - origin.z) * normal.z) / normal.y;
+}
+
 // Сколько пройти по линии at(t), пока не войдёшь в ствол, и сколько — пока не выйдешь из него.
 // Ствол не цилиндр, поэтому идём шажками. Не дошли до ствола за limit — null.
 function throughTrunk(at, limit) {
@@ -256,10 +261,24 @@ function throughTrunk(at, limit) {
   return { enter, exit: t };
 }
 
+// То же для всей кромки шины: она прямая, а ствол круглый и не по центру, поэтому в кору первой
+// упирается та точка кромки, что к ней ближе, и выходит из коры последней та, за которой древесины больше.
+function acrossBar(origin, along, side, limit) {
+  let enter = Infinity, exit = 0;
+  for (let w = -BAR_L / 2; w <= BAR_L / 2; w += 2 * VOXEL) {
+    const from = origin.clone().addScaledVector(side, w);
+    const hit = throughTrunk((t) => from.clone().addScaledVector(along, t), limit);
+    if (!hit) continue;
+    enter = Math.min(enter, hit.enter);
+    exit = Math.max(exit, hit.exit);
+  }
+  return enter < Infinity ? { enter, exit } : null;
+}
+
 // Сколько древесины впереди кромки по ходу пилы — до коры на той стороне ствола.
 function ahead(cut) {
-  const { origin, along } = basis(cut);
-  return throughTrunk((t) => origin.clone().addScaledVector(along, t), BAR_W)?.exit ?? 0;
+  const { origin, along, side } = basis(cut);
+  return acrossBar(origin, along, side, 2 * REACH)?.exit ?? 0;
 }
 
 // Высота, на которой пила войдёт в кору, если кора по горизонтали в bark от игрока.
@@ -278,8 +297,10 @@ function distanceToBark(forward) {
 function sawCandidate(forward) {
   const bark = distanceToBark(forward);
   if (bark === null || bark > REACH) return null;
-  const origin = player.pos.clone().addScaledVector(forward, bark);
-  origin.y = entryHeight(bark);
+  // Кромка встаёт туда, где она коснулась коры, — на высоте точки под прицелом.
+  const from = player.pos.clone().setY(entryHeight(bark));
+  const side = new THREE.Vector3(-forward.z, 0, forward.x);
+  const origin = from.addScaledVector(forward, acrossBar(from, forward, side, bark).enter);
   const fresh = { origin, edge: origin.clone(), q: facing(player.yaw), depth: 0 };
   const f = basis(fresh);
   return round.cuts.find((c) => {
@@ -420,16 +441,18 @@ function stand(dt) {
   }
   if (round.gap === null) return;
   // Ствол клонится, пока щель где-то не сомкнётся, — тогда он сел на пропил. Если шина с той стороны,
-  // куда он клонится, щель над ней сужается, а когда сел, вес прижимает её к шине до конца:
-  // древесина не камень, под весом проминается.
+  // куда он клонится, щель над ней сужается, а когда сел на эту же щель, вес прижимает её к шине
+  // до конца: древесина не камень, под весом проминается. Сел на другой пропил — вес ушёл туда.
   const squeezed = round.gap < VOXEL * 1000;
   const lean = round.tilt.length();
-  let seat = 0;
+  let seat = 0, touch = null;
   if (lean) {
     const dir = round.tilt.clone().divideScalar(lean);
-    seat = lean / closing(sec, dir, sec.x0 * dir.x + sec.z0 * dir.z, 0);
+    const p = sec.x0 * dir.x + sec.z0 * dir.z;
+    seat = lean / closing(sec, dir, p, 0);
+    touch = contact(sec, dir, p);
   }
-  if (squeezed && seat >= 1 - 1e-6) round.gap = 0;
+  if (squeezed && seat >= 1 - 1e-6 && Math.abs(planeY(b, touch) - touch.mid) <= VOXEL) round.gap = 0;
   if (mode !== 'cut') return;
   // Сужение — предупреждение. Кто пилит дальше, тот зажимает шину: цепь встаёт, пилу не вынуть.
   if (round.gap < PINCH) {
