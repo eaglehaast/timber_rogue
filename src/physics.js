@@ -53,7 +53,7 @@ export function section(voxels) {
     izz += (f.z - z0) ** 2;
     ixz += (f.x - x0) * (f.z - z0);
   }
-  return { all, intact, sink, x0, z0, ixx, izz, ixz };
+  return { n, all, intact, sink, x0, z0, ixx, izz, ixz };
 }
 
 // Колонка без пропила связывает пень с верхом, только если древесина в ней сплошная по всей высоте,
@@ -167,19 +167,21 @@ export function pivotHeight(sec, u, p) {
 // Целые волокна недопила позади оси: они растянуты, на них дерево и висит.
 export const pulledFibres = (sec, tip) => sec.intact.filter((f) => along(f, tip.u) < tip.p);
 
-// Отщеп. Растянутые волокна недопила тянут с силой T, и в пень она уходит через вертикальную
-// плоскость вдоль кромки пропила шириной w. Скалывается древесина легко, поэтому плоскость
-// расходится вниз на длину T / (SHEAR·w) — пока площади хватит, чтобы передать силу.
+// Отщеп. Растянутые волокна недопила тянут с силой T и вырывают свой пучок из пня: он скалывается
+// по всем граням, где под пропилом граничит с остальной древесиной (кора снаружи ничего не держит).
+// Скалывается древесина легко, поэтому трещина идёт вниз на длину T / (SHEAR·периметр) — пока площади
+// хватит, чтобы передать силу. Широкий недопил толщиной t отщепляется на ~3t, а узкая полоска
+// по направлению падения — едва-едва: периметр у неё большой, а тянет она мало.
 // load — какую долю своей прочности волокна сейчас держат.
 export function splitLength(sec, tip, load) {
-  let lo = Infinity, hi = -Infinity;
-  for (const f of pulledFibres(sec, tip)) {
-    const w = f.z * tip.u.x - f.x * tip.u.z;
-    lo = Math.min(lo, w);
-    hi = Math.max(hi, w);
+  const pulled = new Set(pulledFibres(sec, tip).map((f) => f.col));
+  if (!pulled.size) return 0;
+  const wood = new Set(sec.all.map((f) => f.col));
+  let faces = 0;
+  for (const col of pulled) {
+    for (const nb of [col - 1, col + 1, col - sec.n, col + sec.n]) if (wood.has(nb) && !pulled.has(nb)) faces++;
   }
-  if (hi < lo) return 0;
-  return (TENSION * tip.pulled * load) / (SHEAR * (hi - lo + VOXEL));
+  return (TENSION * tip.pulled * load) / (SHEAR * faces * VOXEL);
 }
 
 // Недопил гнётся, пока дерево наклоняется, и рвётся тем позже, чем он толще: 3 см — на 15°, от 5° до 35°.
