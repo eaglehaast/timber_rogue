@@ -122,13 +122,20 @@ export function tipping(sec, c, weight) {
 
 // На какой угол наклонится дерево, пока вырез впереди оси не сомкнётся (подпил закроется).
 // Щели, что смыкаются раньше least (тангенс угла), не в счёт: по умолчанию это те, что уже опираются.
-export function closing(sec, u, p, least = SHUT) {
-  let shut = Infinity;
+export const closing = (sec, u, p, least = SHUT) => Math.atan(firstShut(sec, u, p, least).shut);
+
+// Волокно, на котором щель смыкается первой: туда дерево и садится.
+export const contact = (sec, u, p) => firstShut(sec, u, p, 0).at;
+
+function firstShut(sec, u, p, least) {
+  let shut = Infinity, at = null;
   for (const f of sec.all) {
     const d = along(f, u) - p;
-    if (f.gap && d > 0 && f.gap * VOXEL >= d * least) shut = Math.min(shut, (f.gap * VOXEL) / d);
+    if (!f.gap || d <= 0 || f.gap * VOXEL < d * least || f.gap * VOXEL >= shut * d) continue;
+    shut = (f.gap * VOXEL) / d;
+    at = f;
   }
-  return Math.atan(shut);
+  return { shut, at };
 }
 
 // Высота, на которой дерево ломается: середина выреза у кромки опоры.
