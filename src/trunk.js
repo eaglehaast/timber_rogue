@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { barkMaterial, BARK_TILE } from './bark.js';
+import { random } from './random.js';
 
 // Низ ствола — сетка кубиков-вокселей: древесина есть или выпилена.
 // Пила вырезает из неё настоящую щель, по оставшимся кубикам считается, держит ли недопил.
@@ -23,7 +24,7 @@ const FACES = [
   { dir: [0, 0, -1], corners: [[0, 1, 0], [1, 1, 0], [1, 0, 0], [0, 0, 0]] },
 ];
 
-const rand = (a, b) => a + Math.random() * (b - a);
+const rand = (a, b) => a + random() * (b - a);
 const ANGLES = 720;
 const TAPER = 0.04; // настолько (доля радиуса) ствол тоньшает на каждый метр вверх
 
@@ -32,9 +33,9 @@ const TAPER = 0.04; // настолько (доля радиуса) ствол �
 // корневыми наплывами, кверху тоньшает и клонится в сторону leanAz, всё круче.
 export function trunkShape(radius, height, leanAz) {
   const flat = rand(0.04, 0.12);
-  const turn = Math.random() * Math.PI;
-  const bumps = Array.from({ length: 2 + Math.floor(Math.random() * 3) }, () => ({
-    at: Math.random() * Math.PI * 2, h: rand(0.02, 0.07), w: rand(0.15, 0.4),
+  const turn = random() * Math.PI;
+  const bumps = Array.from({ length: 2 + Math.floor(random() * 3) }, () => ({
+    at: random() * Math.PI * 2, h: rand(0.02, 0.07), w: rand(0.15, 0.4),
   }));
   const raw = (a) => bumps.reduce(
     (r, b) => r + b.h * Math.exp(-((Math.atan2(Math.sin(a - b.at), Math.cos(a - b.at)) / b.w) ** 2)),

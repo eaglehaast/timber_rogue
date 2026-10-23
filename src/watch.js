@@ -2,7 +2,7 @@
 // состояние дерева и пилы. Журнал лежит в памяти браузера с пометкой «игра идёт», а когда вкладку
 // закрывают или перезагружают, пометка снимается. Зависшая вкладка снять её не успевает: при следующем
 // открытии сторож находит журнал и кладёт его в базу артефакта — оттуда его читает Claude.
-// Кадр дольше секунды и ошибка в коде тоже попадают в базу, сразу.
+// Кадр дольше секунды и ошибка в коде тоже попадают в базу, сразу, а по P — когда игрок попросит.
 const KEY = 'timber-flight';
 const KEEP = 200;         // столько последних действий помним
 const SAVE_EVERY = 500;   // мс
@@ -42,17 +42,27 @@ function save(running) {
   try { localStorage.setItem(KEY, JSON.stringify({ running, at: Date.now(), ...record() })); } catch {}
 }
 
-async function report(kind, extra, journal = record()) {
+// Игрок сам заметил странность и нажал P: отчёт с тем, что сейчас на экране, — сколько угодно раз.
+export function tell() {
+  return send('seen', {}, record());
+}
+
+function report(kind, extra, journal = record()) {
   if (sent.has(kind)) return;
   sent.add(kind);
+  send(kind, extra, journal);
+}
+
+async function send(kind, extra, journal) {
   const db = await window.claude?.use?.('db');
-  if (!db) return;
+  if (!db) return false;
   // В базу — строкой: так вложенность и пустые значения из журнала не упрутся в её правила.
   try {
     await db.collection('reports').add({
       kind, at: new Date().toISOString(), agent: navigator.userAgent, ...extra, journal: JSON.stringify(journal),
     });
-  } catch {}
+    return true;
+  } catch { return false; }
 }
 
 // Свёрнутая вкладка кадров не рисует: пауза — не подвисание.

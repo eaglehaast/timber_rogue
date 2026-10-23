@@ -7,7 +7,8 @@ import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
-import { watch, note, beat } from './watch.js';
+import { watch, note, beat, tell } from './watch.js';
+import { seed, random } from './random.js';
 
 const TRUNK_R = 0.3;      // радиус ствола выше корневых наплывов
 const TREE_H = 12;
@@ -192,11 +193,13 @@ function gust(t, phase) {
   return Math.max(0, g) / 1.8;
 }
 
-function newRound() {
+// treeSeed — зерно, из которого растёт дерево (по нему его можно вырастить заново из отчёта).
+function newRound(treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   if (round) scene.remove(round.root);
 
   dressBark();
-  const voxels = new TrunkVoxels(trunkShape(TRUNK_R, ZONE_H, Math.random() * Math.PI * 2), ZONE_H);
+  seed(treeSeed);
+  const voxels = new TrunkVoxels(trunkShape(TRUNK_R, ZONE_H, random() * Math.PI * 2), ZONE_H);
   voxels.remesh();
   const tree = growTree(voxels);
   const upper = new THREE.Group();
@@ -213,7 +216,8 @@ function newRound() {
   round = {
     root, voxels, upper, yard, ...tree,
     weight: tree.mass * G,
-    wind: { dir: dirOf(Math.random() * Math.PI * 2), max: 0.05 + Math.random() * 0.2, phase: Math.random() * 9 },
+    seed: treeSeed,
+    wind: { dir: dirOf(random() * Math.PI * 2), max: 0.05 + random() * 0.2, phase: random() * 9 },
     time: 0, sway: new THREE.Vector3(), tilt: new THREE.Vector3(), bent: new THREE.Vector3(), gap: null,
     // Насколько недопил поддался насовсем, вокруг какой оси, куда и с какой скоростью сейчас поворачивается.
     give: { tilt: new THREE.Vector3(), at: new THREE.Vector3(), u: null, speed: 0 },
@@ -987,6 +991,12 @@ addEventListener('keydown', (e) => {
   if (!e.repeat) note(e.code);
   keys.add(e.code);
   if (e.code === 'KeyR') newRound();
+  if (e.code === 'KeyP') {
+    tell().then((ok) => {
+      unsay('seen');
+      say('seen', ok ? 'Отчёт отправлен — спасибо!' : 'Отчёт не ушёл: игра открыта не в артефакте или без доступа к базе');
+    });
+  }
   if (e.code === 'Minus' || e.code === 'Equal') {
     fov = THREE.MathUtils.clamp(fov + (e.code === 'Minus' ? -5 : 5), FOV_MIN, FOV_MAX);
     camera.fov = fov;
@@ -1073,7 +1083,7 @@ watch(() => ({
   player: r3([player.pos.x, player.pos.z, player.yaw, player.pitch, player.eye]),
   saw: saw && { edge: r3(saw.edge.toArray()), q: r3(saw.q.toArray()), depth: +saw.depth.toFixed(3), pinched: !!saw.pinched },
   tree: {
-    time: +round.time.toFixed(2), mass: Math.round(round.mass), com: r3(round.com.toArray()),
+    seed: round.seed, time: +round.time.toFixed(2), mass: Math.round(round.mass), com: r3(round.com.toArray()),
     top: round.top, slide: !!round.slide, fall: round.fall && r3([round.fall.angle, round.fall.speed]),
     cuts: round.cuts.map((c) => ({ origin: r3(c.origin.toArray()), q: r3(c.q.toArray()), depth: +c.depth.toFixed(3) })),
   },
