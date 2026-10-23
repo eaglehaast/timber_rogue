@@ -8,11 +8,41 @@ export const VOXEL = 0.01;
 const CHUNK = 10; // слоёв в одном куске сетки; при пилении перестраиваются только задетые куски
 
 // Срез — полоса колец в полярных координатах: по ширине один оборот вокруг оси, сверху сердцевина, снизу кора.
-const endGrain = new THREE.TextureLoader().load('assets/textures/end-grain-1.jpg');
-endGrain.colorSpace = THREE.SRGBColorSpace;
-endGrain.wrapS = THREE.RepeatWrapping;
-endGrain.anisotropy = 8;
-const woodMaterial = new THREE.MeshLambertMaterial({ map: endGrain });
+// Поверх в середине — сердцевина: плоская картинка с прозрачным краем, квадрат в полрадиуса ствола.
+// У каждого дерева своя полоса и своя сердцевина.
+const PITH = 0.5; // сторона квадрата сердцевины — доля радиуса ствола
+const loader = new THREE.TextureLoader();
+const load = (file) => {
+  const texture = loader.load(file);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+};
+const rings = [1, 2, 3, 4, 5].map((i) => {
+  const texture = load(`assets/textures/end-grain-${i}.jpg`);
+  texture.wrapS = THREE.RepeatWrapping;
+  return texture;
+});
+const piths = [1, 2, 3, 4, 5].map((i) => load(`assets/textures/pith-${i}.png`));
+const pithMap = { value: piths[0] };
+const woodMaterial = new THREE.MeshLambertMaterial({ map: rings[0] });
+woodMaterial.onBeforeCompile = (shader) => {
+  shader.uniforms.pithMap = pithMap;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec2 pith;\nvarying vec2 vPith;')
+    .replace('#include <uv_vertex>', '#include <uv_vertex>\nvPith = pith;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform sampler2D pithMap;\nvarying vec2 vPith;')
+    .replace('#include <map_fragment>', `#include <map_fragment>
+      vec4 pithColor = texture2D(pithMap, vPith);
+      diffuseColor.rgb = mix(diffuseColor.rgb, pithColor.rgb, pithColor.a);`);
+};
+
+// Новое дерево — новый срез: какая полоса колец и какая сердцевина.
+export function dressWood() {
+  woodMaterial.map = rings[Math.floor(Math.random() * rings.length)];
+  pithMap.value = piths[Math.floor(Math.random() * piths.length)];
+}
 
 // Углы грани кубика для каждого из шести направлений, по кругу снаружи.
 const FACES = [
@@ -453,6 +483,8 @@ export class TrunkVoxels {
                 // Радиус меряем долей профиля, поэтому годичные кольца повторяют форму ствола.
                 out.uv[t] = turn / (2 * Math.PI);
                 out.uv[t + 1] = 1 - Math.hypot(px - axis.x, pz - axis.z) / (size * this.shape.profile(around));
+                out.pith[t] = 0.5 + (px - axis.x) / (PITH * size * this.shape.radius);
+                out.pith[t + 1] = 0.5 + (pz - axis.z) / (PITH * size * this.shape.radius);
               }
             }
             out.faces++;
@@ -464,6 +496,7 @@ export class TrunkVoxels {
     const position = new THREE.BufferAttribute(out.pos.slice(0, verts), 3);
     const normal = new THREE.BufferAttribute(out.nor.slice(0, verts), 3);
     const uv = new THREE.BufferAttribute(out.uv.slice(0, out.faces * 8), 2);
+    const pith = new THREE.BufferAttribute(out.pith.slice(0, out.faces * 8), 2);
     // Две сетки на одних вершинах: в каждой свои грани, сначала кора, потом срез.
     let lifted = 0;
     for (let f = 0; f < out.faces; f++) lifted += out.lift[f];
@@ -483,6 +516,7 @@ export class TrunkVoxels {
       geometry.setAttribute('position', position);
       geometry.setAttribute('normal', normal);
       geometry.setAttribute('uv', uv);
+      geometry.setAttribute('pith', pith);
       geometry.setIndex(new THREE.BufferAttribute(index, 1));
       geometry.addGroup(0, barkFaces * 6, 0);
       geometry.addGroup(barkFaces * 6, index.length - barkFaces * 6, 1);
@@ -497,11 +531,12 @@ const scratch = {
   pos: new Float32Array(12 * 8192),
   nor: new Float32Array(12 * 8192),
   uv: new Float32Array(8 * 8192),
+  pith: new Float32Array(8 * 8192),
   bark: new Uint8Array(8192),
   lift: new Uint8Array(8192),
   reserve() {
     if ((this.faces + 1) * 12 <= this.pos.length) return;
-    for (const key of ['pos', 'nor', 'uv', 'bark', 'lift']) {
+    for (const key of ['pos', 'nor', 'uv', 'pith', 'bark', 'lift']) {
       const grown = new this[key].constructor(this[key].length * 2);
       grown.set(this[key]);
       this[key] = grown;
