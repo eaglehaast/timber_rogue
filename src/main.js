@@ -3,7 +3,7 @@ import { TrunkVoxels, trunkShape, VOXEL } from './trunk.js';
 import {
   section, tipping, closing, contact, pivotHeight, tearAngle, slope, deflection, kerfWidth, splitLength, pulledFibres, FRICTION,
 } from './physics.js';
-import { makeYard, buildYard, struck, wreck, pushOut } from './yard.js';
+import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
@@ -27,8 +27,6 @@ const MAX_TILT = THREE.MathUtils.degToRad(60);
 const MAX_TURN = THREE.MathUtils.degToRad(30);
 const SNAP_DIST = 0.03;   // прицел прилипает к начатому пропилу, если почти совпал с ним
 const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(10));
-// Хоть одна сторона, куда дерево ляжет чисто, — не дальше этого угла от направления крена.
-const REACH_SIDE = THREE.MathUtils.degToRad(75);
 // Глаза стоя и присев: присев можно пилить у самой земли.
 const EYE = 1.7, EYE_CROUCH = 1.0;
 // Точная настройка пилы: шаг стрелками и замедление мыши с зажатым Shift.
@@ -37,7 +35,6 @@ const PLAY = VOXEL / 4;    // настолько шина болтается в 
 // Оси пилы, вокруг которых она поворачивается: в плоскости полотна, наклон носом и крен.
 const TURN = new THREE.Vector3(0, 0, 1), TILT = new THREE.Vector3(1, 0, 0), ROLL = new THREE.Vector3(0, 1, 0);
 const FINE = 0.2;
-const ENTRY_SPEED = 0.15;  // м/с: так пила, ещё не вошедшая в древесину, едет по коре вверх-вниз
 // Летающая камера для осмотра: медленная, чтобы можно было влезть в щель, и не дальше FLY_R от ствола.
 const FLY_SPEED = 0.5, FLY_R = 4, FLY_NEAR = 0.005, NEAR = 0.05;
 // Где пила в руках: столько вперёд от глаз, ниже и левее — так мотор справа от взгляда.
@@ -46,6 +43,7 @@ const G = 9.8;
 const MOUSE = 0.0022;
 
 const canvas = document.getElementById('scene');
+const hudEl = document.getElementById('hud');
 const hintEl = document.getElementById('hint');
 const depthEl = document.getElementById('depth');
 const depthFillEl = document.getElementById('depthFill');
@@ -202,10 +200,11 @@ function newRound() {
   upper.add(tree.bend);
 
   const root = new THREE.Group();
+  voxels.standing = true;
+  upper.add(voxels.lift);
   root.add(voxels.group, upper);
   scene.add(root);
-  const yard = makeYard(azimuthOf(tree.com), REACH_SIDE, TREE_H);
-  buildYard(yard, root);
+  const yard = []; // постройки (yard.js) пока убраны: отвлекают от дерева
   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
 
   round = {
@@ -393,8 +392,8 @@ function stand(dt) {
   const { sec } = round;
   if (sec) round.tilt = deflection(sec, round.com.clone().add(round.sway), round.weight, round.com.y, round.split);
 
-  // Крона качается вокруг сгиба: смещение веса делим на высоту над сгибом. Наклон недопила
-  // рисуем там же — на глаз разницы с поворотом у пропила при таких углах нет.
+  // Крона качается вокруг сгиба: смещение веса делим на высоту над сгибом. А весь верх над
+  // пропилом клонится вокруг центра недопила — так щель видно смыкающейся там, где она сомкнулась.
   // Наклон больше SHOWN_TILT бывает, только когда недопил потерял устойчивость: дерево в этом
   // же кадре начинает падать, и дальше его поворачивает падение.
   const up = new THREE.Vector3(0, 1, 0);
@@ -404,8 +403,11 @@ function stand(dt) {
   const tilt = new THREE.Quaternion().setFromAxisAngle(
     up.clone().cross(round.tilt).normalize(), Math.min(round.tilt.length(), SHOWN_TILT),
   );
-  round.bend.quaternion.copy(tilt).multiply(sway);
+  round.bend.quaternion.copy(sway);
   if (!sec) return;
+  const hinge = new THREE.Vector3(sec.x0, (round.voxels.middle + 0.5) * VOXEL, sec.z0);
+  round.upper.quaternion.copy(tilt);
+  round.upper.position.copy(hinge).sub(hinge.clone().applyQuaternion(tilt));
 
   const c = centerOfMass();
   if (g > 0.8) say('gust', 'Порыв ветра качнул крону');
@@ -659,10 +661,11 @@ function update(dt) {
     player.pos.addScaledVector(move.normalize(), speed * dt);
   }
   player.eye += ((player.crouch ? EYE_CROUCH : EYE) - player.eye) * (1 - Math.exp(-8 * dt));
-  // Пила у коры, но ещё не вошла: W и S везут её вверх-вниз по стволу.
-  if (mode === 'aim' && saw.depth === 0 && !fly) {
-    const lift = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
-    saw.edge.y = saw.origin.y = THREE.MathUtils.clamp(saw.origin.y + lift * ENTRY_SPEED * (shift ? FINE : 1) * dt, 0.05, MAX_ENTRY);
+  // Шаг назад от приставленной пилы — уходишь от пропила. Зажатая пила остаётся в стволе, в руках — запасная.
+  if (mode !== 'free' && !fly && keys.has('KeyS')) {
+    if (saw.pinched) leaveSaw();
+    mode = 'free';
+    saw = null;
   }
   // Сквозь ствол не пройти: держимся от коры на всей высоте тела. Ствол клонится, поэтому над ногами
   // он бывает ближе, чем у земли. Когда дерево упало, остаётся только пень.
@@ -704,7 +707,7 @@ function update(dt) {
 
   if (round.fall && !round.done) fallTop(dt);
 
-  hintEl.textContent = hint(candidate);
+  hintEl.textContent = hint();
   depthEl.style.visibility = saw ? 'visible' : 'hidden';
   if (saw) depthFillEl.style.width = `${(saw.depth / (saw.depth + ahead(saw))) * 100}%`;
 
@@ -815,23 +818,13 @@ function fitsKerf(q) {
   return true;
 }
 
-function hint(candidate) {
+// На экране — только то, от чего надо бежать, и конец игры. Остальное — в журнале (L).
+function hint() {
   if (round.slide) return 'Съезжает! Отойди!';
   if (round.fall) return round.done ? '' : 'Падает! Беги!';
-  if (fly) return 'Осмотр · WASD, Space и C — лететь · Shift — медленно · F — вернуться';
-  if (mode !== 'free') {
-    const deg = (a) => THREE.MathUtils.radToDeg(a).toFixed(1);
-    const { along, side } = basis(saw);
-    let angles = `Поворот ${deg(angleDiff(yawOf(along), player.yaw))}° · наклон ${deg(Math.asin(along.y))}° · крен ${deg(Math.asin(-side.y))}°`;
-    if (saw.pinched) return `Шину зажало · Space — бросить пилу в стволе${round.saws > 1 ? ' и взять запасную' : ''}`;
-    if (saw.stuck) angles += ' · шина упёрлась в стенку пропила';
-    if (mode === 'cut') return angles;
-    const move = saw.depth > 0 ? '' : ' · W/S — выше-ниже';
-    return `${angles} · мышь, стрелки, Q/E — повернуть (Shift — точно)${move} · ЛКМ — пилить · Space — убрать пилу`;
-  }
+  if (fly) return 'Осмотр · F — вернуться';
   if (!round.saws) return 'Пил не осталось · R — новое дерево';
-  if (!candidate) return round.cuts.length ? '' : 'Подойди к стволу';
-  return round.cuts.includes(candidate) ? 'ЛКМ — приставить пилу к пропилу' : 'ЛКМ — приставить пилу';
+  return '';
 }
 
 function resize() {
@@ -860,13 +853,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') setFlying(!fly);
   if (fly) return;
   if (e.code === 'KeyC') player.crouch = !player.crouch;
-  // Space при приставленной пиле — шаг назад: пила убрана, ходить снова можно.
-  // Зажатая остаётся в стволе, в руках — запасная.
-  if (e.code === 'Space' && mode !== 'free') {
-    if (saw.pinched) leaveSaw();
-    mode = 'free';
-    saw = null;
-  }
+  if (e.code === 'KeyL') hudEl.classList.toggle('details');
   // Стрелки и Q/E — пила поворачивается на полградуса за нажатие.
   const keySteer = {
     ArrowLeft: [TURN, STEP], ArrowRight: [TURN, -STEP], ArrowUp: [TILT, STEP], ArrowDown: [TILT, -STEP],

@@ -24,7 +24,7 @@ const DIRS = 36;
 // в стволе, смотрим на середине высоты, где прошла пила.
 export function section(voxels) {
   const { n } = voxels;
-  const at = Math.round((voxels.cutLow + voxels.cutHigh) / 2);
+  const at = voxels.middle;
   const all = [], intact = [];
   for (let k = 0; k < n; k++) {
     for (let i = 0; i < n; i++) {
