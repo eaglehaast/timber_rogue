@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { TrunkVoxels, trunkShape, VOXEL } from './trunk.js';
 import {
-  section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, deflection, kerfWidth, splitLength, pulledFibres, FRICTION,
+  section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
@@ -34,6 +34,7 @@ const STEP = THREE.MathUtils.degToRad(0.5);
 const PLAY = VOXEL / 4;    // настолько шина болтается в щели: цепь шире шины
 // Оси пилы, вокруг которых она поворачивается: в плоскости полотна, наклон носом и крен.
 const TURN = new THREE.Vector3(0, 0, 1), TILT = new THREE.Vector3(1, 0, 0), ROLL = new THREE.Vector3(0, 1, 0);
+const UP = new THREE.Vector3(0, 1, 0);
 const FINE = 0.2;
 // Летающая камера для осмотра: медленная, чтобы можно было влезть в щель, и не дальше FLY_R от ствола.
 const FLY_SPEED = 0.5, FLY_R = 4, FLY_NEAR = 0.005, NEAR = 0.05;
@@ -166,7 +167,7 @@ let round = null;
 function growTree(voxels) {
   const { shape } = voxels;
   const s = shape.scale(ZONE_H);
-  const { tree, com, mass } = growMaple(
+  const { tree, com, mass, spin } = growMaple(
     TREE_H - ZONE_H, TRUNK_R * s, shape.leanAz, (a) => s * shape.profile(a), shape.axis(ZONE_H),
   );
   const bend = new THREE.Group();
@@ -180,6 +181,7 @@ function growTree(voxels) {
     com: zone.center.multiplyScalar(zoneMass)
       .addScaledVector(bend.localToWorld(com), mass).divideScalar(zoneMass + mass),
     mass: zoneMass + mass,
+    spin,
   };
 }
 
@@ -215,6 +217,7 @@ function newRound() {
     // Насколько недопил поддался насовсем, вокруг какой оси, куда и с какой скоростью сейчас поворачивается.
     give: { tilt: new THREE.Vector3(), at: new THREE.Vector3(), u: null, speed: 0 },
     sec: null, secVersion: -1,
+    twist: null, turn: 0, // как косые площадки закручивают верх вокруг вертикали и на сколько закрутили
     split: 0, tongue: new Set(), // на сколько недопил отщепился вниз и какие его колонки
     cuts: [], debris: [], saws: SAWS,
     top: false, slide: null, fall: null, done: false,
@@ -248,7 +251,7 @@ function planeY({ origin, normal }, f) {
 }
 
 // Сколько пройти по линии at(t), пока не войдёшь в ствол, и сколько — пока не выйдешь из него.
-// Ствол не цилиндр, поэтому идём шажками. Не дошли до ствола за limit — null.
+// Ствол не цилиндр, поэтому идём шажками. Не дошли до ствола за limit — null, дальше limit не смотрим.
 function throughTrunk(at, limit) {
   const step = VOXEL / 4;
   const inside = (t) => {
@@ -258,7 +261,7 @@ function throughTrunk(at, limit) {
   let t = 0;
   while (!inside(t)) if ((t += step) > limit) return null;
   const enter = t;
-  while (inside(t)) t += step;
+  while (inside(t) && t < limit) t += step;
   return { enter, exit: t };
 }
 
@@ -402,28 +405,42 @@ function stand(dt) {
     round.buckle = round.bent.length() > SHOWN_TILT ? round.bent.clone().normalize() : null;
     if (round.buckle) round.bent.set(0, 0, 0);
     round.tilt.copy(round.bent).add(give.tilt);
+    // Косые площадки, на которые сел верх, закручивают его вокруг вертикали. Что сверх трения —
+    // держит остаток недопила и закручивается на это упруго.
+    round.twist = twist(sec, round.bent, give, round.weight, round.split);
+    const tw = round.twist;
+    const over = tw ? THREE.MathUtils.clamp(Math.abs(tw.drive) - tw.rub, 0, tw.hold) : 0;
+    round.turn = over ? (Math.sign(tw.drive) * over) / tw.stiff : 0;
   }
 
   // Крона качается вокруг сгиба: смещение веса делим на высоту над сгибом. А весь верх над
   // пропилом клонится: упруго — вокруг центра недопила, осевший — вокруг оси, у которой осел.
   // Так щель видно смыкающейся там, где она сомкнулась, и раскрывшейся там, где раскрылась.
   // Перерезанный насквозь верх ещё и сел на пропил.
-  const up = new THREE.Vector3(0, 1, 0);
   const sway = new THREE.Quaternion().setFromAxisAngle(
-    up.clone().cross(round.wind.dir), (g * round.wind.max) / (round.com.y - ZONE_H),
+    UP.clone().cross(round.wind.dir), (g * round.wind.max) / (round.com.y - ZONE_H),
   );
   round.bend.quaternion.copy(sway);
   if (!sec) return;
   const turn = (v, most = Infinity) => new THREE.Quaternion().setFromAxisAngle(
-    up.clone().cross(v).normalize(), Math.min(v.length(), most),
+    UP.clone().cross(v).normalize(), Math.min(v.length(), most),
   );
-  const elastic = turn(round.bent), yielded = turn(give.tilt);
   const y = (round.voxels.middle + 0.5) * VOXEL;
-  const centre = new THREE.Vector3(sec.x0, y, sec.z0), axis = give.at.clone().setY(y);
-  // Сначала упругий поворот вокруг centre, потом осевший — вокруг axis.
-  round.upper.quaternion.copy(yielded).multiply(elastic);
-  round.upper.position.copy(centre).sub(centre.clone().applyQuaternion(elastic)).sub(axis)
-    .applyQuaternion(yielded).add(axis);
+  // Поворот q вокруг точки at поверх того, что уже сделано.
+  const spin = (q, at) => {
+    round.upper.quaternion.premultiply(q);
+    round.upper.position.sub(at).applyQuaternion(q).add(at);
+  };
+  // Сначала закрутка вокруг вертикали через остаток, потом упругий наклон вокруг центра недопила,
+  // потом осевший — вокруг оси, у которой осел.
+  round.upper.quaternion.identity();
+  round.upper.position.set(0, 0, 0);
+  if (round.twist) {
+    const { o } = round.twist;
+    spin(new THREE.Quaternion().setFromAxisAngle(UP, round.turn), new THREE.Vector3(o.x, y, o.z));
+  }
+  spin(turn(round.bent), new THREE.Vector3(sec.x0, y, sec.z0));
+  spin(turn(give.tilt), give.at.clone().setY(y));
   round.upper.position.y -= sec.sink;
 
   const c = centerOfMass();
@@ -436,6 +453,8 @@ function stand(dt) {
     const s = slope(sec);
     if (s.tilt > Math.atan(FRICTION)) return startSlide(s);
   }
+  const tw = round.twist;
+  if (tw && Math.abs(tw.drive) - tw.rub > tw.hold) return startTwist(tw, c);
   const tip = tipping(sec, c, round.weight, round.tilt);
   if (tip.net > 0 || give.speed > 0 || round.buckle) {
     yieldHinge(sec, tip, c, dt);
@@ -546,7 +565,7 @@ function startSlide(s) {
 
 function slideTop(dt) {
   const sl = round.slide;
-  sl.v += G * (Math.sin(sl.tilt) - FRICTION * Math.cos(sl.tilt)) * dt;
+  sl.v += G * (Math.sin(sl.tilt) - SLIDING * Math.cos(sl.tilt)) * dt;
   sl.s += sl.v * dt;
   round.upper.position.copy(sl.dir).multiplyScalar(sl.s * Math.cos(sl.tilt)).setY(-sl.s * Math.sin(sl.tilt));
   const c = centerOfMass();
@@ -555,6 +574,20 @@ function slideTop(dt) {
     round.slide = null;
     startFall(tip, c, sl.v * Math.cos(sl.tilt) * sl.dir.dot(tip.u));
   }
+}
+
+// Остаток недопила скрутило и порвало (а перерезанный насквозь верх сорвался с площадок):
+// целых волокон больше нет. Верх проворачивается на косых срезах, сходит с них и валится туда,
+// куда смещён его вес от оси, вокруг которой крутился.
+function startTwist(tw, c) {
+  round.sec = { ...round.sec, intact: [] };
+  const u = new THREE.Vector3(c.x - tw.o.x, 0, c.z - tw.o.z).normalize();
+  crack(0.8);
+  say('twist', 'Ствол провернулся на косых срезах — остаток скрутило!');
+  startFall({ u, p: tw.o.x * u.x + tw.o.z * u.z, hold: 0 }, c);
+  // Пока верх ещё на площадках, они крутят его дальше: момент сверх трения скольжения.
+  const push = Math.abs(tw.drive) - (tw.rub * SLIDING) / FRICTION;
+  round.fall.spin = { speed: 0, push: (Math.sign(tw.drive) * push) / round.spin };
 }
 
 // Дерево пошло: поворачивается вокруг оси недопила. Пока недопил цел, он держит дерево
@@ -577,7 +610,7 @@ function startFall(tip, c, slip = 0, speed = 0) {
   const a = c.dot(tip.u) - tip.p;
   const given = Math.max(0, round.give.tilt.dot(tip.u));
   round.fall = {
-    pivot, u: tip.u, p: tip.p, axis: new THREE.Vector3(0, 1, 0).cross(tip.u),
+    pivot, u: tip.u, p: tip.p, axis: UP.clone().cross(tip.u),
     angle: 0, speed, hinge,
     a, b: round.com.y + round.upper.position.y - h, // съехавший верх опустился
     hold: tip.hold,
@@ -601,7 +634,7 @@ function release(f) {
   f.hinge = false;
   const lever = f.a * Math.cos(f.angle) + f.b * Math.sin(f.angle);
   f.u = f.u.clone().multiplyScalar(lever).add(f.lateral).normalize();
-  f.axis = new THREE.Vector3(0, 1, 0).cross(f.u);
+  f.axis = UP.clone().cross(f.u);
   f.lateral.set(0, 0, 0);
 }
 
@@ -613,7 +646,7 @@ function fallTop(dt) {
   if (f.slip > 0) {
     f.a += f.slip * dt;
     round.upper.position.addScaledVector(f.u, f.slip * dt);
-    f.slip = Math.max(0, f.slip - G * FRICTION * dt);
+    f.slip = Math.max(0, f.slip - G * SLIDING * dt);
   }
   const lever = f.a * Math.cos(f.angle) + f.b * Math.sin(f.angle);
   const hold = f.hinge ? f.hold * Math.max(0, 1 - f.angle / f.tear) : 0;
@@ -622,6 +655,12 @@ function fallTop(dt) {
   const step = Math.min(f.speed * dt, Math.PI / 2 - f.angle);
   f.angle += step;
   f.pivot.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(f.axis, step));
+  // Провернувшийся верх крутится вокруг вертикали, а площадки разгоняют его, пока он на них сидит:
+  // пока дальний край не поднялся над ними на ширину пропила.
+  if (f.spin) {
+    if (f.angle * round.voxels.radius < VOXEL) f.spin.speed += f.spin.push * dt;
+    f.pivot.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(UP, f.spin.speed * dt));
+  }
 
   if (f.hinge && f.angle >= f.shut) {
     // Подпил сомкнулся: дерево упирается в нижнюю грань подпила, недопил рвёт,
@@ -841,6 +880,16 @@ function steer(axis, angle) {
     saw.q.copy(q);
     if (mode === 'cut') round.voxels.carve(basis(saw), -VOXEL, 0, BAR_L);
   }
+  if (!saw.depth) rest(saw);
+}
+
+// Пила ещё не в древесине: повёрнутая кромка не может войти в ствол сама и не висит в воздухе,
+// а ложится на кору — туда, где первой её коснётся, если подвести её по ходу пилы.
+function rest(cut) {
+  const { along, side } = basis(cut);
+  const from = cut.edge.clone().addScaledVector(along, -REACH);
+  const hit = acrossBar(from, along, side, 2 * REACH);
+  if (hit) cut.origin.copy(cut.edge.copy(from.addScaledVector(along, hit.enter)));
 }
 
 // Полотно не круче MAX_TILT к горизонту (иначе пропил выйдет дырявым, см. carve)
