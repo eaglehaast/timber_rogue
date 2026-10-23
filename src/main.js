@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { TrunkVoxels, trunkShape, VOXEL } from './trunk.js';
+import { TrunkVoxels, trunkShape, VOXEL, dressWood } from './trunk.js';
 import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
@@ -198,6 +198,7 @@ function newRound(treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   if (round) scene.remove(round.root);
 
   dressBark();
+  dressWood();
   seed(treeSeed);
   const voxels = new TrunkVoxels(trunkShape(TRUNK_R, ZONE_H, random() * Math.PI * 2), ZONE_H);
   voxels.remesh();
