@@ -641,10 +641,17 @@ function update(dt) {
     const lift = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
     saw.edge.y = saw.origin.y = THREE.MathUtils.clamp(saw.origin.y + lift * ENTRY_SPEED * (shift ? FINE : 1) * dt, 0.05, MAX_ENTRY);
   }
-  // Сквозь пень не пройти: держимся от коры у земли.
-  const minDist = TRUNK_R * round.voxels.shape.scale(0) + 0.35;
-  const dist = Math.hypot(player.pos.x, player.pos.z);
-  if (dist < minDist) player.pos.multiplyScalar(minDist / dist);
+  // Сквозь ствол не пройти: держимся от коры на всей высоте тела. Ствол клонится, поэтому над ногами
+  // он бывает ближе, чем у земли. Когда дерево упало, остаётся только пень.
+  const { shape } = round.voxels;
+  const body = round.top ? Math.min(player.eye, round.voxels.cutLow * VOXEL) : player.eye;
+  for (let y = 0; y <= body; y += 0.1) {
+    const c = shape.center(y);
+    const dx = player.pos.x - c.x, dz = player.pos.z - c.z;
+    const dist = Math.hypot(dx, dz);
+    const minDist = shape.scale(y) * shape.profile(Math.atan2(dz, dx)) + 0.35;
+    if (dist < minDist) player.pos.set(c.x + (dx / dist) * minDist, player.pos.y, c.z + (dz / dist) * minDist);
+  }
   pushOut(round.yard, player.pos, 0.35);
 
   const candidate = mode === 'free' && !round.top && round.saws ? sawCandidate(forward) : null;
