@@ -318,14 +318,55 @@ export class TrunkVoxels {
       const col = id - j * layer;
       return gap[col] > 0 && j > gapLow[col] && j < gapHigh[col];
     };
+    // Колонки у коры, что в полосе пропилов выходят из ствола (rim): ствол клонится, а колонки отвесные,
+    // и на крутом резе их много. По высоте их не разделить — в каждом слое они идут туда же,
+    // куда соседняя древесина: кора под косым резом остаётся на пне, кора рядом с отщепом — на отщепе.
+    const rim = new Uint8Array(layer);
+    for (let col = 0; col < layer; col++) {
+      if (gap[col]) continue;
+      let wood = false, air = false;
+      for (let j = this.cutLow; j <= this.cutHigh; j++) {
+        if (data[j * layer + col]) wood = true;
+        else air = true;
+      }
+      rim[col] = wood && air ? 1 : 0;
+    }
+    const last = Math.max(this.cutHigh, tongueTear);
     const stack = [];
     for (let id = 0; id < data.length; id++) {
       if (!data[id]) continue;
       const j = Math.floor(id / layer);
       const col = id - j * layer;
+      if (rim[col] && j >= this.cutLow && j <= last) continue;
       if (this.above(j, col, tongue.has(col) ? tongueTear : tear)) {
         top[id] = 1;
         stack.push(id);
+      }
+    }
+    for (let j = this.cutLow; j <= last; j++) {
+      const known = new Uint8Array(layer);
+      const queue = [];
+      for (let col = 0; col < layer; col++) if (data[j * layer + col] && !rim[col]) { known[col] = 1; queue.push(col); }
+      for (let q = 0; q < queue.length; q++) {
+        const col = queue[q];
+        const i = col % n;
+        for (const nb of [i > 0 ? col - 1 : -1, i < n - 1 ? col + 1 : -1, col - n, col + n]) {
+          if (nb < 0 || nb >= layer || known[nb] || !rim[nb] || !data[j * layer + nb]) continue;
+          known[nb] = 1;
+          queue.push(nb);
+          if (top[j * layer + col]) {
+            top[j * layer + nb] = 1;
+            stack.push(j * layer + nb);
+          }
+        }
+      }
+      // Обрывок колонки, не связанный в слое ни с чем, решаем по высоте, как раньше.
+      for (let col = 0; col < layer; col++) {
+        const id = j * layer + col;
+        if (rim[col] && data[id] && !known[col] && this.above(j, col, tear)) {
+          top[id] = 1;
+          stack.push(id);
+        }
       }
     }
     while (stack.length) {
