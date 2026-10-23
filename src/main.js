@@ -224,7 +224,7 @@ function newRound(treeSeed = (Math.random() * 2 ** 32) >>> 0) {
     give: { tilt: new THREE.Vector3(), at: new THREE.Vector3(), u: null, speed: 0 },
     sec: null, secVersion: -1,
     twist: null, turn: 0, // как косые площадки закручивают верх вокруг вертикали и на сколько закрутили
-    split: 0, tongue: new Set(), // на сколько недопил отщепился вниз и какие его колонки
+    split: 0, tongue: new Set(), // на сколько недопил отщепился вверх и какие его колонки
     cuts: [], debris: [], saws: SAWS,
     top: false, slide: null, fall: null, done: false,
     said: {},
@@ -554,7 +554,7 @@ function yieldHinge(sec, tip, c, dt) {
 }
 
 // Дерево висит на недопиле: тот тянет пень вверх с долей load от своей прочности и отщепляется
-// от кромки пропила вниз (splitLength). Трещина не зарастает: отщеп только растёт.
+// от кромки пропила вверх, в ствол (splitLength). Трещина не зарастает: отщеп только растёт.
 function splitHinge(sec, tip, load) {
   const split = splitLength(sec, tip, load);
   if (split < SPLIT_MIN || split < round.split + VOXEL) return;
@@ -563,7 +563,7 @@ function splitHinge(sec, tip, load) {
   round.voxels.splinter(round.tongue, split);
   round.voxels.remesh();
   crack(0.5);
-  say('split', 'Треск вдоль ствола — недопил отщепляется от пня');
+  say('split', 'Треск вдоль ствола — его раскалывает вверх от недопила');
 }
 
 // Верх перерезан по косой круче, чем держит трение, — он съезжает по срезу.

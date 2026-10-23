@@ -304,14 +304,14 @@ export class TrunkVoxels {
 
   // Отделяет верхушку, которая падает; здесь остаётся пень. Перерезанная колонка делится по выпилу:
   // что выше него — верх. Целые колонки недопила рвутся на высоте h, а отщепившиеся (tongue —
-  // их номера) — ниже на длину отщепа split: полоса уходит с верхом, в пне остаётся жёлоб.
+  // их номера) — выше на длину отщепа split: полоса остаётся на пне, в комле верха — жёлоб.
   // Кусок между двумя пропилами в одной колонке уходит с верхом, если держится за него сбоку, иначе остаётся на пне.
   splitTop(h, tongue = new Set(), split = 0) {
     const { n, data, gap, gapLow, gapHigh } = this;
     const layer = n * n;
     this.standing = false;
     const tear = Math.round(h / VOXEL);
-    const tongueTear = Math.max(0, Math.round((h - split) / VOXEL));
+    const tongueTear = Math.min(this.ny - 1, Math.round((h + split) / VOXEL));
     const top = new Uint8Array(data.length);
     const between = (id) => {
       const j = Math.floor(id / layer);
@@ -342,10 +342,10 @@ export class TrunkVoxels {
   }
 
   // Трещина отщепа: вдоль кромки пропила, в перерезанных колонках рядом с отщепляющимися (tongue),
-  // древесина под пропилом расходится вниз на split. Это раскол, а не пропил: волокна колонок
+  // древесина над пропилом расходится вверх на split. Это раскол, а не пропил: волокна колонок
   // уже перерезаны, считать их заново не нужно.
   splinter(tongue, split) {
-    const { n, data, gap, gapLow } = this;
+    const { n, data, gap, gapHigh } = this;
     const depth = Math.round(split / VOXEL);
     for (const col of tongue) {
       const i = col % n, k = (col - i) / n;
@@ -354,7 +354,7 @@ export class TrunkVoxels {
         if (ii < 0 || kk < 0 || ii >= n || kk >= n) continue;
         const nb = kk * n + ii;
         if (!gap[nb]) continue;
-        for (let j = Math.max(0, gapLow[nb] - depth); j < gapLow[nb]; j++) {
+        for (let j = gapHigh[nb] + 1; j <= Math.min(this.ny - 1, gapHigh[nb] + depth); j++) {
           if (!data[j * n * n + nb]) continue;
           data[j * n * n + nb] = 0;
           this.touch(j);
