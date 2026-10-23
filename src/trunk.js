@@ -10,13 +10,12 @@ const CHUNK = 10; // слоёв в одном куске сетки; при пи
 // Срез — полоса колец в полярных координатах: по ширине один оборот вокруг оси, сверху сердцевина, снизу кора.
 // Поверх в середине — сердцевина: плоская картинка с прозрачным краем, квадрат в полрадиуса ствола.
 // У каждого дерева своя полоса и своя сердцевина.
-// Грани вдоль ствола (стенки отщепа и раскола) колец не видят — там волокна, своя картинка в мировом масштабе,
-// квадрат SPLIT_TILE метров, волокна вертикально. Торец и стенка смешиваются по нормали: крутая грань — волокна.
-// У коры стенка берёт внешний край полосы колец (кора, камбий, заболонь — BAND её высоты) и растягивает его
-// на RIM радиуса: сам камбий тоньше кубика, и у стенки из кубиков без растяжки кромка пропадает.
-const SPLIT_TILE = 0.5;
-const BAND = 0.03;
-const RIM = 0.06;
+// На гранях вдоль ствола (стенки отщепа и раскола) та же полоса колец сама вытягивается по высоте: годичные
+// слои идут полосами во всю длину стенки, у коры — кромка камбия. Поверх них — рельеф рваных волокон:
+// яркость картинки-сплита, плитка SPLIT_W × SPLIT_H метров, вытянутая по высоте, как сами волокна.
+// Торец и стенка смешиваются по нормали: чем круче грань, тем больше рельефа волокон.
+const SPLIT_W = 0.3, SPLIT_H = 1.2;
+const FIBRE = 0.6; // насколько рельеф волокон темнит и светлит полосы колец
 const PITH = 0.5; // сторона квадрата сердцевины — доля радиуса ствола
 const loader = new THREE.TextureLoader();
 const load = (file) => {
@@ -63,10 +62,10 @@ woodMaterial.onBeforeCompile = (shader) => {
       varying float vEnd;`)
     .replace('#include <map_fragment>', `#include <map_fragment>
       vec4 pithColor = texture2D(pithMap, vPith);
-      diffuseColor.rgb = mix(diffuseColor.rgb, pithColor.rgb, pithColor.a);
-      vec3 rim = texture2D(map, vec2(vMapUv.x, vMapUv.y * ${(BAND / RIM).toFixed(3)})).rgb;
-      vec3 side = mix(rim, texture2D(splitMap, vGrain + splitShift).rgb, smoothstep(${(RIM * 0.8).toFixed(3)}, ${RIM.toFixed(3)}, vMapUv.y));
-      diffuseColor.rgb = mix(side, diffuseColor.rgb, vEnd);`);
+      diffuseColor.rgb = mix(diffuseColor.rgb, pithColor.rgb, pithColor.a * vEnd);
+      const vec3 luma = vec3(0.299, 0.587, 0.114);
+      float fibre = dot(texture2D(splitMap, vGrain + splitShift).rgb, luma) / dot(textureLod(splitMap, vec2(0.5), 12.0).rgb, luma);
+      diffuseColor.rgb *= mix(1.0, fibre, ${FIBRE.toFixed(2)} * (1.0 - vEnd));`);
 };
 
 // Новое дерево — новый срез: какая полоса колец и какая сердцевина.
@@ -391,28 +390,69 @@ export class TrunkVoxels {
 
   // Отделяет верхушку, которая падает; здесь остаётся пень. Перерезанная колонка делится по выпилу:
   // что выше него — верх. Целые колонки недопила рвутся на высоте h, а отщепившиеся (tongue —
-  // их номера) — ниже на длину отщепа split: полоса уходит с верхом, в пне остаётся жёлоб.
+  // их номера) — выше на длину отщепа split: полоса остаётся на пне, в комле верха — жёлоб.
   // Кусок между двумя пропилами в одной колонке уходит с верхом, если держится за него сбоку, иначе остаётся на пне.
   splitTop(h, tongue = new Set(), split = 0) {
     const { n, data, gap, gapLow, gapHigh } = this;
     const layer = n * n;
     this.standing = false;
     const tear = Math.round(h / VOXEL);
-    const tongueTear = Math.max(0, Math.round((h - split) / VOXEL));
+    const tongueTear = Math.min(this.ny - 1, Math.round((h + split) / VOXEL));
     const top = new Uint8Array(data.length);
     const between = (id) => {
       const j = Math.floor(id / layer);
       const col = id - j * layer;
       return gap[col] > 0 && j > gapLow[col] && j < gapHigh[col];
     };
+    // Колонки у коры, что в полосе пропилов выходят из ствола (rim): ствол клонится, а колонки отвесные,
+    // и на крутом резе их много. По высоте их не разделить — в каждом слое они идут туда же,
+    // куда соседняя древесина: кора под косым резом остаётся на пне, кора рядом с отщепом — на отщепе.
+    const rim = new Uint8Array(layer);
+    for (let col = 0; col < layer; col++) {
+      if (gap[col]) continue;
+      let wood = false, air = false;
+      for (let j = this.cutLow; j <= this.cutHigh; j++) {
+        if (data[j * layer + col]) wood = true;
+        else air = true;
+      }
+      rim[col] = wood && air ? 1 : 0;
+    }
+    const last = Math.max(this.cutHigh, tongueTear);
     const stack = [];
     for (let id = 0; id < data.length; id++) {
       if (!data[id]) continue;
       const j = Math.floor(id / layer);
       const col = id - j * layer;
+      if (rim[col] && j >= this.cutLow && j <= last) continue;
       if (this.above(j, col, tongue.has(col) ? tongueTear : tear)) {
         top[id] = 1;
         stack.push(id);
+      }
+    }
+    for (let j = this.cutLow; j <= last; j++) {
+      const known = new Uint8Array(layer);
+      const queue = [];
+      for (let col = 0; col < layer; col++) if (data[j * layer + col] && !rim[col]) { known[col] = 1; queue.push(col); }
+      for (let q = 0; q < queue.length; q++) {
+        const col = queue[q];
+        const i = col % n;
+        for (const nb of [i > 0 ? col - 1 : -1, i < n - 1 ? col + 1 : -1, col - n, col + n]) {
+          if (nb < 0 || nb >= layer || known[nb] || !rim[nb] || !data[j * layer + nb]) continue;
+          known[nb] = 1;
+          queue.push(nb);
+          if (top[j * layer + col]) {
+            top[j * layer + nb] = 1;
+            stack.push(j * layer + nb);
+          }
+        }
+      }
+      // Обрывок колонки, не связанный в слое ни с чем, решаем по высоте, как раньше.
+      for (let col = 0; col < layer; col++) {
+        const id = j * layer + col;
+        if (rim[col] && data[id] && !known[col] && this.above(j, col, tear)) {
+          top[id] = 1;
+          stack.push(id);
+        }
       }
     }
     while (stack.length) {
@@ -429,10 +469,10 @@ export class TrunkVoxels {
   }
 
   // Трещина отщепа: вдоль кромки пропила, в перерезанных колонках рядом с отщепляющимися (tongue),
-  // древесина под пропилом расходится вниз на split. Это раскол, а не пропил: волокна колонок
+  // древесина над пропилом расходится вверх на split. Это раскол, а не пропил: волокна колонок
   // уже перерезаны, считать их заново не нужно.
   splinter(tongue, split) {
-    const { n, data, gap, gapLow } = this;
+    const { n, data, gap, gapHigh } = this;
     const depth = Math.round(split / VOXEL);
     for (const col of tongue) {
       const i = col % n, k = (col - i) / n;
@@ -441,7 +481,7 @@ export class TrunkVoxels {
         if (ii < 0 || kk < 0 || ii >= n || kk >= n) continue;
         const nb = kk * n + ii;
         if (!gap[nb]) continue;
-        for (let j = Math.max(0, gapLow[nb] - depth); j < gapLow[nb]; j++) {
+        for (let j = gapHigh[nb] + 1; j <= Math.min(this.ny - 1, gapHigh[nb] + depth); j++) {
           if (!data[j * n * n + nb]) continue;
           data[j * n * n + nb] = 0;
           this.touch(j);
@@ -600,10 +640,10 @@ export class TrunkVoxels {
                 out.uv[t + 1] = 1 - Math.hypot(px - axis.x, pz - axis.z) / this.shape.outline(around, y);
                 out.pith[t] = 0.5 + (px - axis.x) / (PITH * size * this.shape.radius);
                 out.pith[t + 1] = 0.5 + (pz - axis.z) / (PITH * size * this.shape.radius);
-                // Волокна: u — по горизонтали вдоль сглаженной плоскости грани, v — по высоте.
+                // Рельеф волокон: u — по горизонтали вдоль сглаженной плоскости грани, v — по высоте.
                 const h = Math.hypot(nx, nz);
-                out.grain[t] = (h > 1e-3 ? (pz * nx - px * nz) / h : px) / SPLIT_TILE;
-                out.grain[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / SPLIT_TILE;
+                out.grain[t] = (h > 1e-3 ? (pz * nx - px * nz) / h : px) / SPLIT_W;
+                out.grain[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / SPLIT_H;
               }
             }
             out.faces++;
