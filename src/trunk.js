@@ -12,9 +12,11 @@ const CHUNK = 10; // слоёв в одном куске сетки; при пи
 // У каждого дерева своя полоса и своя сердцевина.
 // Грани вдоль ствола (стенки отщепа и раскола) колец не видят — там волокна, своя картинка в мировом масштабе,
 // квадрат SPLIT_TILE метров, волокна вертикально. Торец и стенка смешиваются по нормали: крутая грань — волокна.
-// У самой коры и на стенке остаётся край полосы колец — желтоватая кромка камбия толщиной RIM радиуса.
-const SPLIT_TILE = 0.25;
-const RIM = 0.05;
+// У коры стенка берёт внешний край полосы колец (кора, камбий, заболонь — BAND её высоты) и растягивает его
+// на RIM радиуса: сам камбий тоньше кубика, и у стенки из кубиков без растяжки кромка пропадает.
+const SPLIT_TILE = 0.5;
+const BAND = 0.03;
+const RIM = 0.06;
 const PITH = 0.5; // сторона квадрата сердцевины — доля радиуса ствола
 const loader = new THREE.TextureLoader();
 const load = (file) => {
@@ -62,8 +64,9 @@ woodMaterial.onBeforeCompile = (shader) => {
     .replace('#include <map_fragment>', `#include <map_fragment>
       vec4 pithColor = texture2D(pithMap, vPith);
       diffuseColor.rgb = mix(diffuseColor.rgb, pithColor.rgb, pithColor.a);
-      float ringsWeight = max(vEnd, 1.0 - smoothstep(${(RIM * 0.7).toFixed(3)}, ${(RIM * 1.3).toFixed(3)}, vMapUv.y));
-      diffuseColor.rgb = mix(texture2D(splitMap, vGrain + splitShift).rgb, diffuseColor.rgb, ringsWeight);`);
+      vec3 rim = texture2D(map, vec2(vMapUv.x, vMapUv.y * ${(BAND / RIM).toFixed(3)})).rgb;
+      vec3 side = mix(rim, texture2D(splitMap, vGrain + splitShift).rgb, smoothstep(${(RIM * 0.8).toFixed(3)}, ${RIM.toFixed(3)}, vMapUv.y));
+      diffuseColor.rgb = mix(side, diffuseColor.rgb, vEnd);`);
 };
 
 // Новое дерево — новый срез: какая полоса колец и какая сердцевина.
