@@ -117,23 +117,26 @@ export function growMaple(length, r, leanAz, base, start) {
   return { tree, com: com.divideScalar(mass), mass, spin };
 }
 
-// Поверхностные корни: лапа у земли уходит в сторону корнем — толстым, сужающимся, полузарытым.
-// Корни клёна неглубокие, поэтому выходят наружу на полметра-метр, извиваясь, и ныряют в землю.
-// Корень — одна гладкая трубка вдоль кривой, приплюснутая: в земле он раздаётся вширь.
-// Они только для вида: пилят ствол выше, а вес и прочность корней в счёт не идут.
+// Поверхностные корни продолжают корневые лапы ствола. Лапа у ствола — высокое узкое ребро, а дальше
+// по земле она становится корнем: всё ниже и круглее, тоньше, извивается и уходит под землю.
+// Корень — одна гладкая трубка вдоль кривой с овальным сечением. Начинается он на полпути вдоль лапы,
+// там, где она выступает на половину своей длины, и там же его сечение повторяет её: высота ребра
+// fade·ln 2, полуширина 0.83·w по углу (лапа — гауссово ребро). Так лапа перетекает в корень.
+// Корни только для вида: пилят ствол выше, а вес и прочность корней в счёт не идут.
 const ROOT_RINGS = 24;
 export function growRoots(shape) {
   const roots = new THREE.Group();
   for (const lobe of shape.lobes) {
-    const r0 = shape.radius * lobe.size * 0.45;
-    const reach = rand(0.4, 1.1);
+    const out = shape.radius * lobe.size;
+    const d0 = shape.outline(lobe.at, 0) - out / 2;
+    const tall = lobe.fade * Math.LN2, wide = d0 * lobe.w * 0.83, thin = rand(0.4, 0.55) * wide;
+    const reach = rand(0.35, 0.8);
     let az = lobe.at;
-    // Корень выходит из лапы там, где она опустилась до его толщины: верх корня продолжает склон лапы.
-    const points = [flat(az).multiplyScalar(shape.outline(az, r0) - r0).setY(0)];
+    const points = [flat(az).multiplyScalar(d0 - 0.02)];
     for (let i = 1; i <= 3; i++) {
       az += rand(-0.2, 0.2);
       const p = points[i - 1].clone().add(flat(az).multiplyScalar(reach / 3));
-      p.y = i === 3 ? -0.6 * r0 : -rand(0.1, 0.3) * r0; // в конце корень уходит под землю
+      p.y = i === 3 ? -1.5 * thin : -rand(0, 0.3) * thin; // в конце корень уходит под землю
       points.push(p);
     }
     const curve = new THREE.CatmullRomCurve3(points);
@@ -141,18 +144,19 @@ export function growRoots(shape) {
     const v = geometry.attributes.position;
     const c = new THREE.Vector3(), o = new THREE.Vector3();
     for (let n = 0; n < v.count; n++) {
-      const ring = Math.floor(n / 11);
-      const u = ring / ROOT_RINGS;
+      const u = Math.floor(n / 11) / ROOT_RINGS;
       curve.getPointAt(u, c);
-      o.fromBufferAttribute(v, n).sub(c).multiplyScalar(r0 * (1 - 0.7 * u));
-      o.y *= 0.7;
-      v.setXYZ(n, c.x + o.x, c.y + o.y, c.z + o.z);
+      o.fromBufferAttribute(v, n).sub(c);
+      // Ребро быстро опускается и становится круглым корнем, а вширь корень сужается плавно.
+      const across = THREE.MathUtils.lerp(wide, thin, u);
+      const up = thin + (tall - thin) * (1 - u) ** 3;
+      v.setXYZ(n, c.x + o.x * across, c.y + o.y * up, c.z + o.z * across);
     }
     geometry.computeVertexNormals();
     // У трубки u идёт вдоль, а у коры — по кругу: меняем местами, чтобы борозды шли вдоль корня.
     const uv = geometry.attributes.uv;
     for (let n = 0; n < uv.count; n++) uv.setXY(n, uv.getY(n), uv.getX(n));
-    roots.add(barkMesh(geometry, Math.PI * r0 * 1.3, curve.getLength()));
+    roots.add(barkMesh(geometry, Math.PI * (wide + tall), curve.getLength()));
   }
   return roots;
 }

@@ -121,7 +121,7 @@ export function trunkShape(radius, height, leanAz) {
   const lobes = Array.from({ length: count }, (_, i) => {
     const at = phase + ((i + rand(-0.3, 0.3)) / count) * 2 * Math.PI;
     const w = rand(0.18, 0.32);
-    return { at, size: rand(0.3, 0.8), fade: rand(0.2, 0.45), w, ridge: table((a) => Math.exp(-((wrap(a - at) / w) ** 2))) };
+    return { at, size: rand(0.3, 0.8), fade: rand(0.25, 0.5), w, ridge: table((a) => Math.exp(-((wrap(a - at) / w) ** 2))) };
   });
 
   const flare = rand(0.08, 0.15);
