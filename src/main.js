@@ -309,10 +309,11 @@ function distanceToBark(forward) {
 function sawCandidate(forward) {
   const bark = distanceToBark(forward);
   if (bark === null || bark > REACH) return null;
-  // Кромка встаёт туда, где она коснулась коры, — на высоте точки под прицелом.
+  // Кромка встаёт туда, где она коснулась коры, — на высоте точки под прицелом. Точка под прицелом
+  // касается коры на bark; если никакая другая точка кромки не касается раньше, касание — она.
   const from = player.pos.clone().setY(entryHeight(bark));
   const side = new THREE.Vector3(-forward.z, 0, forward.x);
-  const origin = from.addScaledVector(forward, acrossBar(from, forward, side, bark).enter);
+  const origin = from.addScaledVector(forward, acrossBar(from, forward, side, bark)?.enter ?? bark);
   const fresh = { origin, edge: origin.clone(), q: facing(player.yaw), depth: 0 };
   const f = basis(fresh);
   return round.cuts.find((c) => {
