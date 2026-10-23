@@ -432,6 +432,29 @@ export class TrunkVoxels {
     });
   }
 
+  // Нормаль свежего среза у кубика (i, j, k): куда в среднем смотрит пустота вокруг него в кубе 5×5×5.
+  // Косой пропил в кубиках — лесенка, а освещать его надо как ровную плоскость, иначе ступеньки
+  // через одну тёмные и срез выглядит рваными волокнами. Ниже сетки — земля, выше — ствол: там пустоты нет.
+  // Тонкая пластинка, у которой пустота с обеих сторон поровну, смотрит туда же, куда сама грань dir.
+  cutNormal(i, j, k, dir) {
+    const { n, ny, data } = this;
+    let [x, y, z] = dir;
+    for (let dj = -2; dj <= 2; dj++) {
+      const jj = j + dj;
+      if (jj < 0 || jj >= ny) continue;
+      for (let dk = -2; dk <= 2; dk++) {
+        const kk = k + dk;
+        for (let di = -2; di <= 2; di++) {
+          const ii = i + di;
+          if (ii >= 0 && kk >= 0 && ii < n && kk < n && data[(jj * n + kk) * n + ii]) continue;
+          x += di; y += dj; z += dk;
+        }
+      }
+    }
+    const l = Math.hypot(x, y, z);
+    return [x / l, y / l, z / l];
+  }
+
   // Рисуем только грани между древесиной и пустотой. Кора гладкая: нормаль у неё радиальная,
   // а не по грани кубика, иначе ствол выглядит лесенкой из светлых и тёмных полос.
   // Текстура коры натянута на цилиндр вокруг оси ствола: u — вдоль окружности, v — по высоте от земли, обе в метрах.
@@ -461,6 +484,8 @@ export class TrunkVoxels {
             const a = Math.atan2(this.z(k) - axis.z, this.x(i) - axis.x);
             if (bark) {
               nx = Math.cos(a); nyy = 0; nz = Math.sin(a);
+            } else {
+              [nx, nyy, nz] = this.cutNormal(i, j, k, dir);
             }
             out.reserve();
             out.bark[out.faces] = bark ? 1 : 0;
