@@ -605,10 +605,9 @@ function startTwist(tw, c) {
 // speed — с какой скоростью дерево уже поворачивается, если недопил поддавался.
 function startFall(tip, c, slip = 0, speed = 0) {
   const { sec } = round;
-  const hinge = sec.intact.length > 0;
   const h = pivotHeight(sec, tip.u, tip.p);
   // Падая, дерево тянет недопил, пока тот не порвётся, то есть до полной прочности.
-  if (hinge) splitHinge(sec, tip, 1);
+  if (sec.intact.length) splitHinge(sec, tip, 1);
   if (!round.top) round.upper.add(round.voxels.splitTop(h, round.tongue, round.split).group);
   round.top = true;
   const pivot = new THREE.Group();
@@ -617,14 +616,17 @@ function startFall(tip, c, slip = 0, speed = 0) {
   pivot.attach(round.upper);
 
   const a = c.dot(tip.u) - tip.p;
+  // На сколько недопил уже поддался — на столько раньше он порвётся и сомкнётся подпил.
+  // Поддался дальше, чем гнётся, — он уже порван, и дерево летит само.
   const given = Math.max(0, round.give.tilt.dot(tip.u));
+  const tear = sec.intact.length ? tearAngle(sec, tip.u, round.split) - given : 0;
+  const hinge = tear > 0;
   round.fall = {
     pivot, u: tip.u.clone(), p: tip.p, axis: UP.clone().cross(tip.u),
     angle: 0, speed, hinge,
     a, b: round.com.y + round.upper.position.y - h, // съехавший верх опустился
     hold: tip.hold,
-    // На сколько недопил уже поддался — на столько раньше он порвётся и сомкнётся подпил.
-    tear: hinge ? Math.max(0, tearAngle(sec, tip.u, round.split) - given) : 0,
+    tear,
     shut: hinge ? closing(sec, tip.u, tip.p) - given : Infinity,
     edge: Math.max(...sec.all.map((f) => f.x * tip.u.x + f.z * tip.u.z)),
     lateral: c.clone().setY(0).addScaledVector(tip.u, -c.dot(tip.u)),
