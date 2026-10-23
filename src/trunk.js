@@ -141,18 +141,35 @@ export function trunkShape(radius, height, leanAz) {
     lobes.forEach((l, n) => { lobeR[n] = radius * l.size * Math.exp(-y / l.fade); far += lobeR[n]; });
     near = scale(y) * radius * low;
   };
-  const outline = (a, y) => {
-    layer(y);
-    const i = index(a);
-    let r = scale(y) * profile(a);
+  const at = (i, y) => {
+    let r = (scale(y) * radius * shapeTable[i]) / top;
     for (let n = 0; n < count; n++) r += lobeR[n] * lobes[n].ridge[i];
     return r;
+  };
+  const outline = (a, y) => {
+    layer(y);
+    return at(index(a), y);
+  };
+  // Нормаль коры в точке на азимуте a, высоте y, на расстоянии d от оси: поверхность d = outline(a, y),
+  // поэтому нормаль — от оси, с поправкой на то, как контур меняется по углу и по высоте. На лапах она
+  // смотрит вбок и вверх, вдоль склона лапы, а не вбок, как у прямого ствола.
+  const STEP = (2 * Math.PI) / ANGLES;
+  const normal = (a, y, d) => {
+    layer(y);
+    const i = index(a);
+    const dA = (at((i + 1) % ANGLES, y) - at((i + ANGLES - 1) % ANGLES, y)) / (2 * STEP);
+    let dY = ((-flare / 0.3) * Math.exp(-y / 0.3) - TAPER) * profile(a);
+    for (let n = 0; n < count; n++) dY -= (lobeR[n] / lobes[n].fade) * lobes[n].ridge[i];
+    const c = Math.cos(a), sn = Math.sin(a), t = dA / d;
+    const nx = c + t * sn, nz = sn - t * c, ny = -dY;
+    const len = Math.hypot(nx, ny, nz);
+    return [nx / len, ny / len, nz / len];
   };
   const off = (y) => slope * y + (bow * y * y) / 2;
   const lean = new THREE.Vector3(Math.cos(leanAz), 0, -Math.sin(leanAz));
   const center = (y) => lean.clone().multiplyScalar(off(y));
   return {
-    radius, leanAz, profile, scale, outline, center, lobes,
+    radius, leanAz, profile, scale, outline, normal, center, lobes,
     // Направление оси ствола на высоте y.
     axis: (y) => lean.clone().multiplyScalar(slope + bow * y).setY(1).normalize(),
     // Под землёй ствола нет: там лапы раздувались бы без конца.
@@ -554,7 +571,7 @@ export class TrunkVoxels {
             let nx = dir[0], nyy = dir[1], nz = dir[2];
             const a = Math.atan2(this.z(k) - axis.z, this.x(i) - axis.x);
             if (bark) {
-              nx = Math.cos(a); nyy = 0; nz = Math.sin(a);
+              [nx, nyy, nz] = this.shape.normal(a, y, Math.hypot(this.x(i) - axis.x, this.z(k) - axis.z));
             } else {
               [nx, nyy, nz] = this.cutNormal(i, j, k, dir);
             }
@@ -573,7 +590,9 @@ export class TrunkVoxels {
               const turn = a + Math.atan2(Math.sin(around - a), Math.cos(around - a));
               if (bark) {
                 out.uv[t] = (turn * this.radius) / BARK_TILE;
-                out.uv[t + 1] = ((this.floor + j + corner[1]) * VOXEL) / BARK_TILE;
+                // По лапе кора идёт вниз и наружу: v — путь вдоль склона, а не одна высота.
+                const down = Math.max(0, Math.hypot(px - axis.x, pz - axis.z) - size * this.shape.profile(around));
+                out.uv[t + 1] = ((this.floor + j + corner[1]) * VOXEL - down) / BARK_TILE;
               } else {
                 // Древесина — в полярных координатах: u — доля оборота, v — от коры (0) к сердцевине (1).
                 // Радиус меряем долей контура, поэтому годичные кольца повторяют форму ствола, и лапы тоже.
