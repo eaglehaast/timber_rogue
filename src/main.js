@@ -220,7 +220,7 @@ function newRound(treeSeed = (Math.random() * 2 ** 32) >>> 0) {
     weight: tree.mass * G,
     seed: treeSeed,
     wind: { dir: dirOf(random() * Math.PI * 2), max: 0.05 + random() * 0.2, phase: random() * 9 },
-    time: 0, sway: new THREE.Vector3(), tilt: new THREE.Vector3(), bent: new THREE.Vector3(), gap: null,
+    time: 0, sway: new THREE.Vector3(), tilt: new THREE.Vector3(), bent: new THREE.Vector3(), gap: null, squeeze: false,
     // Насколько недопил поддался насовсем, вокруг какой оси, куда и с какой скоростью сейчас поворачивается.
     give: { tilt: new THREE.Vector3(), at: new THREE.Vector3(), u: null, speed: 0 },
     sec: null, secVersion: -1,
@@ -486,7 +486,6 @@ function stand(dt) {
 
   // Щель под шиной: наклон ствола её сжимает или раскрывает. Шина лежит поперёк ствола, и когда он
   // клонится вбок, у одного её конца щель смыкается раньше — берём самое узкое место там, где шина в древесине.
-  round.gap = null;
   if (!saw || saw.depth < 0.05) return;
   const b = basis(saw);
   for (let w = -BAR_L / 2; w <= BAR_L / 2; w += VOXEL) {
@@ -509,13 +508,15 @@ function stand(dt) {
     touch = contact(sec, dir, p);
   }
   if (squeezed && seat >= 1 - 1e-6 && Math.abs(planeY(b, touch) - touch.mid) <= VOXEL) round.gap = 0;
+  // Вес уже давит на шину: ещё немного — и закусит. По этому горит лампа перегрузки на пиле.
+  round.squeeze = squeezed && seat > SEATING;
   if (mode !== 'cut') return;
   // Сужение — предупреждение. Кто пилит дальше, тот зажимает шину: цепь встаёт, пилу не вынуть.
   if (round.gap < PINCH) {
     saw.pinched = true;
     mode = 'aim';
     say('pinch', 'Шину зажало: щель сомкнулась, цепь встала. Пилу не вынуть');
-  } else if (squeezed && seat > SEATING) {
+  } else if (round.squeeze) {
     say('narrow', 'Щель сужается — вес давит на шину, сейчас закусит');
     unsay('open');
   } else if (round.gap > OPEN) {
@@ -839,6 +840,9 @@ function update(dt) {
     round.voxels.remesh();
   }
   if (saw?.loose) rest(saw);
+  // Щель под шиной и давит ли на неё вес — заново каждый кадр: упавший ствол шину уже не держит.
+  round.gap = null;
+  round.squeeze = false;
   if (!round.top) stand(dt);
   else if (round.slide) slideTop(dt);
 
