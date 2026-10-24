@@ -93,7 +93,7 @@ const TAPER = 0.04; // настолько (доля радиуса) ствол �
 // Низ ствола до высоты height. Сечение — не круг: эллипс, вытянутый в случайную сторону, и бугры
 // от старых сучков (profile — радиус по азимуту, самый большой — radius). У земли ствол раздаётся
 // корневыми лапами: 4–7 рёбер, между ними впадины. Кверху лапы сходят на нет рёбрами по стволу,
-// а у земли уходят в стороны корнями (lobes — где и какие, по ним растут корни, см. maple.js).
+// а у земли часть из них уходит в стороны корнями (lobes — где и какие).
 // Кверху ствол тоньшает и клонится в сторону leanAz, всё круче.
 // outline(a, y) — радиус ствола на высоте y по азимуту a от оси.
 export function trunkShape(radius, height, leanAz) {
@@ -116,12 +116,18 @@ export function trunkShape(radius, height, leanAz) {
 
   // Лапы стоят примерно поровну по кругу. size — насколько лапа у земли выступает (доля радиуса),
   // fade — за какую высоту она ослабевает в e раз, w — её ширина по углу.
+  // У части лап над землёй выходит корень: лапа у самой земли тянется дальше узким низким гребнем.
+  // root — на сколько дальше (м), rootH — на какой высоте корень сходит на нет, ширина — вдвое уже лапы.
   const count = 4 + Math.floor(random() * 4);
   const phase = random() * Math.PI * 2;
   const lobes = Array.from({ length: count }, (_, i) => {
     const at = phase + ((i + rand(-0.3, 0.3)) / count) * 2 * Math.PI;
     const w = rand(0.18, 0.32);
-    return { at, size: rand(0.3, 0.8), fade: rand(0.25, 0.5), w, ridge: table((a) => Math.exp(-((wrap(a - at) / w) ** 2))) };
+    const ridge = (width) => table((a) => Math.exp(-((wrap(a - at) / width) ** 2)));
+    return {
+      at, size: rand(0.3, 0.8), fade: rand(0.25, 0.5), w, ridge: ridge(w),
+      root: random() < 0.5 ? rand(0.12, 0.3) : 0, rootH: rand(0.06, 0.12), narrow: ridge(w * 0.45),
+    };
   });
 
   const flare = rand(0.08, 0.15);
@@ -131,18 +137,24 @@ export function trunkShape(radius, height, leanAz) {
   // Кубики проверяются слой за слоем, поэтому для последнего слоя запоминаем высоты лап и границы:
   // дальше far — точно не ствол, ближе near — точно ствол, считать контур нужно только между ними.
   const low = Math.min(...shapeTable) / top;
-  const lobeR = new Float32Array(count);
+  const lobeR = new Float32Array(count), rootR = new Float32Array(count), rootD = new Float32Array(count);
   let layerY = NaN, near = 0, far = 0;
   const layer = (y) => {
     if (y === layerY) return;
     layerY = y;
     far = scale(y) * radius;
-    lobes.forEach((l, n) => { lobeR[n] = radius * l.size * Math.exp(-y / l.fade); far += lobeR[n]; });
+    lobes.forEach((l, n) => {
+      const left = Math.max(0, 1 - y / l.rootH); // сколько осталось до верха корня
+      lobeR[n] = radius * l.size * Math.exp(-y / l.fade);
+      rootR[n] = l.root * left * left;
+      rootD[n] = (-2 * l.root * left) / l.rootH;
+      far += lobeR[n] + rootR[n];
+    });
     near = scale(y) * radius * low;
   };
   const at = (i, y) => {
     let r = (scale(y) * radius * shapeTable[i]) / top;
-    for (let n = 0; n < count; n++) r += lobeR[n] * lobes[n].ridge[i];
+    for (let n = 0; n < count; n++) r += lobeR[n] * lobes[n].ridge[i] + rootR[n] * lobes[n].narrow[i];
     return r;
   };
   const outline = (a, y) => {
@@ -158,7 +170,7 @@ export function trunkShape(radius, height, leanAz) {
     const i = index(a);
     const dA = (at((i + 1) % ANGLES, y) - at((i + ANGLES - 1) % ANGLES, y)) / (2 * STEP);
     let dY = ((-flare / 0.3) * Math.exp(-y / 0.3) - TAPER) * profile(a);
-    for (let n = 0; n < count; n++) dY -= (lobeR[n] / lobes[n].fade) * lobes[n].ridge[i];
+    for (let n = 0; n < count; n++) dY += -(lobeR[n] / lobes[n].fade) * lobes[n].ridge[i] + rootD[n] * lobes[n].narrow[i];
     const c = Math.cos(a), sn = Math.sin(a), t = dA / d;
     const nx = c + t * sn, nz = sn - t * c, ny = -dY;
     const len = Math.hypot(nx, ny, nz);
@@ -181,7 +193,7 @@ export function trunkShape(radius, height, leanAz) {
     },
     // Квадрат в плане, в который ствол помещается на всей высоте: середина и полуширина.
     mid: center(height / 2).setY(0),
-    reach: radius * (1 + flare + Math.max(...lobes.map((l) => l.size))) + off(height) / 2 + VOXEL,
+    reach: radius * (1 + flare) + Math.max(...lobes.map((l) => radius * l.size + l.root)) + off(height) / 2 + VOXEL,
   };
 }
 

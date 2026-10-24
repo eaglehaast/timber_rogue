@@ -5,7 +5,7 @@ import {
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, BAR_L, BAR_W } from './saw.js';
-import { growMaple, growRoots, DENSITY } from './maple.js';
+import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
@@ -209,7 +209,7 @@ function newRound(treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   const root = new THREE.Group();
   voxels.standing = true;
   upper.add(voxels.lift);
-  root.add(voxels.group, upper, growRoots(voxels.shape));
+  root.add(voxels.group, upper);
   scene.add(root);
   const yard = []; // постройки (yard.js) пока убраны: отвлекают от дерева
   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
