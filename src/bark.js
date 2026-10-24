@@ -1,47 +1,16 @@
 import * as THREE from 'three';
+import { tiles, soften } from './surface.js';
 
 // Кора — общий материал ствола и ветвей. Текстура лежит в мировом масштабе: квадрат BARK_TILE метров.
 // Чтобы плитка не бросалась в глаза, у каждого дерева своя картинка из нескольких, свой сдвиг
-// и крупность, а поверх — крупные пятна тона, которые нигде не повторяются.
+// и крупность, а поверх — пятна тона (см. surface.js).
 export const BARK_TILE = 0.4;
-const FILES = [1, 2, 3, 4, 5].map((i) => `assets/textures/bark-${i}.jpg`);
-// Насколько оставить фотографичность: контраст фактуры и насыщенность. Меньше — мягче и спокойнее.
-const CONTRAST = 0.6;
-const SATURATION = 0.8;
+const textures = tiles([1, 2, 3, 4, 5].map((i) => `assets/textures/bark-${i}.jpg`));
 
-const loader = new THREE.TextureLoader();
-const textures = FILES.map((file) => {
-  const texture = loader.load(file);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.anisotropy = 8;
-  return texture;
+// Пятна тона — ячейки около метра и трети метра.
+export const barkMaterial = soften(new THREE.MeshLambertMaterial(), {
+  contrast: 0.6, saturation: 0.8, scales: [0.4, 1.3], low: [0.78, 0.8, 0.76], high: [1.1, 1.05, 1.0],
 });
-
-export const barkMaterial = new THREE.MeshLambertMaterial();
-
-// Фактуру смягчаем к среднему цвету картинки (его даёт самый мелкий мип-уровень), потом
-// кладём пятна тона — плавный шум по координатам текстуры: ячейки около метра и треть метра.
-barkMaterial.onBeforeCompile = (shader) => {
-  shader.fragmentShader = shader.fragmentShader
-    .replace('#include <common>', `#include <common>
-      float barkHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float barkNoise(vec2 p) {
-        vec2 i = floor(p), f = fract(p);
-        f = f * f * (3.0 - 2.0 * f);
-        return mix(mix(barkHash(i), barkHash(i + vec2(1, 0)), f.x),
-                   mix(barkHash(i + vec2(0, 1)), barkHash(i + vec2(1, 1)), f.x), f.y);
-      }`)
-    .replace('#include <map_fragment>', `#include <map_fragment>
-      #ifdef USE_MAP
-        vec3 barkMean = textureLod(map, vMapUv, 12.0).rgb * diffuse;
-        diffuseColor.rgb = mix(barkMean, diffuseColor.rgb, ${CONTRAST.toFixed(2)});
-        float barkLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-        diffuseColor.rgb = mix(vec3(barkLuma), diffuseColor.rgb, ${SATURATION.toFixed(2)});
-        float tone = 0.6 * barkNoise(vMapUv * 0.4) + 0.4 * barkNoise(vMapUv * 1.3 + 7.0);
-        diffuseColor.rgb *= mix(vec3(0.78, 0.8, 0.76), vec3(1.1, 1.05, 1.0), tone);
-      #endif`);
-};
 
 // Новое дерево — новая кора: какая из картинок, откуда начинается узор и насколько он крупный.
 export function dressBark() {
