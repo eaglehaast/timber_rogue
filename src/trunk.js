@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { barkMaterial, BARK_TILE } from './bark.js';
+import { BARK_TILE } from './bark.js';
 import { random } from './random.js';
 
 // Низ ствола — сетка кубиков-вокселей: древесина есть или выпилена.
@@ -35,12 +35,7 @@ const splits = [1].map((i) => {
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
   return texture;
 });
-const pithMap = { value: piths[0] };
-const splitMap = { value: splits[0] };
-const splitShift = { value: new THREE.Vector2() }; // откуда начинается узор волокон у этого дерева
-const woodMaterial = new THREE.MeshLambertMaterial({ map: rings[0] });
-woodMaterial.onBeforeCompile = (shader) => {
-  Object.assign(shader.uniforms, { pithMap, splitMap, splitShift });
+const woodShader = (shader) => {
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', `#include <common>
       attribute vec2 pith;
@@ -68,12 +63,20 @@ woodMaterial.onBeforeCompile = (shader) => {
       diffuseColor.rgb *= mix(1.0, fibre, ${FIBRE.toFixed(2)} * (1.0 - vEnd));`);
 };
 
-// Новое дерево — новый срез: какая полоса колец и какая сердцевина.
+// Срез нового дерева, свой у каждого: какая полоса колец, какая сердцевина и откуда начинается узор волокон.
 export function dressWood() {
-  woodMaterial.map = rings[Math.floor(Math.random() * rings.length)];
-  pithMap.value = piths[Math.floor(Math.random() * piths.length)];
-  splitMap.value = splits[Math.floor(Math.random() * splits.length)];
-  splitShift.value.set(Math.random(), Math.random());
+  const pick = (list) => list[Math.floor(Math.random() * list.length)];
+  const uniforms = {
+    pithMap: { value: pick(piths) },
+    splitMap: { value: pick(splits) },
+    splitShift: { value: new THREE.Vector2(Math.random(), Math.random()) },
+  };
+  const material = new THREE.MeshLambertMaterial({ map: pick(rings) });
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    woodShader(shader);
+  };
+  return material;
 }
 
 // Углы грани кубика для каждого из шести направлений, по кругу снаружи.
@@ -201,8 +204,10 @@ export class TrunkVoxels {
   // shape — форма ствола (trunkShape): по ней кубики заполняются, а грань, за которой форма кончается, —
   // кора, остальные открытые грани — свежий срез. floor — с какого слоя (от земли) начинается сетка:
   // у отвалившихся кусков она не с нуля, но сетка в плане у всех кусков одна.
-  constructor(shape, height, floor = 0) {
+  // skin — материалы коры и среза этого дерева (dressBark, dressWood): куски берут их от ствола.
+  constructor(shape, height, skin, floor = 0) {
     this.shape = shape;
+    this.skin = skin;
     this.radius = shape.radius;
     this.floor = floor;
     this.n = Math.ceil((2 * shape.reach) / VOXEL);
@@ -245,7 +250,7 @@ export class TrunkVoxels {
     this.band = '';
     this.chunks = [];
     const mesh = () => {
-      const m = new THREE.Mesh(new THREE.BufferGeometry(), [barkMaterial, woodMaterial]);
+      const m = new THREE.Mesh(new THREE.BufferGeometry(), skin);
       m.castShadow = m.receiveShadow = true;
       return m;
     };
@@ -540,7 +545,7 @@ export class TrunkVoxels {
       jLow = Math.min(jLow, j);
       jHigh = Math.max(jHigh, j);
     }
-    const part = new TrunkVoxels(this.shape, (jHigh - jLow + 1) * VOXEL, this.floor + jLow);
+    const part = new TrunkVoxels(this.shape, (jHigh - jLow + 1) * VOXEL, this.skin, this.floor + jLow);
     part.data.fill(0);
     part.top.fill(-1);
     part.chunks.forEach((c) => { c.dirty = false; });
