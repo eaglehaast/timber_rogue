@@ -568,8 +568,10 @@ function splitHinge(sec, tip, load) {
 }
 
 // Верх перерезан по косой круче, чем держит трение, — он съезжает по срезу.
+// Рвать нечего, но колонки у коры, которых пила не коснулась, всё равно делятся по высоте:
+// что ниже середины полосы пропилов — пень. С нулём сюда уезжала с верхом вся кора пня до земли.
 function startSlide(s) {
-  round.upper.add(round.voxels.splitTop(0).group);
+  round.upper.add(round.voxels.splitTop(round.voxels.middle * VOXEL).group);
   round.top = true;
   round.slide = { ...s, s: 0, v: 0 };
   mode = 'free';
