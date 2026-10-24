@@ -167,7 +167,7 @@ function growTree(voxels, r) {
   const { shape } = voxels;
   const s = shape.scale(ZONE_H);
   const { tree, com, mass, spin } = growMaple(
-    TREE_H - ZONE_H, r * s, shape.leanAz, (a) => s * shape.profile(a), shape.axis(ZONE_H), voxels.skin[0],
+    TREE_H - ZONE_H, r * s, shape.leanAz, (a) => shape.outline(a, ZONE_H), shape.axis(ZONE_H), voxels.skin[0],
   );
   const bend = new THREE.Group();
   bend.position.copy(shape.center(ZONE_H)).setY(ZONE_H - 0.03);
@@ -839,7 +839,7 @@ function update(dt) {
     const c = shape.center(y).add(round.base);
     const dx = player.pos.x - c.x, dz = player.pos.z - c.z;
     const dist = Math.hypot(dx, dz);
-    const minDist = shape.scale(y) * shape.profile(Math.atan2(dz, dx)) + 0.35;
+    const minDist = shape.outline(Math.atan2(dz, dx), y) + 0.35;
     if (dist < minDist) player.pos.set(c.x + (dx / dist) * minDist, player.pos.y, c.z + (dz / dist) * minDist);
   }
   pushOut(round.yard, player.pos, 0.35);
