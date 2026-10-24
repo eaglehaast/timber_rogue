@@ -15,8 +15,19 @@ export const tiles = (files) => files.map((file) => {
 // самый мелкий мип-уровень), гасим насыщенность и кладём поверх крупные пятна тона — плавный шум
 // по координатам текстуры двух размеров, scales — сколько ячеек шума на плитку. Пятна нигде
 // не повторяются и разбивают плитку.
-export function soften(material, { contrast, saturation, scales: [a, b], low, high }) {
+// cells — картинка не одна плитка, а набор cells × cells плиток с общими краями: каждая клетка
+// поверхности берёт из набора свою плитку по хешу номера клетки, так что узор не повторяется.
+export function soften(material, { contrast, saturation, scales: [a, b], low, high, cells = 0 }) {
   const vec3 = (c) => `vec3(${c.map((v) => v.toFixed(2)).join(', ')})`;
+  // Номер плитки скачет на краю клетки, поэтому мип-уровень берём по производным непрерывных координат.
+  const tile = cells ? `
+    vec4 softTile(vec2 uv) {
+      const float N = ${cells.toFixed(1)};
+      float k = floor(softHash(floor(uv)) * N * N);
+      vec2 at = (vec2(mod(k, N), floor(k / N)) + fract(uv)) / N;
+      return textureGrad(map, at, dFdx(uv) / N, dFdy(uv) / N);
+    }` : '';
+  const sample = cells ? THREE.ShaderChunk.map_fragment.replace('texture2D( map, vMapUv )', 'softTile(vMapUv)') : '#include <map_fragment>';
   material.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
@@ -27,7 +38,8 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
           return mix(mix(softHash(i), softHash(i + vec2(1, 0)), f.x),
                      mix(softHash(i + vec2(0, 1)), softHash(i + vec2(1, 1)), f.x), f.y);
         }`)
-      .replace('#include <map_fragment>', `#include <map_fragment>
+      .replace('#include <map_pars_fragment>', `#include <map_pars_fragment>${tile}`)
+      .replace('#include <map_fragment>', `${sample}
         #ifdef USE_MAP
           vec3 softMean = textureLod(map, vMapUv, 12.0).rgb * diffuse;
           diffuseColor.rgb = mix(softMean, diffuseColor.rgb, ${contrast.toFixed(2)});
