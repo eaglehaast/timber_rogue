@@ -3,7 +3,9 @@ import * as THREE from 'three';
 // Аккумуляторная пила. Оси: x — вдоль шины (мотор на +x), y — куда шина идёт в древесину,
 // z — перпендикуляр к полотну (при горизонтальном резе — вверх). Начало координат — середина шины.
 // Рукояти лежат в плоскости шины, на −y: при горизонтальном резе пила лежит на боку, как в жизни.
-export const BAR_L = 0.7;  // длина шины: столько она перекрывает поперёк пропила
+// Длина шины — столько она перекрывает поперёк пропила; переключается клавишей: прежняя 70 см
+// и настоящая, 30 см (12", 45 звеньев цепи). Корпус от длины не зависит, полотно и цепь строятся под неё.
+export const BARS = [0.7, 0.3];
 export const BAR_W = 0.05; // ширина шины: столько её позади режущей кромки сидит в щели
 
 // Комплекты картинок пилы и их размеры готовит tools/saw.py; в игре они переключаются клавишей.
@@ -32,13 +34,14 @@ async function loadPack(name) {
   // Корпус — «подушка» по силуэту вида сбоку. Карта -shape.png по клетке BODY.cell пикселей:
   // в красном — z лицевого листа, в синем — z тыльного (128 + полмиллиметра на единицу),
   // в зелёном — расстояние до края силуэта в шестнадцатых клетки (128 — край).
-  const bodyX = (px) => BAR_L / 2 + (BODY.mount[0] - px) * BODY.m;
+  // Корпус — в своих осях, x от крепления шины: на пилу его ставят на конец шины, bar / 2.
+  const bodyX = (px) => (BODY.mount[0] - px) * BODY.m;
   const bodyY = (py) => (py - BODY.mount[1]) * BODY.m;
 
   // Шина: полотно из -bar.png (вырезано из картинки по пикселям BAR.px) и цепь лентой вокруг.
-  // Пятка и нос — в масштабе картинки, середина (BAR.stretch) тянется под длину BAR_L.
-  const SLOT_X = bodyX(BODY.slot);   // паз полотна садится на шпильки корпуса
-  const NOSE_X = -BAR_L / 2 + 0.012; // кончик полотна: цепь на носу дотягивается до −BAR_L / 2
+  // Пятка и нос — в масштабе картинки, середина (BAR.stretch) тянется под длину шины bar.
+  const slotX = (bar) => bar / 2 + bodyX(BODY.slot); // паз полотна садится на шпильки корпуса
+  const noseX = (bar) => -bar / 2 + 0.012;            // кончик полотна: цепь на носу дотягивается до −bar / 2
 
   // Лицевой лист смотрит на +z, тыльный — на −z. Край проводим по клеткам, как изолинию (marching squares):
   // где зелёный переходит через 128, ставим вершину на ребре клетки, и там оба листа сходятся.
@@ -91,9 +94,9 @@ async function loadPack(name) {
     return geometry;
   }
 
-  function plateGeometry() {
+  function plateGeometry(bar) {
     const [left, right, top, bottom] = BAR.px, [a, b] = BAR.stretch;
-    const heel = (px) => SLOT_X - (px - BAR.slot[0]) * BAR.m, nose = (px) => NOSE_X + (BAR.tip - px) * BAR.m;
+    const heel = (px) => slotX(bar) - (px - BAR.slot[0]) * BAR.m, nose = (px) => noseX(bar) + (BAR.tip - px) * BAR.m;
     const position = [], uv = [], index = [];
     [[left, heel(left)], [a, heel(a)], [b, nose(b)], [right, nose(right)]].forEach(([px, x], k) => {
       for (const py of [top, bottom]) {
@@ -108,14 +111,14 @@ async function loadPack(name) {
   // Цепь — лента по краю полотна: вдоль верхней кромки к носу, вокруг носа и обратно к корпусу.
   // Звенья смотрят внутрь и чуть заходят на полотно (рисуются поверх него), зубья — наружу;
   // конец ленты прячется в корпусе, там и шов картинки.
-  function chainGeometry() {
-    const noseC = NOSE_X + BAR.radius, r = BAR.radius - CHAIN.inset;
-    const path = [[SLOT_X, -r, 0, -1]];
+  function chainGeometry(bar) {
+    const noseC = noseX(bar) + BAR.radius, r = BAR.radius - CHAIN.inset;
+    const path = [[slotX(bar), -r, 0, -1]];
     for (let k = 0; k <= 24; k++) {
       const a = -Math.PI / 2 - (Math.PI * k) / 24;
       path.push([noseC + r * Math.cos(a), r * Math.sin(a), Math.cos(a), Math.sin(a)]);
     }
-    path.push([SLOT_X, r, 0, 1]);
+    path.push([slotX(bar), r, 0, 1]);
     const position = [], uv = [], index = [];
     let s = 0;
     path.forEach(([x, y, nx, ny], k) => {
@@ -131,12 +134,16 @@ async function loadPack(name) {
   const plateMap = load('bar'), chainMap = load('chain');
   chainMap.wrapS = THREE.RepeatWrapping;
   const flat = { side: THREE.DoubleSide, alphaTest: 0.5 };
+  const plateMaterial = new THREE.MeshStandardMaterial({ map: plateMap, roughness: 0.45, ...flat });
+  const chainMaterial = new THREE.MeshStandardMaterial({
+    map: chainMap, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -1, ...flat,
+  });
   return {
     body: new THREE.Mesh(bodyGeometry(), [frontMap, backMap].map((map) => new THREE.MeshStandardMaterial({ map, roughness: 0.6 }))),
-    plate: new THREE.Mesh(plateGeometry(), new THREE.MeshStandardMaterial({ map: plateMap, roughness: 0.45, ...flat })),
-    chain: new THREE.Mesh(chainGeometry(), new THREE.MeshStandardMaterial({
-      map: chainMap, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -1, ...flat,
-    })),
+    bars: Object.fromEntries(BARS.map((bar) => [bar, {
+      plate: new THREE.Mesh(plateGeometry(bar), plateMaterial),
+      chain: new THREE.Mesh(chainGeometry(bar), chainMaterial),
+    }])),
     hands: BODY.hands.map(([px, py]) => new THREE.Vector3(bodyX(px), bodyY(py), 0)),
     lamp: new THREE.Vector3(bodyX(BODY.lamp[0]), bodyY(BODY.lamp[1]), 0),
   };
@@ -151,25 +158,30 @@ export function lamp(saw, on) {
   saw.getObjectByName('lamp').material = on ? LAMP_ON : LAMP_OFF;
 }
 
-// Собирает пилу из комплекта name в группе saw; части получают слои самой группы.
-export function dressSaw(saw, name) {
+// Собирает пилу из комплекта name с шиной длиной bar в группе saw; части получают слои самой группы.
+// Корпус с руками и лампой — на конце шины, bar / 2 от её середины.
+export function dressSaw(saw, name, bar) {
   const pack = packs[name];
   saw.clear();
   const skin = new THREE.MeshLambertMaterial({ color: 0xe0ad84 });
+  const body = new THREE.Group();
+  body.position.x = bar / 2;
   const light = new THREE.Mesh(lampGeometry, LAMP_OFF);
   light.position.copy(pack.lamp);
   light.name = 'lamp';
-  saw.add(pack.body.clone(), pack.plate.clone(), pack.chain.clone(), light);
+  body.add(pack.body.clone(), light);
   // Руки — пока шары: на задней рукояти у курка и на верху передней дуги.
   for (const at of pack.hands) {
     const hand = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 8), skin);
     hand.position.copy(at);
     hand.name = 'hand';
-    saw.add(hand);
+    body.add(hand);
   }
+  saw.add(body, pack.bars[bar].plate.clone(), pack.bars[bar].chain.clone());
   saw.traverse((part) => { part.layers.mask = saw.layers.mask; });
   saw.userData.pack = name;
+  saw.userData.bar = bar;
   return saw;
 }
 
-export const makeSaw = (name = PACKS[0]) => dressSaw(new THREE.Group(), name);
+export const makeSaw = (name = PACKS[0], bar = BARS[0]) => dressSaw(new THREE.Group(), name, bar);
