@@ -1,22 +1,71 @@
-"""Готовит текстуры пилы из комплекта ChatGPT: python3 tools/saw.py <папка комплекта>.
+"""Готовит пилу из комплекта ChatGPT: python3 tools/saw.py <номер> <папка комплекта>.
 
-Корпус собирается в игре «подушкой» по силуэту вида сбоку: толщину каждой точки задаёт карта
-saw-shape.png. Её рисуем здесь из толщин деталей (ширина детали при взгляде сверху) и скругляем
-к краю силуэта. Вид сверху из комплекта спорит с видом сбоку (аккумулятор стоит за рукоятью,
-а не под ней; передняя рукоять сверху — обруч, сбоку — дуга), поэтому толщины сняты с него
-на глаз, а раскладка деталей — по виду сбоку.
+Корпус собирается в игре «подушкой» по силуэту вида сбоку. Форму задаёт карта saw-N-shape.png:
+по клетке CELL×CELL — где лицевой (+z) и тыльный (−z) листы и как далеко край силуэта.
+Её рисуем здесь из толщин деталей (ширина детали при взгляде сверху) и скругляем к краю.
+Виды сверху в комплектах спорят с видами сбоку (аккумулятор стоит за рукоятью, а не под ней),
+поэтому толщины сняты с них на глаз, а раскладка деталей — по виду сбоку.
+
+Оси картинки корпуса: крепление шины справа, рукояти сверху. Это вид с +z, лицевая сторона.
 """
+import json
 import sys
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy import ndimage
 
-src = Path(sys.argv[1])
-out = Path(__file__).resolve().parent.parent / 'assets' / 'textures'
-BODY_M = 0.36 / 1484  # метров в пикселе вида сбоку: корпус от аккумулятора до шпильки — 36 см
-CELL = 8              # пикселей вида сбоку в клетке карты толщин
+CELL = 8  # пикселей вида сбоку в клетке карты формы
+
+
+def rect(x0, x1, y0, y1):
+    return lambda x, y: (x >= x0) & (x < x1) & (y >= y0) & (y < y1)
+
+
+def polygon(points, size):
+    mask = Image.new('L', size)
+    ImageDraw.Draw(mask).polygon(points, fill=1)
+    return lambda x, y: np.array(mask, bool)
+
+
+# Детали: (зона, толщина в метрах); позже перекрывает раньше, по умолчанию — мотор.
+# У тыльной стороны может быть своя деталь: (зона, z лица, z тыла) — например, обруч сбоку.
+PACKS = {
+    '1': dict(
+        side='timber_saw_body_side_01.png', bar='timber_saw_bar_01.png', chain='timber_saw_chain_strip_01.png',
+        length=1484, mount=[1500, 742], slot=1390, hands=[[340, 290], [1070, 125]], light=0.5,
+        parts=[
+            (rect(0, 600, 540, 1024), 0.075),                                   # аккумулятор
+            (rect(530, 610, 600, 1024), 0.07),                                  # шейка
+            (lambda x, y: rect(0, 720, 0, 540)(x, y) | rect(0, 800, 0, 380)(x, y), 0.036),  # задняя рукоять
+            (rect(720, 1260, 380, 490), 0.06),                                  # рёбра над мотором
+            (lambda x, y: rect(800, 1240, 0, 380)(x, y) | rect(790, 935, 380, 490)(x, y)
+             | rect(1125, 1225, 380, 450)(x, y), 0.03),                          # передняя дуга
+            (rect(1220, 1360, 0, 470), 0.11),                                   # щиток
+            (rect(1340, 2000, 0, 1024), 0.025),                                 # крепление шины
+            (rect(1490, 2000, 0, 1024), 0.012),                                 # шпилька
+        ]),
+    '2': dict(
+        side='timber_saw_body_side_01_v02.png', back='timber_saw_body_safety_side_01_v02.png',
+        bar='timber_saw_bar_01_v02.png', length=1486, mount=[1485, 745], slot=1395,
+        hands=[[350, 290], [1070, 110]], light=0,
+        parts=[
+            (rect(0, 600, 540, 1024), 0.068),
+            (rect(530, 610, 600, 1024), 0.065),
+            (lambda x, y: rect(0, 720, 0, 560)(x, y) | rect(0, 800, 0, 380)(x, y), 0.038),
+            (rect(720, 1230, 380, 490), 0.06),
+            (lambda x, y: rect(830, 1230, 0, 380)(x, y) | rect(800, 950, 380, 490)(x, y)
+             | rect(1120, 1220, 380, 420)(x, y), 0.03),
+            (rect(1180, 1440, 0, 520), 0.11),
+            (rect(1350, 2000, 0, 1024), 0.025),
+            (rect(1490, 2000, 0, 1024), 0.012),
+            # Обруч передней рукояти спускается по тыльной стороне: торчит на −z.
+            (polygon([(920, 150), (1045, 165), (1050, 290), (1140, 500), (1148, 1005), (1012, 1005),
+                      (1005, 560), (915, 330), (905, 200)], (1536, 1024)), 'hoop'),
+        ]),
+}
+HOOP = (-0.03, -0.06)  # z лица и тыла обруча там, где он не лежит поверх корпуса
 
 
 def pad(rgba):
@@ -38,56 +87,110 @@ def flatten(rgba, sigma, strength):
     return rgba
 
 
-# Корпус: цвет.
-side = np.array(Image.open(src / 'timber_saw_body_side_01.png').convert('RGBA'))
-color = pad(flatten(side.copy(), 60, 0.5))
-Image.fromarray(color).resize((1024, 683), Image.LANCZOS).save(out / 'saw-body.png', optimize=True)
+def over(top, bottom):
+    out = bottom.copy()
+    shown = top[..., 3] > 128
+    out[shown] = top[shown]
+    return out
 
-# Корпус: толщины деталей, метры. Позже правило перекрывает раннее.
-h, w = side.shape[:2]
-y, x = np.mgrid[0:h, 0:w]
-width = np.full((h, w), 0.085)                                           # мотор
-width[(x < 600) & (y >= 540)] = 0.075                                    # аккумулятор
-width[(x >= 530) & (x < 610) & (y >= 600)] = 0.07                        # шейка
-width[((x < 720) & (y < 540)) | ((x < 800) & (y < 380))] = 0.036         # задняя рукоять
-width[(x >= 720) & (x < 1260) & (y >= 380) & (y < 490)] = 0.06           # рёбра над мотором
-width[((y < 380) & (x >= 800) & (x < 1240))
-      | ((y >= 380) & (y < 490) & (x >= 790) & (x < 935))
-      | ((y >= 380) & (y < 450) & (x >= 1125) & (x < 1225))] = 0.03       # передняя дуга
-width[(x >= 1220) & (x < 1360) & (y < 470)] = 0.11                       # щиток
-width[x >= 1340] = 0.025                                                 # крепление шины
-width[x >= 1490] = 0.012                                                 # шпилька
-width = ndimage.gaussian_filter(width, 6)
 
-# Скругление: у края силуэта толщина сходит на нет по четверти круга радиусом до 1.5 см.
-inside = side[..., 3] > 128
-edge = ndimage.distance_transform_edt(inside) * BODY_M
-r = np.minimum(width / 2, 0.015)
-t = np.minimum(edge / r, 1)
-half = width / 2 * np.sqrt(1 - (1 - t) ** 2)
+def body(pack, src, out, name):
+    front = np.array(Image.open(src / pack['side']).convert('RGBA'))
+    if pack['light']:
+        front = flatten(front, 60, pack['light'])
+    # Тыльная сторона нарисована зеркально (крепление слева): отражаем её в оси лицевой.
+    back = np.array(Image.open(src / pack['back']).convert('RGBA'))[:, ::-1] if 'back' in pack else front
+    h, w = front.shape[:2]
+    m = 0.36 / pack['length']  # корпус от аккумулятора до шпильки — 36 см
+    for side, image in (('front', over(front, back)), ('back', over(back, front))):
+        if side == 'back' and back is front:
+            continue
+        Image.fromarray(pad(image)).resize((1024, 683), Image.LANCZOS).save(out / f'{name}-{side}.png', optimize=True)
 
-# Карта формы, по клетке CELL×CELL: в красном — полутолщина в четвертях миллиметра, в зелёном —
-# расстояние от центра клетки до края силуэта в шестнадцатых клетки (128 — край, больше — внутри).
-# По зелёному игра проводит край точно между клетками, без лесенки.
-centre = (slice(CELL // 2, h // CELL * CELL, CELL), slice(CELL // 2, w // CELL * CELL, CELL))
-signed = (ndimage.distance_transform_edt(inside) - ndimage.distance_transform_edt(~inside))[centre] / CELL
-thick = np.where(signed > 0, np.maximum(half[centre] * 4000, 1), 0)
-shape = np.stack([thick, 128 + 16 * signed, np.zeros_like(thick)], -1)
-Image.fromarray(np.clip(np.round(shape), 0, 255).astype(np.uint8)).save(out / 'saw-shape.png', optimize=True)
+    y, x = np.mgrid[0:h, 0:w]
+    zf, zb = np.full((h, w), 0.085 / 2), np.full((h, w), -0.085 / 2)
+    front_shown = front[..., 3] > 128
+    for zone, width in pack['parts']:
+        inside = zone(x, y)
+        if width == 'hoop':
+            zf[inside & ~front_shown] = HOOP[0]
+            zb[inside] = HOOP[1]
+        else:
+            zf[inside], zb[inside] = width / 2, -width / 2
+    zf, zb = ndimage.gaussian_filter(zf, 4), ndimage.gaussian_filter(zb, 4)
 
-# Шина: только полотно, цепь кладётся отдельной лентой. Полотно — связная серая (и жёлтая)
-# область вокруг центра, отделённая от цепи тёмным кантом.
-bar = np.array(Image.open(src / 'timber_saw_bar_01.png').convert('RGBA'))
-rgb = bar[..., :3].astype(float)
-luma = rgb @ [0.299, 0.587, 0.114]
-spread = rgb.max(-1) - rgb.min(-1)
-plate = (bar[..., 3] > 128) & (((luma > 60) & (spread < 40)) | (spread > 80))
-labels, _ = ndimage.label(plate)
-plate = ndimage.binary_fill_holes(labels == labels[392, 1000]) & (bar[..., 3] > 128)
-plate = ndimage.binary_dilation(plate, iterations=3) & (bar[..., 3] > 128)
-bar[..., 3] = np.where(plate, 255, 0)
-crop = pad(bar)[280 - 8:505 + 8, 99 - 8:1975 + 8]
-Image.fromarray(crop).resize((1024, 128), Image.LANCZOS).save(out / 'saw-bar.png', optimize=True)
+    # Скругление: у края силуэта оба листа сходятся к середине по четверти круга радиусом до 1.5 см.
+    inside = (front[..., 3] > 128) | (back[..., 3] > 128)
+    edge = ndimage.distance_transform_edt(inside) * m
+    centre, half = (zf + zb) / 2, (zf - zb) / 2
+    t = np.minimum(edge / np.minimum(half, 0.015), 1)
+    bulge = half * np.sqrt(1 - (1 - t) ** 2)
 
-chain = np.array(Image.open(src / 'timber_saw_chain_strip_01.png').convert('RGBA'))
-Image.fromarray(pad(chain)).resize((1096, 100), Image.LANCZOS).save(out / 'saw-chain.png', optimize=True)
+    # Карта формы по клеткам: красный — z лица, синий — z тыла (128 + полмиллиметра на единицу),
+    # зелёный — расстояние от центра клетки до края силуэта в шестнадцатых клетки (128 — край).
+    # Снаружи силуэта лицо и тыл сходятся в середине ближайшей клетки внутри.
+    cell = (slice(CELL // 2, h // CELL * CELL, CELL), slice(CELL // 2, w // CELL * CELL, CELL))
+    signed = (ndimage.distance_transform_edt(inside) - ndimage.distance_transform_edt(~inside))[cell] / CELL
+    cf, cb, cc = (centre + bulge)[cell], (centre - bulge)[cell], centre[cell]
+    _, (iy, ix) = ndimage.distance_transform_edt(signed <= 0, return_indices=True)
+    cf, cb = np.where(signed > 0, cf, cc[iy, ix]), np.where(signed > 0, cb, cc[iy, ix])
+    shape = np.stack([128 + cf * 2000, 128 + 16 * signed, 128 + cb * 2000], -1)
+    Image.fromarray(np.clip(np.round(shape), 0, 255).astype(np.uint8)).save(out / f'{name}-shape.png', optimize=True)
+    return dict(size=[w, h], m=m, cell=CELL, mount=pack['mount'], slot=pack['slot'], hands=pack['hands'],
+                back='back' in pack)
+
+
+def bar(pack, src, out, name):
+    """Полотно шины без цепи: связная область полотна вокруг центра, отделённая от цепи тёмным кантом."""
+    image = np.array(Image.open(src / pack['bar']).convert('RGBA'))
+    visible = image[..., 3] > 128
+    rgb = image[..., :3].astype(float)
+    luma = rgb @ [0.299, 0.587, 0.114]
+    spread = rgb.max(-1) - rgb.min(-1)
+    plate = visible & (((luma > 60) & (spread < 40)) | (spread > 80))
+    labels, _ = ndimage.label(plate)
+    cy = (np.where(visible.any(1))[0][[0, -1]].mean()).astype(int)
+    plate = ndimage.binary_fill_holes(labels == labels[cy, image.shape[1] // 2])
+    ys, xs = np.where(plate)
+    column = plate[:, image.shape[1] // 2]
+    top, bottom = np.where(column)[0][[0, -1]]
+    left, tip = xs.min(), xs.max()
+    holes, n = ndimage.label(plate & ~visible)
+    slot = max(range(1, n + 1), key=lambda i: (holes == i).sum())  # паз — самая большая дыра
+    sy, sx = np.where(holes == slot)
+    m = 0.3 / (np.where(visible.any(0))[0][[0, -1]] @ [-1, 1])  # шина с цепью — 30 см
+    plate = ndimage.binary_dilation(plate & visible, iterations=3) & visible
+    clipped = image.copy()
+    clipped[..., 3] = np.where(plate, 255, 0)
+    box = [left - 8, tip + 8, top - 8, bottom + 8]
+    crop = pad(clipped)[box[2]:box[3], box[0]:box[1]]
+    Image.fromarray(crop).resize((1024, 128), Image.LANCZOS).save(out / f'{name}-bar.png', optimize=True)
+
+    if 'chain' in pack:
+        strip = np.array(Image.open(src / pack['chain']).convert('RGBA'))
+        chain = dict(tile=0.164, height=0.015, inset=0.003)
+    else:
+        # Цепь вырезаем из прямого участка над полотном: ищем шаг зубьев и берём целое число шагов,
+        # чтобы лента сходилась без шва.
+        rows = slice(top - 85, top + 5)
+        band = image[rows].astype(float)
+        a, b = int(left + 0.2 * (tip - left)), int(left + 0.85 * (tip - left))
+        diff = lambda x0, x1: np.abs(band[:, x0] - band[:, x1]).mean()
+        period = min(range(120, 260), key=lambda p: np.mean([diff(x, x + p) for x in range(a, a + 400, 7)]))
+        count = (b - a) // period
+        start = min(range(a, a + period), key=lambda x: diff(x, x + count * period))
+        strip = image[rows, start:start + count * period]
+        chain = dict(tile=count * period * m, height=(rows.stop - rows.start) * m, inset=5 * m)
+    width = round(strip.shape[1] / strip.shape[0] * 100)
+    Image.fromarray(pad(strip)).resize((width, 100), Image.LANCZOS).save(out / f'{name}-chain.png', optimize=True)
+    return dict(px=box, m=m, slot=[int(sx.mean()), int(sy.mean())], tip=int(tip),
+                radius=(bottom - top) / 2 * m, stretch=[int(left + 0.33 * (tip - left)), int(left + 0.88 * (tip - left))]), chain
+
+
+number, src = sys.argv[1], Path(sys.argv[2])
+out = Path(__file__).resolve().parent.parent / 'assets' / 'textures'
+name = f'saw-{number}'
+pack = PACKS[number]
+info = dict(body=body(pack, src, out, name))
+info['bar'], info['chain'] = bar(pack, src, out, name)
+(out / f'{name}.json').write_text(json.dumps(info, default=float, indent=1) + '\n')
