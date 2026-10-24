@@ -42,8 +42,16 @@ const UP = new THREE.Vector3(0, 1, 0);
 const FINE = 0.2;
 // Летающая камера для осмотра: медленная, чтобы можно было влезть в щель, и не дальше FLY_R от ствола.
 const FLY_SPEED = 0.5, FLY_R = 4, FLY_NEAR = 0.005, NEAR = 0.05;
-// Где пила в руках: столько вперёд от глаз, ниже и левее — так мотор справа от взгляда.
-const HOLD_AHEAD = 0.8, HOLD_LOW = 0.6, HOLD_LEFT = 0.2;
+// Ракурсы — где камера и где пила в руках; переключаются клавишей K. hold — где пила в руках:
+// столько вперёд от глаз, ниже и левее, так мотор справа от взгляда. У ствола «глаза» смотрят, куда смотрел;
+// «к пиле» опускает взгляд на low над пилой и смотрит между лампой и пропилом; «из-за плеча» — камера
+// на back позади этого места, выше и со стороны шины (руки не заслоняют лампу), а на ходу — на back позади головы.
+const SHOTS = [
+  { name: 'глаза', hold: [0.8, 0.6, 0.2] },
+  { name: 'к пиле', hold: [0.6, 0.28, 0.1], low: 0.45 },
+  { name: 'из-за плеча', hold: [0.6, 0.35, 0.1], back: 0.8 },
+];
+const SWAP = 0.4; // с: столько камера переезжает из одного ракурса в другой
 const G = 9.8;
 const MOUSE = 0.0022;
 
@@ -73,6 +81,11 @@ scene.fog = new THREE.Fog(HAZE, 25, 110);
 const FOV_MIN = 40, FOV_MAX = 75;
 let fov = 55;
 try { fov = THREE.MathUtils.clamp(Number(localStorage.getItem('fov')) || fov, FOV_MIN, FOV_MAX); } catch {}
+// Выбор пилы, шины и ракурса тоже запоминаем: что было в list под key, а нет — первое.
+const recall = (key, list) => {
+  try { return list.find((v) => String(v) === localStorage.getItem(key)) ?? list[0]; } catch { return list[0]; }
+};
+const keep = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
 const camera = new THREE.PerspectiveCamera(fov, 1, NEAR, 200);
 camera.rotation.order = 'YXZ';
 // Вид сбоку — справа от игрока, на всё дерево: видно, клонится ли ствол к тебе или от тебя.
@@ -115,7 +128,7 @@ const aimPlane = new THREE.Mesh(
     color: 0xff9a2e, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false,
   }),
 );
-const sawModel = makeSaw();
+const sawModel = makeSaw(recall('pack', PACKS), recall('bar', BARS));
 scene.add(aimPlane, sawModel);
 // Пила и прицел — на своём слое: их видит только взгляд игрока, а вид сбоку показывает
 // одно дерево, иначе мотор заслоняет пропил.
@@ -154,7 +167,7 @@ function growTree(voxels, r) {
   const { shape } = voxels;
   const s = shape.scale(ZONE_H);
   const { tree, com, mass, spin } = growMaple(
-    TREE_H - ZONE_H, r * s, shape.leanAz, (a) => s * shape.profile(a), shape.axis(ZONE_H),
+    TREE_H - ZONE_H, r * s, shape.leanAz, (a) => s * shape.profile(a), shape.axis(ZONE_H), voxels.skin[0],
   );
   const bend = new THREE.Group();
   bend.position.copy(shape.center(ZONE_H)).setY(ZONE_H - 0.03);
@@ -177,17 +190,18 @@ function gust(t, phase) {
   return Math.max(0, g) / 1.8;
 }
 
+// Новая делянка: все деревья вырастают заново, трава остаётся.
+const regrow = () => PLOT.forEach((_, slot) => newRound(slot));
+
 // Вырастить заново дерево на месте slot делянки. treeSeed — зерно, из которого оно растёт
 // (по нему его можно вырастить заново из отчёта).
-function newRound(slot = round.slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
+function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   const old = trees[slot];
   if (old) scene.remove(old.root);
   const { r, x } = PLOT[slot];
 
-  dressBark();
-  dressWood();
   seed(treeSeed);
-  const voxels = new TrunkVoxels(trunkShape(r, ZONE_H, random() * Math.PI * 2), ZONE_H);
+  const voxels = new TrunkVoxels(trunkShape(r, ZONE_H, random() * Math.PI * 2), ZONE_H, [dressBark(), dressWood()]);
   voxels.remesh();
   const tree = growTree(voxels, r);
   const upper = new THREE.Group();
@@ -891,15 +905,46 @@ function update(dt) {
     player.bob += dt * 10;
     shake.copy(right).multiplyScalar(Math.sin(player.bob) * 0.015).setY(-Math.abs(Math.cos(player.bob)) * 0.02);
   }
-  const held = player.pos.clone().addScaledVector(forward, HOLD_AHEAD).addScaledVector(right, -HOLD_LEFT).setY(player.eye - HOLD_LOW);
+  const [out, down, aside] = SHOTS[shot].hold;
+  const held = player.pos.clone().addScaledVector(forward, out).addScaledVector(right, -aside).setY(player.eye - down);
   moveSaw(shown ?? { edge: local(held), q: facing(player.yaw) }, shake, dt);
   lamp(sawModel, !!saw && (saw.pinched || !!round.squeeze));
 
-  if (fly) {
-    flyCamera(dt, shift);
-  } else {
-    camera.position.set(player.pos.x, player.eye, player.pos.z);
-    camera.rotation.set(player.pitch, player.yaw, 0);
+  if (fly) flyCamera(dt, shift);
+  else frame(dt);
+}
+
+// Камера по ракурсу shot. Сменился ракурс, или пилу приставили, или отошли — камера не прыгает,
+// а за SWAP секунд переезжает из того места, где была.
+let shot = SHOTS.findIndex((s) => s.name === recall('shot', SHOTS.map((s) => s.name)));
+const swap = { kind: '', t: 1, position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
+function frame(dt) {
+  const { low, back } = SHOTS[shot];
+  const kind = `${shot} ${!!saw}`;
+  if (kind !== swap.kind) {
+    swap.kind = kind;
+    swap.t = 0;
+    swap.position.copy(camera.position);
+    swap.quaternion.copy(camera.quaternion);
+  }
+  camera.position.set(player.pos.x, player.eye, player.pos.z);
+  camera.rotation.set(player.pitch, player.yaw, 0);
+  if (saw && (low || back)) {
+    // Смотрим между лампой и пропилом: в кадре и шина в древесине, и корпус с лампой.
+    const lit = sawModel.getObjectByName('lamp').getWorldPosition(new THREE.Vector3());
+    const b = basis(saw);
+    const focus = b.origin.clone().add(round.base).add(lit).multiplyScalar(0.5);
+    if (low) camera.position.y = Math.min(player.eye, focus.y + low);
+    else camera.position.copy(focus).addScaledVector(b.along, -back).addScaledVector(b.side, -back / 3).addScaledVector(UP, back / 2);
+    camera.lookAt(focus);
+  } else if (back) {
+    camera.translateZ(back);
+  }
+  if (swap.t < 1) {
+    swap.t = Math.min(1, swap.t + dt / SWAP);
+    const k = THREE.MathUtils.smoothstep(swap.t, 0, 1);
+    camera.position.lerpVectors(swap.position, camera.position, k);
+    camera.quaternion.slerpQuaternions(swap.quaternion, camera.quaternion, k);
   }
 }
 
@@ -1011,7 +1056,7 @@ addEventListener('resize', resize);
 addEventListener('keydown', (e) => {
   if (!e.repeat) note(e.code);
   keys.add(e.code);
-  if (e.code === 'KeyR') newRound();
+  if (e.code === 'KeyR') regrow();
   if (e.code === 'KeyP') {
     tell().then((ok) => {
       unsay('seen');
@@ -1033,6 +1078,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyV') {
     const next = PACKS[(PACKS.indexOf(sawModel.userData.pack) + 1) % PACKS.length];
     dressSaw(sawModel, next, barL());
+    keep('pack', next);
     unsay('pack');
     say('pack', `Пила: комплект ${next}`);
   }
@@ -1040,8 +1086,15 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyB' && mode === 'free') {
     const next = BARS[(BARS.indexOf(barL()) + 1) % BARS.length];
     dressSaw(sawModel, sawModel.userData.pack, next);
+    keep('bar', next);
     unsay('bar');
     say('bar', `Шина ${next * 100} см`);
+  }
+  if (e.code === 'KeyK') {
+    shot = (shot + 1) % SHOTS.length;
+    keep('shot', SHOTS[shot].name);
+    unsay('shot');
+    say('shot', `Камера: ${SHOTS[shot].name}`);
   }
   // Стрелки и Q/E — пила поворачивается на полградуса за нажатие.
   const keySteer = {
@@ -1108,7 +1161,7 @@ document.addEventListener('mousemove', (e) => {
 });
 
 resize();
-PLOT.forEach((_, slot) => newRound(slot));
+regrow();
 const clock = new THREE.Clock();
 // Что записать в бортовой журнал сторожа зависаний (watch.js): режим, игрок, пила, дерево и все пропилы.
 const r3 = (a) => a.map((v) => +v.toFixed(3));
