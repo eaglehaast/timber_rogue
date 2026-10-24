@@ -20,6 +20,7 @@ const SAW_SPEED = 0.2;    // метров глубины в секунду
 const SEATING = 0.04;     // ствол прошёл такую долю пути до того, как сесть на пропил, — шину вот-вот закусит
 const PINCH = 3;          // мм: уже этого — закусило, цепь встала
 const SAWS = 2;           // пил на дерево: зажатую бросаешь в стволе и берёшь запасную
+const RESULT_SHOWN = 4000; // мс: столько итог раунда висит на экране
 const SPLIT_MIN = 0.02;   // м: отщеп короче этого — волосяная трещина, её не видно и она ничего не меняет
 const OPEN = 14;          // мм: шире — щель раскрывается
 const LEAN = THREE.MathUtils.degToRad(0.4); // настолько наклонился ствол — это уже заметно
@@ -262,7 +263,7 @@ function planeY({ origin, normal }, f) {
 function throughTrunk(at, limit) {
   const inside = (t) => {
     const p = at(t);
-    return round.voxels.shape.contains(p.x, p.y, p.z);
+    return round.voxels.under(p);
   };
   const cross = (t, into) => {
     while (inside(t) !== into) if ((t += VOXEL) > limit + VOXEL) return Infinity;
@@ -773,11 +774,18 @@ function land() {
   else showResult('ЧИСТО!', ['Дерево легло и ничего не задело']);
 }
 
+// Пилить можно стоящее дерево и всё, что осталось, когда оно легло: пень, отщеп, спинку. Раунд кончается только по R.
+const canSaw = () => round.saws > 0 && (!round.top || round.done);
+
 function showResult(title, notes) {
   const lost = SAWS - round.saws;
   if (lost) notes.push(lost > 1 ? 'Обе пилы остались в пне' : 'Одна пила осталась в пне');
   resultEl.innerHTML = `${title}${notes.map((n) => `<small>${n}</small>`).join('')}<small>R — новое дерево</small>`;
   resultEl.hidden = false;
+  // Итог висит недолго и остаётся в журнале: дальше можно кромсать пень, пока не нажмёшь R.
+  say('result', `${title} ${notes.join('. ')}`);
+  const shown = round;
+  setTimeout(() => { if (round === shown) resultEl.hidden = true; }, RESULT_SHOWN);
 }
 
 function update(dt) {
@@ -818,7 +826,7 @@ function update(dt) {
   }
   pushOut(round.yard, player.pos, 0.35);
 
-  const candidate = mode === 'free' && !round.top && round.saws ? sawCandidate(forward) : null;
+  const candidate = mode === 'free' && canSaw() ? sawCandidate(forward) : null;
 
   if (mode === 'cut') {
     if (!round.cuts.includes(saw)) round.cuts.push(saw);
@@ -1035,7 +1043,7 @@ canvas.addEventListener('mousedown', (e) => {
     // Входим в древесину по середине слоя кубиков: тогда щель лежит вокруг полотна поровну.
     if (saw.depth === 0) saw.edge.y = saw.origin.y = (Math.floor(saw.origin.y / VOXEL) + 0.5) * VOXEL;
     mode = 'cut';
-  } else if (mode === 'free' && !round.top && round.saws) {
+  } else if (mode === 'free' && canSaw()) {
     saw = sawCandidate(forwardOf(player.yaw));
     if (saw) mode = 'aim';
   }
