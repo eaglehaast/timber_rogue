@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-// Кора — общий материал ствола и ветвей. Текстура лежит в мировом масштабе: квадрат BARK_TILE метров.
+// Кора ствола и ветвей. Текстура лежит в мировом масштабе: квадрат BARK_TILE метров.
 // Чтобы плитка не бросалась в глаза, у каждого дерева своя картинка из нескольких, свой сдвиг
 // и крупность, а поверх — крупные пятна тона, которые нигде не повторяются.
 export const BARK_TILE = 0.4;
@@ -18,11 +18,9 @@ const textures = FILES.map((file) => {
   return texture;
 });
 
-export const barkMaterial = new THREE.MeshLambertMaterial();
-
 // Фактуру смягчаем к среднему цвету картинки (его даёт самый мелкий мип-уровень), потом
 // кладём пятна тона — плавный шум по координатам текстуры: ячейки около метра и треть метра.
-barkMaterial.onBeforeCompile = (shader) => {
+const soften = (shader) => {
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', `#include <common>
       float barkHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -43,12 +41,13 @@ barkMaterial.onBeforeCompile = (shader) => {
       #endif`);
 };
 
-// Новое дерево — новая кора: какая из картинок, откуда начинается узор и насколько он крупный.
+// Кора нового дерева, своя у каждого: какая из картинок, откуда начинается узор и насколько он крупный.
 export function dressBark() {
-  const map = textures[Math.floor(Math.random() * textures.length)];
+  const map = textures[Math.floor(Math.random() * textures.length)].clone();
   const scale = 0.85 + Math.random() * 0.3;
   map.repeat.set(scale, scale);
   map.offset.set(Math.random(), Math.random());
-  barkMaterial.map = map;
-  barkMaterial.needsUpdate = true;
+  const material = new THREE.MeshLambertMaterial({ map });
+  material.onBeforeCompile = soften;
+  return material;
 }

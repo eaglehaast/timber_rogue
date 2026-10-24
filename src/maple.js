@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { barkMaterial, BARK_TILE } from './bark.js';
+import { BARK_TILE } from './bark.js';
 import { random } from './random.js';
 
 // Клён ясенелистный (американский) — сорняк: растёт быстро и как попало. Ровно вверх почти никогда:
@@ -14,10 +14,10 @@ const rand = (a, b) => a + random() * (b - a);
 const flat = (az) => new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
 
 // Кора на ветвях и узлах в том же масштабе, что на стволе: координаты текстуры в метрах.
-function barkMesh(geometry, around, along) {
+function barkMesh(geometry, around, along, bark) {
   const uv = geometry.attributes.uv;
   for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * around) / BARK_TILE, (uv.getY(i) * along) / BARK_TILE);
-  return new THREE.Mesh(geometry, barkMaterial);
+  return new THREE.Mesh(geometry, bark);
 }
 
 // leanAz — куда клонится ствол (азимут), r — радиус ствола внизу, length — высота от низа до вершины.
@@ -25,7 +25,7 @@ function barkMesh(geometry, around, along) {
 // start — направление, в котором ствол выходит снизу.
 // Возвращает модель, центр тяжести (в её координатах), массу и момент инерции вокруг вертикали через низ ствола
 // (каждый кусок — точка в своём центре тяжести): так тяжело крону раскрутить.
-export function growMaple(length, r, leanAz, base, start) {
+export function growMaple(length, r, leanAz, base, start, bark) {
   const tree = new THREE.Group();
   const com = new THREE.Vector3();
   let mass = 0, spin = 0;
@@ -45,10 +45,10 @@ export function growMaple(length, r, leanAz, base, start) {
       }
       geometry.computeVertexNormals();
     }
-    const limb = barkMesh(geometry, Math.PI * (r0 + r1), len);
+    const limb = barkMesh(geometry, Math.PI * (r0 + r1), len, bark);
     limb.position.copy(a).addScaledVector(dir, 0.5);
     limb.quaternion.setFromUnitVectors(UP, dir.normalize());
-    const knot = barkMesh(new THREE.SphereGeometry(r1, 10, 6), 2 * Math.PI * r1, Math.PI * r1);
+    const knot = barkMesh(new THREE.SphereGeometry(r1, 10, 6), 2 * Math.PI * r1, Math.PI * r1, bark);
     knot.position.copy(b);
     if (trunk) knot.name = 'trunk';
     tree.add(limb, knot);
