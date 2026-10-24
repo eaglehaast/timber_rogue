@@ -883,7 +883,7 @@ function update(dt) {
   }
   const held = player.pos.clone().addScaledVector(forward, HOLD_AHEAD).addScaledVector(right, -HOLD_LEFT).setY(player.eye - HOLD_LOW);
   moveSaw(shown ?? { edge: held, q: facing(player.yaw) }, shake, dt);
-  lamp(sawModel, !!saw && (saw.pinched || !!round.said.narrow));
+  lamp(sawModel, !!saw && (saw.pinched || !!round.squeeze));
 
   if (fly) {
     flyCamera(dt, shift);
