@@ -7,7 +7,7 @@ import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
-import { grassMaterial, dressGrass } from './grass.js';
+import { makeGround } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
 
@@ -105,12 +105,7 @@ for (let i = 0; i < skyGeo.attributes.position.count; i++) {
 skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
 scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
 
-// Земля — квадрат GROUND метров травы.
-const GROUND = 200;
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(GROUND, GROUND), grassMaterial);
-ground.rotation.x = -Math.PI / 2;
-ground.receiveShadow = true;
-scene.add(ground);
+scene.add(makeGround(200));
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 // Плоскость единичная: под длину шины и толщину ствола её растягивает scale.
@@ -190,7 +185,6 @@ function newRound(slot = round.slot, treeSeed = (Math.random() * 2 ** 32) >>> 0)
   const { r, x } = PLOT[slot];
 
   dressBark();
-  dressGrass(GROUND);
   dressWood();
   seed(treeSeed);
   const voxels = new TrunkVoxels(trunkShape(r, ZONE_H, random() * Math.PI * 2), ZONE_H);
