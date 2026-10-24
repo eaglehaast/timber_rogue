@@ -7,7 +7,7 @@ export const BAR_L = 0.7;  // длина шины: столько она пер�
 export const BAR_W = 0.05; // ширина шины: столько её позади режущей кромки сидит в щели
 
 // Комплекты картинок пилы и их размеры готовит tools/saw.py; в игре они переключаются клавишей.
-export const PACKS = ['3', '2', '1'];
+export const PACKS = ['2', '1'];
 
 const loader = new THREE.TextureLoader();
 const geometryOf = (position, uv, index) => {
