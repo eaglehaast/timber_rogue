@@ -34,7 +34,7 @@ def polygon(points, size):
 PACKS = {
     '1': dict(
         side='timber_saw_body_side_01.png', bar='timber_saw_bar_01.png', chain='timber_saw_chain_strip_01.png',
-        length=1484, mount=[1500, 742], slot=1390, hands=[[340, 290], [1070, 125]], light=0.5,
+        length=1484, mount=[1500, 742], slot=1390, hands=[[340, 290], [1070, 125]], lamp=[790, 365], light=0.5,
         parts=[
             (rect(0, 600, 540, 1024), 0.075),                                   # аккумулятор
             (rect(530, 610, 600, 1024), 0.07),                                  # шейка
@@ -49,7 +49,7 @@ PACKS = {
     '2': dict(
         side='timber_saw_body_side_01_v02.png', back='timber_saw_body_safety_side_01_v02.png',
         bar='timber_saw_bar_01_v02.png', length=1486, mount=[1485, 745], slot=1395,
-        hands=[[350, 290], [1070, 110]], light=0,
+        hands=[[350, 290], [1070, 110]], lamp=[790, 362], light=0,
         parts=[
             (rect(0, 600, 540, 1024), 0.068),
             (rect(530, 610, 600, 1024), 0.065),
@@ -136,7 +136,7 @@ def body(pack, src, out, name):
     cf, cb = np.where(signed > 0, cf, cc[iy, ix]), np.where(signed > 0, cb, cc[iy, ix])
     shape = np.stack([128 + cf * 2000, 128 + 16 * signed, 128 + cb * 2000], -1)
     Image.fromarray(np.clip(np.round(shape), 0, 255).astype(np.uint8)).save(out / f'{name}-shape.png', optimize=True)
-    return dict(size=[w, h], m=m, cell=CELL, mount=pack['mount'], slot=pack['slot'], hands=pack['hands'],
+    return dict(size=[w, h], m=m, cell=CELL, mount=pack['mount'], slot=pack['slot'], hands=pack['hands'], lamp=pack['lamp'],
                 back='back' in pack)
 
 

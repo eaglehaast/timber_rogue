@@ -4,7 +4,7 @@ import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeSaw, BAR_L, BAR_W } from './saw.js';
+import { makeSaw, dressSaw, lamp, PACKS, BAR_L, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
 import { watch, note, beat, tell } from './watch.js';
@@ -883,6 +883,7 @@ function update(dt) {
   }
   const held = player.pos.clone().addScaledVector(forward, HOLD_AHEAD).addScaledVector(right, -HOLD_LEFT).setY(player.eye - HOLD_LOW);
   moveSaw(shown ?? { edge: held, q: facing(player.yaw) }, shake, dt);
+  lamp(sawModel, !!saw && (saw.pinched || !!round.squeeze));
 
   if (fly) {
     flyCamera(dt, shift);
@@ -1020,6 +1021,12 @@ addEventListener('keydown', (e) => {
   if (fly) return;
   if (e.code === 'KeyC') player.crouch = !player.crouch;
   if (e.code === 'KeyL') hudEl.classList.toggle('details');
+  if (e.code === 'KeyV') {
+    const next = PACKS[(PACKS.indexOf(sawModel.userData.pack) + 1) % PACKS.length];
+    dressSaw(sawModel, next);
+    unsay('pack');
+    say('pack', `Пила: комплект ${next}`);
+  }
   // Стрелки и Q/E — пила поворачивается на полградуса за нажатие.
   const keySteer = {
     ArrowLeft: [TURN, STEP], ArrowRight: [TURN, -STEP], ArrowUp: [TILT, STEP], ArrowDown: [TILT, -STEP],
