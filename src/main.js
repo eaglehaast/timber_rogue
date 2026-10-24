@@ -7,6 +7,7 @@ import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
+import { grassMaterial, dressGrass } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
 
@@ -117,32 +118,13 @@ for (let i = 0; i < skyGeo.attributes.position.count; i++) {
 skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
 scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
 
-// Трава — пятнистая, а не заливка: по пятнам глаз видит, как ты идёшь и поворачиваешь.
-// Заглушка до нарисованной текстуры.
-function grassTexture() {
-  const c = document.createElement('canvas');
-  c.width = c.height = 256;
-  const g = c.getContext('2d');
-  g.fillStyle = '#5b7d36';
-  g.fillRect(0, 0, 256, 256);
-  for (let i = 0; i < 1800; i++) {
-    g.fillStyle = `hsl(${80 + Math.random() * 25}, ${30 + Math.random() * 15}%, ${26 + Math.random() * 10}%)`;
-    g.fillRect(Math.random() * 256, Math.random() * 256, 2 + Math.random() * 5, 2 + Math.random() * 5);
-  }
-  const texture = new THREE.CanvasTexture(c);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(100, 100);
-  texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  return texture;
-}
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(200, 200),
-  new THREE.MeshLambertMaterial({ map: grassTexture() }),
-);
+// Земля — квадрат GROUND метров травы.
+const GROUND = 200;
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(GROUND, GROUND), grassMaterial);
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
+dressGrass(GROUND); // раскладка травы одна на всю делянку: R её не трогает
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 // Плоскость единичная: под длину шины и толщину ствола её растягивает scale.
