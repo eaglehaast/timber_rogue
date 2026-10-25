@@ -15,16 +15,16 @@ export const tiles = (files) => files.map((file) => {
 // самый мелкий мип-уровень), гасим насыщенность и кладём поверх крупные пятна тона — плавный шум
 // по координатам текстуры двух размеров, scales — сколько ячеек шума на плитку. Пятна нигде
 // не повторяются и разбивают плитку.
-// cells — картинка не одна плитка, а набор cells × cells плиток с общими краями: каждая клетка
+// cells = [столбцов, строк] — картинка не одна плитка, а набор плиток с общими краями: каждая клетка
 // поверхности берёт из набора свою плитку по хешу номера клетки, так что узор не повторяется.
-export function soften(material, { contrast, saturation, scales: [a, b], low, high, cells = 0 }) {
+export function soften(material, { contrast, saturation, scales: [a, b], low, high, cells }) {
   const vec3 = (c) => `vec3(${c.map((v) => v.toFixed(2)).join(', ')})`;
   // Номер плитки скачет на краю клетки, поэтому мип-уровень берём по производным непрерывных координат.
   const tile = cells ? `
     vec4 softTile(vec2 uv) {
-      const float N = ${cells.toFixed(1)};
-      float k = floor(softHash(floor(uv)) * N * N);
-      vec2 at = (vec2(mod(k, N), floor(k / N)) + fract(uv)) / N;
+      const vec2 N = vec2(${cells.map((n) => n.toFixed(1)).join(', ')});
+      float k = floor(softHash(floor(uv)) * N.x * N.y);
+      vec2 at = (vec2(mod(k, N.x), floor(k / N.x)) + fract(uv)) / N;
       return textureGrad(map, at, dFdx(uv) / N, dFdy(uv) / N);
     }` : '';
   const sample = cells ? THREE.ShaderChunk.map_fragment.replace('texture2D( map, vMapUv )', 'softTile(vMapUv)') : '#include <map_fragment>';
@@ -49,5 +49,9 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
           diffuseColor.rgb *= mix(${vec3(low)}, ${vec3(high)}, tone);
         #endif`);
   };
+  // Three.js узнаёт готовую программу по тексту onBeforeCompile, а он у всех вызовов soften один:
+  // без своего ключа два материала с разными настройками получили бы одну и ту же программу.
+  const key = JSON.stringify([contrast, saturation, a, b, low, high, cells]);
+  material.customProgramCacheKey = () => key;
   return material;
 }

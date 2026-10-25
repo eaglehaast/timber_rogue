@@ -7,6 +7,7 @@ import * as THREE from 'three';
 // (12", 45 звеньев цепи), и прежняя 70 см. Корпус от длины не зависит, полотно и цепь строятся под неё.
 export const BARS = [0.3, 0.7];
 export const BAR_W = 0.05; // ширина шины: столько её позади режущей кромки сидит в щели
+const RIM_STEP = 0.01; // м: шаг точек обвода корпуса
 
 // Комплекты картинок пилы и их размеры готовит tools/saw.py; в игре они переключаются клавишей.
 export const PACKS = ['2', '1'];
@@ -46,6 +47,8 @@ async function loadPack(name) {
   // Лицевой лист смотрит на +z, тыльный — на −z. Край проводим по клеткам, как изолинию (marching squares):
   // где зелёный переходит через 128, ставим вершину на ребре клетки, и там оба листа сходятся.
   // Сначала идут треугольники лица, за ними тыла: у каждого листа своя картинка.
+  // Заодно — обвод корпуса (rim): точки края, где листы сходятся, не чаще RIM_STEP. Ствол — стенка,
+  // и корпус, подойдя к нему, касается его краем силуэта: по обводу пила упирается корпусом в древесину.
   function bodyGeometry() {
     const cols = shape.width, rows = shape.height, cell = BODY.cell, [sideW, sideH] = BODY.size;
     const canvas = document.createElement('canvas');
@@ -56,7 +59,7 @@ async function loadPack(name) {
     const pixels = ctx.getImageData(0, 0, cols, rows).data;
     const at = ([i, j], channel) => pixels[4 * (j * cols + i) + channel] - 128;
     const dist = (c) => at(c, 1);
-    const position = [], uv = [], front = [], back = [], shared = new Map();
+    const position = [], uv = [], front = [], back = [], shared = new Map(), edge = new Set();
     // Вершина на пикселе (px, py) вида сбоку: лицевая копия, за ней тыльная.
     const vertex = (key, px, py, zf, zb) => {
       if (!shared.has(key)) {
@@ -70,9 +73,10 @@ async function loadPack(name) {
     const crossing = (a, b) => {
       const t = dist(a) / (dist(a) - dist(b)), ka = a[1] * cols + a[0], kb = b[1] * cols + b[0];
       const z = ((1 - t) * (at(a, 0) + at(a, 2)) + t * (at(b, 0) + at(b, 2))) / 4000;
-      return vertex(`${Math.min(ka, kb)}-${Math.max(ka, kb)}`,
-        (a[0] + t * (b[0] - a[0]) + 0.5) * cell, (a[1] + t * (b[1] - a[1]) + 0.5) * cell, z, z);
+      return mark(vertex(`${Math.min(ka, kb)}-${Math.max(ka, kb)}`,
+        (a[0] + t * (b[0] - a[0]) + 0.5) * cell, (a[1] + t * (b[1] - a[1]) + 0.5) * cell, z, z));
     };
+    const mark = (index) => { edge.add(index); return index; };
     for (let j = 0; j < rows - 1; j++) {
       for (let i = 0; i < cols - 1; i++) {
         const ring = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]], poly = [];
@@ -91,8 +95,14 @@ async function loadPack(name) {
     const geometry = geometryOf(position, uv, [...front, ...back]);
     geometry.addGroup(0, front.length, 0);
     geometry.addGroup(front.length, back.length, 1);
-    return geometry;
+    const rim = [];
+    for (const i of edge) {
+      const p = new THREE.Vector3().fromArray(position, 3 * i);
+      if (rim.every((q) => q.distanceTo(p) >= RIM_STEP)) rim.push(p);
+    }
+    return { geometry, rim };
   }
+  const body = bodyGeometry();
 
   function plateGeometry(bar) {
     const [left, right, top, bottom] = BAR.px, [a, b] = BAR.stretch;
@@ -139,13 +149,14 @@ async function loadPack(name) {
     map: chainMap, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -1, ...flat,
   });
   return {
-    body: new THREE.Mesh(bodyGeometry(), [frontMap, backMap].map((map) => new THREE.MeshStandardMaterial({ map, roughness: 0.6 }))),
+    body: new THREE.Mesh(body.geometry, [frontMap, backMap].map((map) => new THREE.MeshStandardMaterial({ map, roughness: 0.6 }))),
     bars: Object.fromEntries(BARS.map((bar) => [bar, {
       plate: new THREE.Mesh(plateGeometry(bar), plateMaterial),
       chain: new THREE.Mesh(chainGeometry(bar), chainMaterial),
     }])),
     hands: BODY.hands.map(([px, py]) => new THREE.Vector3(bodyX(px), bodyY(py), 0)),
     lamp: new THREE.Vector3(bodyX(BODY.lamp[0]), bodyY(BODY.lamp[1]), 0),
+    rim: body.rim,
   };
 }
 const packs = Object.fromEntries(await Promise.all(PACKS.map(async (name) => [name, await loadPack(name)])));
@@ -181,6 +192,7 @@ export function dressSaw(saw, name, bar) {
   saw.traverse((part) => { part.layers.mask = saw.layers.mask; });
   saw.userData.pack = name;
   saw.userData.bar = bar;
+  saw.userData.rim = pack.rim.map((p) => p.clone().setX(p.x + bar / 2));
   return saw;
 }
 
