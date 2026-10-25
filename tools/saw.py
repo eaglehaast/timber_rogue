@@ -40,23 +40,27 @@ PARTS = [
     (lambda x, y: rect(830, 1230, 0, 380)(x, y) | rect(800, 950, 380, 490)(x, y)
      | rect(1120, 1220, 380, 420)(x, y), 0.03),                          # передняя дуга
     (rect(1180, 1440, 0, 520), 0.11),                                   # щиток
-    (rect(1350, 2000, 0, 1024), 0.025),                                 # крепление шины
-    (rect(1490, 2000, 0, 1024), 0.012),                                 # шпилька
     # Обруч передней рукояти спускается по тыльной стороне: торчит на −z.
     (polygon([(920, 150), (1045, 165), (1050, 290), (1140, 500), (1148, 1005), (1012, 1005),
               (1005, 560), (915, 330), (905, 200)], (1536, 1024)), 'hoop'),
 ]
+# Пластину крепления шины с болтами и шпилькой на картинках срезаем: у настоящей пилы шина уходит
+# прямо в сплошной корпус. Ниже щитка (y > CUT_Y) корпус кончается на CUT[0] лицевой картинки
+# и CUT[1] тыльной (уже отражённой) — там его край со скруглением. Шина выходит из края корпуса
+# (MOUNT), а её паз с пяткой спрятан внутри (SLOT).
+CUT, CUT_Y = (1352, 1388), 460
+MOUNT, SLOT = [CUT[1], 745], 1300
 PACKS = {
     # Мягкая объёмная прорисовка со своей цепью.
     '1': dict(
         side='timber_saw_painted_body_side_01_v02.png', back='timber_saw_painted_body_safety_side_01_v02.png',
         bar='timber_saw_painted_bar_01.png', chain='timber_saw_chain_strip_01.png', length=1445,
-        mount=[1490, 745], slot=1395, hands=[[350, 290], [1070, 110]], lamp=[790, 362], light=0.5, parts=PARTS),
+        hands=[[350, 290], [1070, 110]], lamp=[790, 362], light=0.5, parts=PARTS),
     # Плоский цвет: цепь вырезается из картинки шины.
     '2': dict(
         side='timber_saw_body_side_01_v04.png', back='timber_saw_body_safety_side_01_v04.png',
         bar='timber_saw_bar_01_v02.png', length=1448,
-        mount=[1485, 745], slot=1395, hands=[[350, 290], [1070, 110]], lamp=[790, 362], light=0, parts=PARTS),
+        hands=[[350, 290], [1070, 110]], lamp=[790, 362], light=0, parts=PARTS),
 }
 HOOP = (-0.03, -0.06)  # z лица и тыла обруча там, где он не лежит поверх корпуса
 
@@ -93,8 +97,10 @@ def body(pack, src, out, name):
         front = flatten(front, 60, pack['light'])
     # Тыльная сторона нарисована зеркально (крепление слева): отражаем её в оси лицевой.
     back = np.array(Image.open(src / pack['back']).convert('RGBA'))[:, ::-1] if 'back' in pack else front
+    for image, x in ((front, CUT[0]), (back, CUT[1])):
+        image[CUT_Y:, x:, 3] = 0
     h, w = front.shape[:2]
-    m = 0.36 / pack['length']  # корпус от аккумулятора до шпильки — 36 см
+    m = 0.36 / pack['length']  # масштаб: от конца рукояти до шпильки на исходной картинке — 36 см
     for side, image in (('front', over(front, back)), ('back', over(back, front))):
         if side == 'back' and back is front:
             continue
@@ -129,7 +135,7 @@ def body(pack, src, out, name):
     cf, cb = np.where(signed > 0, cf, cc[iy, ix]), np.where(signed > 0, cb, cc[iy, ix])
     shape = np.stack([128 + cf * 2000, 128 + 16 * signed, 128 + cb * 2000], -1)
     Image.fromarray(np.clip(np.round(shape), 0, 255).astype(np.uint8)).save(out / f'{name}-shape.png', optimize=True)
-    return dict(size=[w, h], m=m, cell=CELL, mount=pack['mount'], slot=pack['slot'], hands=pack['hands'], lamp=pack['lamp'],
+    return dict(size=[w, h], m=m, cell=CELL, mount=MOUNT, slot=SLOT, hands=pack['hands'], lamp=pack['lamp'],
                 back='back' in pack)
 
 
