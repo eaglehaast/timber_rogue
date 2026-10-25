@@ -209,7 +209,9 @@ function barkGeometry(axes, from) {
     const r0 = a.points[0].r;
     const sides = THREE.MathUtils.clamp(Math.ceil((2 * Math.PI * r0) / 0.03), 5, 32);
     const every = r0 < 0.02 ? 2 : 1;
-    const rings = a.points.filter((q, i) => (i % every === 0 || i === a.points.length - 1) && !(a.joint === 'trunk' && q.p.y < from));
+    // Ствол начинается кольцом ниже from: трубка заходит внутрь кубиков и при качании не открывает щель.
+    const first = a.joint === 'trunk' ? a.points.findIndex((q) => q.p.y >= from) - 1 : 0;
+    const rings = a.points.filter((q, i) => i >= first && (i % every === 0 || i === a.points.length - 1));
     const mean = rings.reduce((m, q) => m + q.r, 0) / rings.length;
     const start = pos.length / 3;
     rings.forEach((q, k) => {
