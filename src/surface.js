@@ -49,5 +49,9 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
           diffuseColor.rgb *= mix(${vec3(low)}, ${vec3(high)}, tone);
         #endif`);
   };
+  // Three.js узнаёт готовую программу по тексту onBeforeCompile, а он у всех вызовов soften один:
+  // без своего ключа два материала с разными настройками получили бы одну и ту же программу.
+  const key = JSON.stringify([contrast, saturation, a, b, low, high, cells]);
+  material.customProgramCacheKey = () => key;
   return material;
 }
