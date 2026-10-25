@@ -161,27 +161,26 @@ const local = (p) => p.clone().sub(round.base);
 // Длина шины в руках: переключается клавишей B.
 const barL = () => sawModel.userData.bar;
 
-// Выше зоны пиления — клён (maple.js): кривой ствол, ветви по всей высоте, иногда два ствола.
-// Он продолжает низ ствола с той же точки, в том же направлении и с тем же сечением
-// и чуть заходит в кубики, чтобы на стыке не было щели. Вес и того и другого — по объёму древесины.
-function growTree(voxels, r) {
+// Выше зоны пиления — клён (maple.js): скелет из осей, ствол ниже зоны идёт по форме кубиков (trunkShape)
+// и выше продолжает её же сечением; кора чуть заходит в кубики, чтобы на стыке не было щели.
+// Верх пока одно твёрдое тело на сгибе bend. Вес — древесина кубиков и скелета плюс листва.
+function growTree(voxels) {
   const { shape } = voxels;
-  const s = shape.scale(ZONE_H);
-  const { tree, com, mass, spin } = growMaple(
-    TREE_H - ZONE_H, r * s, shape.leanAz, (a) => shape.outline(a, ZONE_H), shape.axis(ZONE_H), voxels.skin[0],
-  );
+  const { tree, skeleton, com, mass, inertia } = growMaple(shape, ZONE_H, TREE_H, voxels.skin[0], ZONE_H - 0.03);
   const bend = new THREE.Group();
   bend.position.copy(shape.center(ZONE_H)).setY(ZONE_H - 0.03);
+  tree.position.copy(bend.position).negate();
   bend.add(tree);
   bend.updateMatrixWorld(true);
   const zone = voxels.measure();
   const zoneMass = DENSITY * zone.volume;
+  // Момент инерции вокруг вертикали через сгиб: свой вокруг центра тяжести плюс m·d².
+  const d = com.clone().sub(bend.position);
   return {
-    bend,
-    com: zone.center.multiplyScalar(zoneMass)
-      .addScaledVector(bend.localToWorld(com), mass).divideScalar(zoneMass + mass),
+    bend, skeleton,
+    com: zone.center.multiplyScalar(zoneMass).addScaledVector(com, mass).divideScalar(zoneMass + mass),
     mass: zoneMass + mass,
-    spin,
+    spin: inertia.elements[4] + mass * (d.x * d.x + d.z * d.z),
   };
 }
 
@@ -202,7 +201,7 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   seed(treeSeed);
   const voxels = new TrunkVoxels(trunkShape(r, ZONE_H, random() * Math.PI * 2), ZONE_H, [dressBark(), dressWood()]);
   voxels.remesh();
-  const tree = growTree(voxels, r);
+  const tree = growTree(voxels);
   const upper = new THREE.Group();
   upper.add(tree.bend);
 
@@ -679,12 +678,12 @@ function tip(f, angle) {
   f.pivot.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(f.axis, angle));
 }
 
-// Дерево легло, когда стволом коснулось земли (узлы ствола — шары на его изломах); ветви под ним ломаются.
+// Дерево легло, когда стволом коснулось земли (узлы ствола — точки на оси через полметра); ветви под ним ломаются.
 // Не по углу: клён кривой, и клонившийся туда же, куда падает, ложится раньше, чем повернётся на 90°.
 function grounded(f) {
   round.upper.updateWorldMatrix(true, true);
   const at = new THREE.Vector3();
-  return f.knots.some((k) => k.getWorldPosition(at).y <= k.geometry.parameters.radius);
+  return f.knots.some((k) => k.getWorldPosition(at).y <= k.userData.r);
 }
 
 // Недопила больше нет: дерево уже никто не держит в плоскости, и вбок его уводит
