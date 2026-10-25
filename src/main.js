@@ -229,7 +229,7 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
     sec: null, secVersion: -1,
     twist: null, turn: 0, // как косые площадки закручивают верх вокруг вертикали и на сколько закрутили
     split: 0, tongue: new Set(), // на сколько недопил отщепился вверх и какие его колонки
-    cuts: [], debris: [], left: 0, // сколько зажатых пил брошено в стволе
+    cuts: [], debris: [], left: [], // зажатые пилы, брошенные в стволе
     top: false, slide: null, fall: null, done: false,
     said: {},
   };
@@ -360,6 +360,7 @@ function pose(cut, shift = -BAR_W / 2) {
 }
 
 // Зажатую пилу бросаем в стволе: там остаётся её копия без рук, а в руках — запасная. Пробуем — пил сколько угодно.
+// Когда дерево легло, пропил разжимается, и брошенные пилы забираешь обратно (land).
 function leaveSaw() {
   const left = sawModel.clone();
   const hands = [];
@@ -372,7 +373,7 @@ function leaveSaw() {
   left.position.copy(at.position);
   left.quaternion.copy(at.quaternion);
   round.root.add(left);
-  round.left++;
+  round.left.push(left);
   unsay('pinch');
   unsay('narrow');
 }
@@ -790,6 +791,9 @@ function fallPiece(piece, dt) {
 
 function land() {
   round.done = true;
+  const back = round.left.length;
+  round.left.forEach((left) => left.removeFromParent());
+  round.left = [];
   // Пришибло, если стоял там, куда лёг ствол: впереди оси по линии падения и не дальше метра вбок.
   const { u: f, pivot, len } = round.fall;
   const at = local(player.pos);
@@ -800,17 +804,16 @@ function land() {
   const hit = struck(round.yard, pivot.position, f, len);
   hit.forEach(wreck);
 
-  if (squashed) showResult('ПРИШИБЛО', ['Не стой на линии падения']);
-  else if (hit.length) showResult('ОЙ', hit.map((o) => o.kind.verdict));
-  else showResult('ЧИСТО!', ['Дерево легло и ничего не задело']);
+  const saws = back ? [back > 1 ? `Зажатые пилы вынул из пня: ${back}` : 'Зажатую пилу вынул из пня'] : [];
+  if (squashed) showResult('ПРИШИБЛО', ['Не стой на линии падения', ...saws]);
+  else if (hit.length) showResult('ОЙ', [...hit.map((o) => o.kind.verdict), ...saws]);
+  else showResult('ЧИСТО!', ['Дерево легло и ничего не задело', ...saws]);
 }
 
 // Пилить можно стоящее дерево и всё, что осталось, когда оно легло: пень, отщеп, спинку. Раунд кончается только по R.
 const canSaw = () => !round.top || round.done;
 
 function showResult(title, notes) {
-  const lost = round.left;
-  if (lost) notes.push(lost > 1 ? `Пил осталось в пне: ${lost}` : 'Одна пила осталась в пне');
   resultEl.innerHTML = `${title}${notes.map((n) => `<small>${n}</small>`).join('')}<small>R — новое дерево</small>`;
   resultEl.hidden = false;
   // Итог висит недолго и остаётся в журнале: дальше можно кромсать пень, пока не нажмёшь R.
