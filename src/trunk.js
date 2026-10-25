@@ -640,6 +640,8 @@ export class TrunkVoxels {
     const out = scratch;
     const tear = this.middle;
     out.faces = 0;
+    const rim = new Set(); // углы граней коры, по номеру угла на сетке
+    const key = (I, J, K) => (J * (n + 1) + K) * (n + 1) + I;
     for (let j = j0; j < j1; j++) {
       const axis = this.shape.center((this.floor + j + 0.5) * VOXEL);
       const y = (this.floor + j + 0.5) * VOXEL;
@@ -669,6 +671,7 @@ export class TrunkVoxels {
             for (let c = 0; c < 4; c++, v += 3, t += 2) {
               const corner = corners[c];
               const px = x0 + (i + corner[0]) * VOXEL, pz = z0 + (k + corner[2]) * VOXEL;
+              if (bark) rim.add(key(i + corner[0], j + corner[1], k + corner[2]));
               out.pos[v] = px;
               out.pos[v + 1] = (j + corner[1]) * VOXEL;
               out.pos[v + 2] = pz;
@@ -699,6 +702,26 @@ export class TrunkVoxels {
       }
     }
     const verts = out.faces * 12;
+    // Углы коры ставим на сам контур по лучу от оси, иначе по краю ствола шла бы лесенка кубиков.
+    // Угол сдвигается во всех гранях, где он есть, и в коре и в срезе, поэтому они сходятся без щели.
+    // Кубики не меняются: пила режет по ним, сетка лишь глаже их рисует.
+    const snapped = new Map();
+    for (let v = 0; v < verts; v += 3) {
+      const I = Math.round((out.pos[v] - x0) / VOXEL), J = Math.round(out.pos[v + 1] / VOXEL), K = Math.round((out.pos[v + 2] - z0) / VOXEL);
+      const id = key(I, J, K);
+      if (!rim.has(id)) continue;
+      let p = snapped.get(id);
+      if (!p) {
+        const y = (this.floor + J) * VOXEL;
+        const c = this.shape.center(y);
+        const dx = out.pos[v] - c.x, dz = out.pos[v + 2] - c.z;
+        const k = this.shape.outline(Math.atan2(dz, dx), y) / Math.hypot(dx, dz);
+        p = [c.x + dx * k, c.z + dz * k];
+        snapped.set(id, p);
+      }
+      out.pos[v] = p[0];
+      out.pos[v + 2] = p[1];
+    }
     const position = new THREE.BufferAttribute(out.pos.slice(0, verts), 3);
     const normal = new THREE.BufferAttribute(out.nor.slice(0, verts), 3);
     const uv = new THREE.BufferAttribute(out.uv.slice(0, out.faces * 8), 2);
