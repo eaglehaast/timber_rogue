@@ -7,7 +7,7 @@ import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
-import { makeGround, makeTufts } from './grass.js';
+import { makeGround, makeTufts, grassTufts, weedTufts, noise } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, blow, gust, stepWind } from './wind.js';
@@ -119,7 +119,12 @@ for (let i = 0; i < skyGeo.attributes.position.count; i++) {
 skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
 scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
 
-scene.add(makeGround(200), makeTufts(1500, 60, PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 })));
+// Трава густая на делянке и редеет к краю земли за 10 м от неё.
+const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - 22, Math.abs(z) - 12), 0, 10);
+// Полынь растёт колониями от корневищ: пятна в несколько метров, между ними её нет.
+const colonies = (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + 40, z / 9), 0.6, 0.85);
+const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 });
+scene.add(makeGround(200), makeTufts(grassTufts, 40000, 60, clear, meadow), makeTufts(weedTufts, 6000, 60, clear, colonies));
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 // Плоскость единичная: под длину шины и толщину ствола её растягивает scale.
