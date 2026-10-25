@@ -22,24 +22,27 @@ export function makeGround(size) {
   return ground;
 }
 
-// Пучки травы — карточки из атласа 4 × 2 (grass-tufts.png), каждая из двух плоскостей крест-накрест.
+// Пучки травы — карточки из атласа grass-tufts.png (собирает tools/tufts.py), каждая из двух
+// плоскостей крест-накрест. Сетку атласа и диапазон высот каждого пучка в метрах берём из grass-tufts.json.
 // Все пучки в одной геометрии, чтобы рисовались за один раз. Нормали смотрят вверх: пучок
 // освещён как земля под ним, а не как плоскость, повёрнутая к солнцу то лицом, то ребром.
 // Изнанка — отдельные треугольники с той же нормалью (у DoubleSide нормаль изнанки смотрела бы вниз).
 const [tuftTexture] = tiles(['assets/textures/grass-tufts.png']);
 const tuftMaterial = new THREE.MeshLambertMaterial({ map: tuftTexture, alphaTest: 0.5 });
+const { grid: [cols, rows], aspect, heights } = await (await fetch('assets/textures/grass-tufts.json')).json();
 
 export function makeTufts(count, size, clear) {
   const pos = [], uv = [], index = [];
   for (let n = 0; n < count; n++) {
     const x = (Math.random() - 0.5) * size, z = (Math.random() - 0.5) * size;
     if (clear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r)) continue;
-    const cell = Math.floor(Math.random() * 8), u0 = (cell % 4) / 4, v0 = cell < 4 ? 0.5 : 0;
-    const h = 0.5 + Math.random() * 0.4, w = h * 0.8, turn = Math.random() * Math.PI;
+    const cell = Math.floor(Math.random() * heights.length), [low, high] = heights[cell];
+    const u0 = (cell % cols) / cols, v0 = 1 - (Math.floor(cell / cols) + 1) / rows, u1 = u0 + 1 / cols, v1 = v0 + 1 / rows;
+    const h = low + Math.random() * (high - low), w = h * aspect, turn = Math.random() * Math.PI;
     for (const a of [turn, turn + Math.PI / 2]) {
       const dx = Math.cos(a) * w / 2, dz = Math.sin(a) * w / 2, k = pos.length / 3;
       pos.push(x - dx, 0, z - dz, x + dx, 0, z + dz, x + dx, h, z + dz, x - dx, h, z - dz);
-      uv.push(u0, v0, u0 + 0.25, v0, u0 + 0.25, v0 + 0.5, u0, v0 + 0.5);
+      uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
       index.push(k, k + 1, k + 2, k, k + 2, k + 3, k, k + 2, k + 1, k, k + 3, k + 2);
     }
   }
