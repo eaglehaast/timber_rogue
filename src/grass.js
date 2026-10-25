@@ -43,12 +43,32 @@ tuftMaterial.onBeforeCompile = (shader) => {
 };
 const { grid: [cols, rows], aspect, heights } = await (await fetch('assets/textures/grass-tufts.json')).json();
 
-export function makeTufts(count, size, clear) {
+// Плавный шум 0..1 с ячейкой в метр: по нему трава то выше и гуще, то ниже и реже.
+const salt = Math.random() * 1000;
+const hash = (i, j) => { const h = Math.sin(i * 127.1 + j * 311.7 + salt) * 43758.5453; return h - Math.floor(h); };
+function noise(x, z) {
+  const i = Math.floor(x), j = Math.floor(z), fx = x - i, fz = z - j;
+  const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
+  const a = hash(i, j) + (hash(i + 1, j) - hash(i, j)) * sx, b = hash(i, j + 1) + (hash(i + 1, j + 1) - hash(i, j + 1)) * sx;
+  return a + (b - a) * sz;
+}
+// Насколько пучок высокий среди всех: 0 — самый низкий класс, 1 — самый высокий.
+const tallest = Math.max(...heights.map(([, h]) => h)), lowest = Math.min(...heights.map(([, h]) => h));
+const rank = heights.map(([, h]) => (h - lowest) / (tallest - lowest));
+
+// Трава сплошным покровом: на каждый квадратный метр около density(x, z) × count / size² попыток.
+// Куртины: где шум «дикий», берём в основном высокие пучки и сажаем гуще, между ними — низкая трава.
+export function makeTufts(count, size, clear, density) {
   const pos = [], uv = [], index = [];
   for (let n = 0; n < count; n++) {
     const x = (Math.random() - 0.5) * size, z = (Math.random() - 0.5) * size;
     if (clear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r)) continue;
-    const cell = Math.floor(Math.random() * heights.length), [low, high] = heights[cell];
+    const wild = THREE.MathUtils.smoothstep(noise(x / 5, z / 5), 0.3, 0.7);
+    if (Math.random() > density(x, z) * (0.5 + 0.5 * wild)) continue;
+    const weights = rank.map((t) => t * wild + (1 - t) * (1 - wild) + 0.05);
+    let pick = Math.random() * weights.reduce((a, b) => a + b), cell = 0;
+    while ((pick -= weights[cell]) > 0) cell++;
+    const [low, high] = heights[cell];
     const u0 = (cell % cols) / cols, v0 = 1 - (Math.floor(cell / cols) + 1) / rows, u1 = u0 + 1 / cols, v1 = v0 + 1 / rows;
     const h = low + Math.random() * (high - low), w = h * aspect, turn = Math.random() * Math.PI;
     for (const a of [turn, turn + Math.PI / 2]) {
