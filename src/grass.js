@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
+import { windUniforms, GUST_GLSL } from './wind.js';
 
 // Трава на земле — набор из 20 акварельных плиток по GRASS_TILE метров с общими краями (сетка 5 × 4
 // в одной картинке): каждая клетка земли берёт свою плитку, и узор не повторяется.
@@ -29,6 +30,17 @@ export function makeGround(size) {
 // Изнанка — отдельные треугольники с той же нормалью (у DoubleSide нормаль изнанки смотрела бы вниз).
 const [tuftTexture] = tiles(['assets/textures/grass-tufts.png']);
 const tuftMaterial = new THREE.MeshLambertMaterial({ map: tuftTexture, alphaTest: 0.5 });
+// Ветер клонит пучок вокруг основания: сдвиг вершины по ветру растёт с её высотой. Клонится сильнее,
+// чем дерево, и подрагивает сам по себе — у каждого пучка своя фаза дрожи по его месту.
+tuftMaterial.onBeforeCompile = (shader) => {
+  Object.assign(shader.uniforms, windUniforms);
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>
+      ${GUST_GLSL}`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      float lean = windMax * (0.5 + 2.5 * gust(transformed.xz)) + 0.03 * sin(5.0 * windTime + dot(transformed.xz, vec2(3.1, 4.7)));
+      transformed.xz += windDir * lean * transformed.y;`);
+};
 const { grid: [cols, rows], aspect, heights } = await (await fetch('assets/textures/grass-tufts.json')).json();
 
 export function makeTufts(count, size, clear) {

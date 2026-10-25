@@ -10,6 +10,7 @@ import { dressBark } from './bark.js';
 import { makeGround, makeTufts } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
+import { wind, blow, gust, stepWind } from './wind.js';
 
 // Пробная делянка: три дерева в ряд, далеко друг от друга, — радиус ствола выше корневых наплывов и где растёт.
 const PLOT = [{ r: 0.1, x: -15 }, { r: 0.3, x: 0 }, { r: 0.2, x: 15 }];
@@ -184,14 +185,12 @@ function growTree(voxels, r) {
   };
 }
 
-// Ветер налетает порывами: сумма несоизмеримых волн, обрезанная снизу, — от 0 до 1.
-function gust(t, phase) {
-  const g = Math.sin(0.31 * t + phase) + 0.5 * Math.sin(0.87 * t + 2 * phase) + 0.3 * Math.sin(2.3 * t);
-  return Math.max(0, g) / 1.8;
-}
-
-// Новая делянка: все деревья вырастают заново, трава остаётся.
-const regrow = () => PLOT.forEach((_, slot) => newRound(slot));
+// Новая делянка: все деревья вырастают заново и дует новый ветер, трава остаётся.
+// Ветер смещает центр тяжести дерева на 0.05–0.25 м: под такой подобран порог, когда недопил держит.
+const regrow = () => {
+  blow(Math.random() * Math.PI * 2, 0.05 + Math.random() * 0.2, Math.random() * 9);
+  PLOT.forEach((_, slot) => newRound(slot));
+};
 
 // Вырастить заново дерево на месте slot делянки. treeSeed — зерно, из которого оно растёт
 // (по нему его можно вырастить заново из отчёта).
@@ -220,7 +219,6 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
     slot, base: root.position, root, voxels, upper, yard, ...tree,
     weight: tree.mass * G,
     seed: treeSeed,
-    wind: { dir: dirOf(random() * Math.PI * 2), max: 0.05 + random() * 0.2, phase: random() * 9 },
     time: 0, sway: new THREE.Vector3(), tilt: new THREE.Vector3(), bent: new THREE.Vector3(), gap: null,
     // Насколько недопил поддался насовсем, вокруг какой оси, куда и с какой скоростью сейчас поворачивается.
     give: { tilt: new THREE.Vector3(), at: new THREE.Vector3(), u: null, speed: 0 },
@@ -426,8 +424,8 @@ function crack(power) {
 // пересчитываем, держит ли он дерево.
 function stand(dt) {
   round.time += dt;
-  const g = gust(round.time, round.wind.phase);
-  round.sway.copy(round.wind.dir).multiplyScalar(g * round.wind.max);
+  const g = gust(round.base);
+  round.sway.copy(wind.dir).multiplyScalar(g * wind.max);
   if (round.voxels.version && round.secVersion !== round.voxels.version) {
     round.sec = section(round.voxels);
     round.secVersion = round.voxels.version;
@@ -456,7 +454,7 @@ function stand(dt) {
   // Так щель видно смыкающейся там, где она сомкнулась, и раскрывшейся там, где раскрылась.
   // Перерезанный насквозь верх ещё и сел на пропил.
   const sway = new THREE.Quaternion().setFromAxisAngle(
-    UP.clone().cross(round.wind.dir), (g * round.wind.max) / (round.com.y - ZONE_H),
+    UP.clone().cross(wind.dir), (g * wind.max) / (round.com.y - ZONE_H),
   );
   round.bend.quaternion.copy(sway);
   if (!sec) return;
@@ -880,6 +878,7 @@ function update(dt) {
   }
   if (saw?.loose) rest(saw);
   // Живут все деревья делянки: то, от которого отошёл, падает дальше.
+  stepWind(dt);
   const here = round;
   for (const tree of trees) {
     round = tree;
@@ -1192,6 +1191,7 @@ const r3 = (a) => a.map((v) => +v.toFixed(3));
 watch(() => ({
   mode,
   player: r3([player.pos.x, player.pos.z, player.yaw, player.pitch, player.eye]),
+  wind: r3([wind.dir.x, wind.dir.z, wind.max, wind.phase, wind.time]),
   saw: saw && { edge: r3(saw.edge.toArray()), q: r3(saw.q.toArray()), depth: +saw.depth.toFixed(3), pinched: !!saw.pinched },
   tree: {
     slot: round.slot, seed: round.seed, time: +round.time.toFixed(2), mass: Math.round(round.mass), com: r3(round.com.toArray()),
