@@ -3,27 +3,24 @@ import { tiles, soften } from './surface.js';
 
 // Трава на земле — набор из 20 акварельных плиток по GRASS_TILE метров с общими краями (сетка 5 × 4
 // в одной картинке): каждая клетка земли берёт свою плитку, и узор не повторяется.
-// Два тона на пробу, клавиша N: картинка как есть и тон под пучки — темнее и спокойнее их,
-// чтобы пучки читались на земле. Пятна тона около 15 и 4 метров.
+// Тон приглушён под пучки: земля темнее и спокойнее их, чтобы пучки на ней читались.
+// Пятна тона около 15 и 4 метров.
 const GRASS_TILE = 2;
 const [texture] = tiles(['assets/textures/grass-clover.jpg']);
-const tones = [
-  { contrast: 1, saturation: 1, low: [0.94, 0.94, 0.94], high: [1.04, 1.04, 1.02] },
-  { contrast: 0.85, saturation: 0.65, low: [0.8, 0.84, 0.82], high: [0.98, 0.98, 0.95] },
-].map((tone) => soften(new THREE.MeshLambertMaterial({ map: texture }), { ...tone, scales: [0.13, 0.5], cells: [5, 4] }));
+const material = soften(new THREE.MeshLambertMaterial({ map: texture }), {
+  contrast: 0.85, saturation: 0.65, scales: [0.13, 0.5], low: [0.8, 0.84, 0.82], high: [0.98, 0.98, 0.95], cells: [5, 4],
+});
 
 // Земля — квадрат травы со стороной size метров. Раскладка плиток своя у каждого запуска игры
 // и не меняется, пока на делянке растят новые деревья.
 export function makeGround(size) {
   texture.repeat.set(size / GRASS_TILE, size / GRASS_TILE);
   texture.offset.set(Math.floor(Math.random() * 100), Math.floor(Math.random() * 100));
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), tones[1]);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(size, size), material);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   return ground;
 }
-
-export const switchTone = (ground) => { ground.material = tones[(tones.indexOf(ground.material) + 1) % tones.length]; };
 
 // Пучки травы — карточки из атласа 4 × 2 (grass-tufts.png), каждая из двух плоскостей крест-накрест.
 // Все пучки в одной геометрии, чтобы рисовались за один раз. Нормали смотрят вверх: пучок

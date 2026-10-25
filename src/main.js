@@ -7,7 +7,7 @@ import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
-import { makeGround, makeTufts, switchTone } from './grass.js';
+import { makeGround, makeTufts } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
 
@@ -118,8 +118,7 @@ for (let i = 0; i < skyGeo.attributes.position.count; i++) {
 skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
 scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
 
-const ground = makeGround(200);
-scene.add(ground, makeTufts(1500, 60, PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 })));
+scene.add(makeGround(200), makeTufts(1500, 60, PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 })));
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 // Плоскость единичная: под длину шины и толщину ствола её растягивает scale.
@@ -1082,7 +1081,6 @@ addEventListener('keydown', (e) => {
   if (!e.repeat) note(e.code);
   keys.add(e.code);
   if (e.code === 'KeyR') regrow();
-  if (e.code === 'KeyN') switchTone(ground);
   if (e.code === 'KeyP') {
     tell().then((ok) => {
       unsay('seen');
