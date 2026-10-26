@@ -50,9 +50,10 @@ async function atlas(name) {
   const rank = heights.map(([, h]) => (h - lowest) / (tallest - lowest));
   return { material, cols, rows, aspect, heights, rank };
 }
-// Злаки (ежа, мятлик, овсяница…) и сорняки (полынь) — два атласа: вместе не влезли бы в одну текстуру.
+// Злаки (ежа, мятлик, овсяница…) — один атлас, у каждого сорняка свой: вместе не влезли бы в одну текстуру.
 export const grassTufts = await atlas('grass-tufts');
-export const weedTufts = await atlas('weed-tufts');
+export const mugwortTufts = await atlas('mugwort-tufts');
+export const nettleTufts = await atlas('nettle-tufts');
 
 // Плавный шум 0..1 с ячейкой в метр: по нему трава то выше и гуще, то ниже и реже.
 const salt = Math.random() * 1000;
