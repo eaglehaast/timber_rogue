@@ -370,22 +370,18 @@ export class TrunkVoxels {
   // Отделяет верхушку, которая падает; здесь остаётся пень. Перерезанная колонка делится по выпилу:
   // что выше него — верх. Целые колонки недопила рвутся на высоте h, а отщепившиеся (tongue —
   // их номера) — выше на длину отщепа split: полоса остаётся на пне, в комле верха — жёлоб.
-  // Кусок между двумя пропилами в одной колонке уходит с верхом, если держится за него сбоку, иначе остаётся на пне.
   splitTop(h, tongue = new Set(), split = 0) {
     const { n, data, gap, gapLow, gapHigh } = this;
     const layer = n * n;
     this.standing = false;
     const tear = Math.round(h / VOXEL);
     const tongueTear = Math.min(this.ny - 1, Math.round((h + split) / VOXEL));
-    const top = new Uint8Array(data.length);
-    const between = (id) => {
-      const j = Math.floor(id / layer);
-      const col = id - j * layer;
-      return gap[col] > 0 && j > gapLow[col] && j < gapHigh[col];
-    };
-    // Колонки у коры, что в полосе пропилов выходят из ствола (rim): ствол клонится, а колонки отвесные,
-    // и на крутом резе их много. По высоте их не разделить — в каждом слое они идут туда же,
-    // куда соседняя древесина: кора под косым резом остаётся на пне, кора рядом с отщепом — на отщепе.
+    const last = Math.max(this.cutHigh, tongueTear);
+    // По своей колонке не решить два рода кубиков, их решаем по слою. Кусок колонки между двумя
+    // разрывами отрезан сверху и снизу и держится только боком: кусок слоя из таких кубиков уходит
+    // туда, с чем у него больше общих граней. Колонки у коры, что в полосе пропилов выходят из ствола
+    // (rim), отвесные, а ствол клонится: по высоте их не разделить. Кора держится за древесину под
+    // собой и идёт туда же, куда ближайшая по слою: под косым резом остаётся на пне, у отщепа — на отщепе.
     const rim = new Uint8Array(layer);
     for (let col = 0; col < layer; col++) {
       if (gap[col]) continue;
@@ -396,51 +392,61 @@ export class TrunkVoxels {
       }
       rim[col] = wood && air ? 1 : 0;
     }
-    const last = Math.max(this.cutHigh, tongueTear);
-    const stack = [];
+    // Колонка рвётся на пропилах, а целая на высоте недопила — ещё и там, где рвётся недопил:
+    // кусок от этой высоты до пропила выше держится только боком, как кусок между двумя пропилами.
+    const between = (j, col) => gap[col] > 0 && j < gapHigh[col]
+      && (j > gapLow[col] || j >= (tongue.has(col) ? tongueTear : tear));
+    const open = (j, col) => (rim[col] ? j >= this.cutLow && j <= last : between(j, col));
+    const top = new Uint8Array(data.length);
     for (let id = 0; id < data.length; id++) {
       if (!data[id]) continue;
       const j = Math.floor(id / layer);
       const col = id - j * layer;
-      if (rim[col] && j >= this.cutLow && j <= last) continue;
-      if (this.above(j, col, tongue.has(col) ? tongueTear : tear)) {
-        top[id] = 1;
-        stack.push(id);
-      }
+      if (!open(j, col) && this.above(j, col, tongue.has(col) ? tongueTear : tear)) top[id] = 1;
     }
+    const side = new Uint8Array(layer); // 0 — ещё не решён, 1 — верх, 2 — пень
+    const queue = new Int32Array(layer);
+    const near = (col) => {
+      const i = col % n;
+      return [i > 0 ? col - 1 : -1, i < n - 1 ? col + 1 : -1, col - n, col + n].filter((nb) => nb >= 0 && nb < layer);
+    };
     for (let j = this.cutLow; j <= last; j++) {
-      const known = new Uint8Array(layer);
-      const queue = [];
-      for (let col = 0; col < layer; col++) if (data[j * layer + col] && !rim[col]) { known[col] = 1; queue.push(col); }
-      for (let q = 0; q < queue.length; q++) {
-        const col = queue[q];
-        const i = col % n;
-        for (const nb of [i > 0 ? col - 1 : -1, i < n - 1 ? col + 1 : -1, col - n, col + n]) {
-          if (nb < 0 || nb >= layer || known[nb] || !rim[nb] || !data[j * layer + nb]) continue;
-          known[nb] = 1;
-          queue.push(nb);
-          if (top[j * layer + col]) {
-            top[j * layer + nb] = 1;
-            stack.push(j * layer + nb);
+      const row = j * layer;
+      side.fill(0);
+      for (let col = 0; col < layer; col++) if (data[row + col] && !open(j, col)) side[col] = top[row + col] ? 1 : 2;
+      // Куски между пропилами: обходим каждый и считаем, сколько граней у него с верхом и с пнём.
+      for (let start = 0; start < layer; start++) {
+        if (side[start] || !data[row + start] || rim[start] || !between(j, start)) continue;
+        side[start] = 3;
+        let end = 0, up = 0, down = 0;
+        queue[end++] = start;
+        for (let q = 0; q < end; q++) {
+          for (const nb of near(queue[q])) {
+            if (!data[row + nb]) continue;
+            if (side[nb] === 1) up++;
+            else if (side[nb] === 2) down++;
+            else if (!side[nb] && !rim[nb] && between(j, nb)) {
+              side[nb] = 3;
+              queue[end++] = nb;
+            }
           }
         }
+        for (let q = 0; q < end; q++) side[queue[q]] = up > down ? 1 : 2;
       }
-      // Обрывок колонки, не связанный в слое ни с чем, решаем по высоте, как раньше.
-      for (let col = 0; col < layer; col++) {
-        const id = j * layer + col;
-        if (rim[col] && data[id] && !known[col] && this.above(j, col, tear)) {
-          top[id] = 1;
-          stack.push(id);
+      // Кора — за ближайшей решённой древесиной слоя.
+      let end = 0;
+      for (let col = 0; col < layer; col++) if (side[col]) queue[end++] = col;
+      for (let q = 0; q < end; q++) {
+        const col = queue[q];
+        for (const nb of near(col)) {
+          if (side[nb] || !data[row + nb]) continue;
+          side[nb] = side[col];
+          queue[end++] = nb;
         }
       }
-    }
-    while (stack.length) {
-      for (const nb of this.neighbours(stack.pop())) {
-        if (data[nb] && !top[nb] && between(nb)) {
-          top[nb] = 1;
-          stack.push(nb);
-        }
-      }
+      // Обрывок, не связанный в слое ни с чем решённым, остаётся на пне: если его и там ничто
+      // не держит, он отвалится (breakLoose).
+      for (let col = 0; col < layer; col++) if (side[col] === 1 && open(j, col)) top[row + col] = 1;
     }
     const ids = [];
     for (let id = 0; id < data.length; id++) if (top[id]) ids.push(id);
@@ -490,6 +496,7 @@ export class TrunkVoxels {
       part.touch(j - jLow);
       this.empty(id);
       this.touch(j);
+      this.removed.push(id);
     }
     part.center = part.measure().center;
     part.low = part.floor * VOXEL;
