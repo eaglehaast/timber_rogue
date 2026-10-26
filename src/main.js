@@ -594,10 +594,17 @@ function splitHinge(sec, tip, load) {
   say('split', 'Треск вдоль ствола — его раскалывает вверх от недопила');
 }
 
+// Верх отделился от пня (недопил рвётся на высоте h) и дальше движется с upper. Что на пне
+// после этого ни на чём не держится — кусок между пропилами, обрывок коры, — отваливается.
+function separate(h, tongue, split) {
+  round.upper.add(round.voxels.splitTop(h, tongue, split).group);
+  round.voxels.breakLoose().forEach(dropPiece);
+  round.top = true;
+}
+
 // Верх перерезан по косой круче, чем держит трение, — он съезжает по срезу.
 function startSlide(s) {
-  round.upper.add(round.voxels.splitTop(0).group);
-  round.top = true;
+  separate(round.voxels.middle * VOXEL);
   round.slide = { ...s, s: 0, v: 0 };
   dropSaw();
   crack(0.6);
@@ -640,8 +647,7 @@ function startFall(tip, c, slip = 0, speed = 0) {
   const h = pivotHeight(sec, tip.u, tip.p);
   // Падая, дерево тянет недопил, пока тот не порвётся, то есть до полной прочности.
   if (sec.intact.length) splitHinge(sec, tip, 1);
-  if (!round.top) round.upper.add(round.voxels.splitTop(h, round.tongue, round.split).group);
-  round.top = true;
+  if (!round.top) separate(h, round.tongue, round.split);
   const pivot = new THREE.Group();
   pivot.position.copy(tip.u).multiplyScalar(tip.p).setY(h);
   round.root.add(pivot);
