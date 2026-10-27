@@ -219,64 +219,60 @@ export function growSkeleton(shape, zone, height) {
   return { axes, trunk, zone };
 }
 
-// Масса, центр тяжести и тензор инерции (вокруг центра тяжести) оси со всем, что на ней растёт.
-// Второй ствол двойного дерева сидит на первом, но это своё тело: в счёт первого он не идёт.
-// Древесина — кусками по STEP; то, что сидит внутри родителя, и ствол ниже зоны (его считают кубики) не в счёт.
-function wood(a, zone) {
+// Древесина оси part.axis от part.from до part.to кусками по STEP: each(масса, середина, длина, радиус,
+// касательная). То, что сидит внутри родителя, и ствол ниже зоны (его считают кубики) не в счёт.
+export function segments({ axis: a, from = 0, to = a.len }, zone, each) {
   const inside = a.parent ? section(a.parent, a.attach).r : 0;
-  const parts = [];
   for (let i = 0; i < a.points.length - 1; i++) {
-    const q = a.points[i];
-    if (q.s < inside || (a.stem !== undefined && q.p.y < zone)) continue;
-    parts.push([DENSITY * Math.PI * q.r * q.r * (a.points[i + 1].s - q.s), q.p.clone().lerp(a.points[i + 1].p, 0.5)]);
+    const q = a.points[i], next = a.points[i + 1];
+    const s0 = Math.max(q.s, from, inside), s1 = Math.min(next.s, to);
+    if (s1 <= s0 || (a.stem !== undefined && q.p.y < zone)) continue;
+    const k0 = (s0 - q.s) / (next.s - q.s), k1 = (s1 - q.s) / (next.s - q.s);
+    const mid = q.p.clone().lerp(next.p, (k0 + k1) / 2);
+    each(DENSITY * Math.PI * q.r * q.r * (s1 - s0), mid, s1 - s0, q.r, q.t);
   }
-  return parts;
 }
 
-export function measure(axis, zone) {
-  const parts = [];
-  (function gather(a) {
-    parts.push(...wood(a, zone));
-    if (a.leaves.mass) parts.push([a.leaves.mass, a.leaves.center]);
-    a.children.forEach((c) => c.stem === undefined && gather(c));
-  })(axis);
-  const mass = parts.reduce((m, [dm]) => m + dm, 0);
-  const com = parts.reduce((c, [dm, p]) => c.addScaledVector(p, dm), new THREE.Vector3()).divideScalar(mass);
-  const e = new Array(9).fill(0);
-  for (const [dm, p] of parts) {
-    const d = p.clone().sub(com), dd = d.lengthSq(), v = d.toArray();
-    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) e[3 * i + j] += dm * ((i === j ? dd : 0) - v[i] * v[j]);
-  }
-  return { mass, com, inertia: new THREE.Matrix3().fromArray(e) };
+// Точка оси на длине дуги s — такая же, как в points: центр, касательная, рамка и радиус.
+export function pointAt(axis, s) {
+  const at = section(axis, s);
+  return { s, p: at.center, t: at.tangent, n: at.frame[0], b: at.frame[1], r: at.r };
 }
 
-// Кора: каждая ось — одна трубка по своей кривой, в рамке оси, с профилем сечения. У оси с воротником
-// трубка у основания раздута. Начало оси сидит на оси родителя, внутри него, — стык без щели.
-// Текстура в метрах: по кругу — по среднему радиусу оси, вдоль — по длине дуги. Толстый конец оси
-// (сломанная вершина, сухой пенёк) закрыт крышкой.
-function barkGeometry(axes, from) {
-  const pos = [], normal = [], uv = [], index = [];
-  for (const a of axes) {
+// Радиус коры оси a в точке q (её s и r) по азимуту az в рамке оси: у оси с воротником основание раздуто,
+// у ствола сечение — по профилю.
+export function girth(a, q, az) {
+  const collar = a.joint === 'collar' ? 1 + 0.35 * Math.exp(-q.s / (2 * a.points[0].r)) : 1;
+  return q.r * collar * (a.profile ? a.profile(az, q.s) : 1);
+}
+
+// Кора: каждая ось — одна трубка по своей кривой от from до to (parts — { axis, from, to }), в рамке оси,
+// с профилем сечения. У оси с воротником трубка у основания раздута. Начало оси сидит на оси родителя,
+// внутри него, — стык без щели. Текстура в метрах: по кругу — по среднему радиусу оси, вдоль — по длине
+// дуги, поэтому у отпиленного куска кора та же, что была на дереве. Толстый конец оси (сломанная вершина,
+// сухой пенёк) закрыт крышкой из коры, а где ось перепилили (cutFrom, cutTo) — торцом с кольцами:
+// это вторая группа граней, со своим материалом. Кольца по торцу — как на срезе кубиков: по кругу
+// доля оборота, от коры (0) к сердцевине (1).
+export function barkGeometry(parts) {
+  const pos = [], normal = [], uv = [], index = [], grain = [];
+  for (const { axis: a, from = 0, to = a.len, cutFrom, cutTo } of parts) {
     const r0 = a.points[0].r;
     const sides = THREE.MathUtils.clamp(Math.ceil((2 * Math.PI * r0) / 0.03), 5, 32);
     const every = r0 < 0.02 ? 2 : 1;
-    // Ствол начинается кольцом ниже from: трубка заходит внутрь кубиков и при качании не открывает щель.
-    const first = a.stem !== undefined ? a.points.findIndex((q) => q.p.y >= from) - 1 : 0;
-    const rings = a.points.filter((q, i) => i >= first && (i % every === 0 || i === a.points.length - 1));
-    const mean = rings.reduce((m, q) => m + q.r, 0) / rings.length;
+    const step = (q, i) => i % every === 0 || i === a.points.length - 1;
+    a.mean ??= a.points.filter(step).reduce((m, q) => m + q.r, 0) / a.points.filter(step).length;
+    const rings = [pointAt(a, from), ...a.points.filter((q, i) => q.s > from + 1e-6 && q.s < to - 1e-6 && step(q, i)), pointAt(a, to)];
     const start = pos.length / 3;
     rings.forEach((q, k) => {
-      const collar = a.joint === 'collar' ? 1 + 0.35 * Math.exp(-q.s / (2 * r0)) : 1;
       const world = (az) => Math.atan2(q.n.z * Math.cos(az) + q.b.z * Math.sin(az), q.n.x * Math.cos(az) + q.b.x * Math.sin(az));
       const turn = Math.sign(Math.sin(world(0.1) - world(0)));
       for (let j = 0; j <= sides; j++) {
         const az = (j / sides) * 2 * Math.PI;
         const out = q.n.clone().multiplyScalar(Math.cos(az)).addScaledVector(q.b, Math.sin(az));
-        const r = q.r * collar * (a.profile ? a.profile(az, q.s) : 1);
-        pos.push(...q.p.clone().addScaledVector(out, r).toArray());
+        pos.push(...q.p.clone().addScaledVector(out, girth(a, q, az)).toArray());
         normal.push(...out.toArray());
         if (a.bark) uv.push(((world(0) + turn * az) * a.bark.radius) / BARK_TILE, (q.s - a.bark.s + a.bark.y) / BARK_TILE);
-        else uv.push((az * mean) / BARK_TILE, q.s / BARK_TILE);
+        else uv.push((az * a.mean) / BARK_TILE, q.s / BARK_TILE);
         if (k && j < sides) {
           const c = start + k * (sides + 1) + j, p = c - (sides + 1);
           index.push(p, p + 1, c, p + 1, c + 1, c);
@@ -284,19 +280,42 @@ function barkGeometry(axes, from) {
       }
     });
     const end = rings[rings.length - 1];
-    if (end.r > 0.012) {
+    if (cutTo) cap(a, end, 1, sides);
+    else if (end.r > 0.012) {
       const c = pos.length / 3, last = c - (sides + 1);
       pos.push(...end.p.toArray());
       normal.push(...end.t.toArray());
       uv.push(0, 0);
       for (let j = 0; j < sides; j++) index.push(last + j, last + j + 1, c);
     }
+    if (cutFrom) cap(a, rings[0], -1, sides);
+  }
+  // Торец пропила смотрит вдоль оси наружу (out = +1 у конца, −1 у начала). У каждого треугольника своя
+  // середина: в полярных координатах середина — целая строка картинки, и общая растянула бы её веером.
+  function cap(a, q, out, sides) {
+    const n = q.t.clone().multiplyScalar(out).toArray();
+    for (let j = 0; j < sides; j++) {
+      const c = pos.length / 3;
+      pos.push(...q.p.toArray());
+      uv.push((j + 0.5) / sides, 1);
+      for (const k of [j, j + 1]) {
+        const az = (k / sides) * 2 * Math.PI;
+        const dir = q.n.clone().multiplyScalar(Math.cos(az)).addScaledVector(q.b, Math.sin(az));
+        pos.push(...q.p.clone().addScaledVector(dir, girth(a, q, az)).toArray());
+        uv.push(k / sides, 0);
+      }
+      normal.push(...n, ...n, ...n);
+      if (out > 0) grain.push(c + 1, c + 2, c);
+      else grain.push(c + 2, c + 1, c);
+    }
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  geometry.setIndex(index);
+  geometry.setIndex([...index, ...grain]);
+  geometry.addGroup(0, index.length, 0);
+  geometry.addGroup(index.length, grain.length, 1);
   return geometry;
 }
 
@@ -318,8 +337,10 @@ leafMaterial.onBeforeCompile = (shader) => {
 };
 const LEAVES = await (await fetch('assets/textures/maple-leaves.json')).json();
 
-function leafCards(axes, trunk) {
-  const { grid: [cols, rows], aspect, heights } = LEAVES;
+// Карточки листвы на концевых веточках осей axes: где сидит (ось и длина дуги s, точка at), куда смотрит
+// вверх (up), какая клетка атласа, какой высоты и как повёрнута. Центр карточки — center.
+function placeCards(axes, trunk) {
+  const { heights } = LEAVES;
   const cards = [];
   for (const a of axes) {
     if (a.dead || a.level < 2) continue;
@@ -328,11 +349,17 @@ function leafCards(axes, trunk) {
       const outward = at.center.clone().sub(section(trunk, Math.min(trunk.len, at.center.y)).center).setY(0).normalize();
       const up = at.tangent.clone().lerp(outward, 0.3).addScaledVector(UP, -0.2).normalize();
       const cell = Math.floor(random() * heights.length), [low, high] = heights[cell];
-      cards.push({ axis: a, at: at.center, up, cell, h: rand(low, high), turn: random() * Math.PI });
+      const h = rand(low, high);
+      cards.push({ axis: a, s, at: at.center, up, cell, h, turn: random() * Math.PI, center: at.center.clone().addScaledVector(up, h / 2) });
     }
   }
+  return cards;
+}
+
+// Листва карточек cards одним куском. cloud — середина кроны: от неё смотрят нормали.
+export function leafMesh(cards, cloud) {
+  const { grid: [cols, rows], aspect } = LEAVES;
   const pos = [], normal = [], uv = [], lift = [], index = [];
-  const center = cards.reduce((c, k) => c.add(k.at), new THREE.Vector3()).divideScalar(cards.length);
   for (const { at, up, cell, h, turn } of cards) {
     const u0 = (cell % cols) / cols, v0 = 1 - (Math.floor(cell / cols) + 1) / rows, u1 = u0 + 1 / cols, v1 = v0 + 1 / rows;
     const side0 = new THREE.Vector3().crossVectors(up, Math.abs(up.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : UP).normalize();
@@ -342,7 +369,7 @@ function leafCards(axes, trunk) {
       const corners = [at.clone().sub(side), at.clone().add(side), at.clone().add(side).addScaledVector(up, h), at.clone().sub(side).addScaledVector(up, h)];
       for (const c of corners) {
         pos.push(...c.toArray());
-        normal.push(...c.clone().sub(center).normalize().addScaledVector(UP, 1).normalize().toArray());
+        normal.push(...c.clone().sub(cloud).normalize().addScaledVector(UP, 1).normalize().toArray());
       }
       uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
       lift.push(0, 0, 1, 1);
@@ -355,51 +382,42 @@ function leafCards(axes, trunk) {
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geometry.setAttribute('lift', new THREE.Float32BufferAttribute(lift, 1));
   geometry.setIndex(index);
-  return { mesh: new THREE.Mesh(geometry, leafMaterial), cards };
+  return new THREE.Mesh(geometry, leafMaterial);
 }
 
-// Клён выше зоны пиления: кора от from (чуть ниже зоны, чтобы на стыке с кубиками не было щели) и листва.
-// Масса листьев — доля LEAF_SHARE от массы ветвей — поровну на карточки, к осям, на которых они сидят.
-// Узлы ствола (пустышки 'trunk' с радиусом) — по ним падающее дерево ложится на землю.
-// У каждого ствола своя крона (tree) со своими массой и инерцией: стволы двойного дерева падают порознь.
-export function growMaple(shape, zone, height, bark, from) {
+// Клён выше зоны пиления — куски скелета, из которых игра собирает отпиливаемые ветки (limbs.js):
+// у каждого ствола крона, у неё — нижние ветви и волчки, каждая своим куском (y — на какой высоте она
+// сидит на стволе). Кусок — оси parts ({ axis, from, to }), листья cards и cloud — середина его листвы.
+// Кора ствола начинается кольцом ниже from: трубка заходит внутрь кубиков и при качании не открывает щель.
+// Масса листьев — доля LEAF_SHARE от массы ветвей — поровну на карточки. Узлы ствола (knots — точки на оси
+// с радиусом) — по ним падающее дерево ложится на землю. Стволы двойного дерева падают порознь.
+export function growMaple(shape, zone, height, from) {
   const skeleton = growSkeleton(shape, zone, height);
   const { axes, trunk } = skeleton;
   const stemOf = (a) => (a.stem !== undefined ? a.stem : stemOf(a.parent));
   const lowOf = (a) => (a.low ? a : a.parent && lowOf(a.parent));
-  const dress = (own) => {
-    const tree = new THREE.Group();
-    tree.add(new THREE.Mesh(barkGeometry(own, from), bark));
-    const { mesh, cards } = leafCards(own, trunk);
-    tree.add(mesh);
-    return { tree, cards };
+  const part = (a) => ({ axis: a, from: a.stem !== undefined ? a.points[a.points.findIndex((q) => q.p.y >= from) - 1].s : 0, to: a.len });
+  const piece = (own) => {
+    const cards = placeCards(own, trunk);
+    const cloud = cards.reduce((c, k) => c.add(k.at), new THREE.Vector3()).divideScalar(Math.max(1, cards.length));
+    return { parts: own.map(part), cards, cloud };
   };
-  // Нижние ветви и волчки — каждая со своим, отдельной группой: y — на какой высоте она сидит на стволе.
   const lows = axes.filter((a) => a.low).map((root) => ({
-    root, ...dress(axes.filter((a) => lowOf(a) === root)), y: section(root.parent, root.attach).center.y,
+    root, ...piece(axes.filter((a) => lowOf(a) === root)), y: section(root.parent, root.attach).center.y,
   }));
   const crowns = shape.stems.map((_, i) => ({
-    ...dress(axes.filter((a) => stemOf(a) === i && !lowOf(a))), axis: axes.find((a) => a.stem === i),
-    lows: lows.filter((l) => stemOf(l.root) === i).map(({ tree, y }) => ({ tree, y })),
+    ...piece(axes.filter((a) => stemOf(a) === i && !lowOf(a))), knots: [],
+    lows: lows.filter((l) => stemOf(l.root) === i).map(({ parts, cards, cloud, y }) => ({ parts, cards, cloud, y })),
   }));
   const cards = [...crowns, ...lows].flatMap((c) => c.cards);
-  const branches = axes.filter((a) => a.level > 0).reduce((m, a) => wood(a, zone).reduce((w, [dm]) => w + dm, m), 0);
-  for (const { axis, at, up, h } of cards) {
-    axis.leaves.mass += (LEAF_SHARE * branches) / cards.length;
-    axis.leaves.center.addScaledVector(at.clone().addScaledVector(up, h / 2), 1);
-    axis.leaves.count = (axis.leaves.count ?? 0) + 1;
-  }
-  for (const a of axes) if (a.leaves.count) a.leaves.center.divideScalar(a.leaves.count);
+  let branches = 0;
+  for (const a of axes) if (a.level > 0) segments({ axis: a }, zone, (m) => { branches += m; });
+  for (const card of cards) card.mass = (LEAF_SHARE * branches) / cards.length;
   for (const a of axes.filter((x) => x.level === 0 || x.joint === 'codominant')) {
     for (let s = 0; s <= a.len; s += 0.5) {
       const at = section(a, s);
-      if (at.center.y < zone) continue;
-      const knot = new THREE.Object3D();
-      knot.name = 'trunk';
-      knot.userData.r = at.r;
-      knot.position.copy(at.center);
-      crowns[stemOf(a)].tree.add(knot);
+      if (at.center.y >= zone) crowns[stemOf(a)].knots.push({ at: at.center, r: at.r });
     }
   }
-  return { skeleton, crowns: crowns.map(({ tree, axis, lows }) => ({ tree, lows, ...measure(axis, zone) })) };
+  return { skeleton, crowns };
 }

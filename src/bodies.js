@@ -17,10 +17,13 @@ const PUSH = 0.25;         // какую долю глубины касания 
 const MAX_PUSH = 0.6;      // м/с — глубоко зашедшие тела расходятся не быстрее
 const ROLL = 5;            // 1/с — как быстро трение качения (трава, земля) гасит вращение лежащего тела
 const SLEEP_V = 0.05, SLEEP_W = 0.2, SLEEP_T = 0.6; // медленнее этого дольше SLEEP_T — уснуло
+const CELL = 0.5;          // м — клетка сетки, по которой ищем капсулы веток рядом с телом
+const NEAR = 0.05;         // м — так близко к тому, что сдвинулось, спящее тело просыпается
 
 const UP = new THREE.Vector3(0, 1, 0);
 const _u = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _j = new THREE.Vector3();
-const _p = new THREE.Vector3(), _a = new THREE.Vector3(), _e = new THREE.Vector3();
+const _p = new THREE.Vector3(), _n = new THREE.Vector3(), _s = new THREE.Vector3(), _a = new THREE.Vector3(), _e = new THREE.Vector3();
+const _lo = new THREE.Vector3(), _hi = new THREE.Vector3();
 const _c1 = new THREE.Vector3(), _c2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4(), _r = new THREE.Matrix3();
 
@@ -43,6 +46,8 @@ export class Body {
       a, b, r, ball: a.equals(b), A: new THREE.Vector3(), B: new THREE.Vector3(), low: new THREE.Vector3(), high: new THREE.Vector3(),
     }));
     this.reach = Math.max(...capsules.map((c) => Math.max(c.a.length(), c.b.length()) + c.r));
+    this.low = new THREE.Vector3(); // рамка всех капсул
+    this.high = new THREE.Vector3();
     this.sweep = 0; // м — сколько точка тела может пролететь за шаг
     this.still = 0;
     this.asleep = false;
@@ -68,9 +73,10 @@ export class Body {
   }
 }
 
-// Тела у одного дерева, в осях root. Земля — плоскость y = 0. Кубики (пень, упавший комель) — solid
-// с press(p, r, reach), рамкой box и номером version, который растёт, когда кубики выпиливают; их двигает
-// вместе с object: пень стоит с делянкой, упавший верх летит с деревом и толкает тела своей скоростью.
+// Тела у одного дерева, в осях root. Земля — плоскость y = 0. Остальное, обо что бьются, — наборы (fix):
+// кубики (пень, упавший комель) — solid с press(p, r, reach), рамкой box и номером version, который растёт,
+// когда кубики выпиливают, — и капсулы веток на дереве. Набор двигает вместе с object: пень стоит с делянкой,
+// крону качает ветер, упавший верх летит с деревом и толкает тела своей скоростью.
 export class World {
   constructor(root) {
     this.root = root;
@@ -83,12 +89,47 @@ export class World {
     this.bodies.push(body);
   }
 
-  fix(object, solids) {
+  remove(body) {
+    this.bodies.splice(this.bodies.indexOf(body), 1);
+  }
+
+  fix(object, { solids = [], capsules = [] }) {
     const matrix = this.frame(object, new THREE.Matrix4());
-    this.sets.push({
+    const set = {
       object, solids, matrix, inverse: matrix.clone().invert(), turn: new THREE.Matrix3().setFromMatrix4(matrix),
-      back: new THREE.Matrix4(), moved: false, dt: 0, seen: solids.map((s) => s.version),
-    });
+      back: new THREE.Matrix4(), moved: false, dt: 0, seen: solids.map((s) => s.version), capsules: [], visit: 0,
+      // Рамка всего набора в его осях и в осях root: тела вне неё набор не трогает.
+      box: { low: new THREE.Vector3(), high: new THREE.Vector3() }, span: { low: new THREE.Vector3(), high: new THREE.Vector3() },
+    };
+    this.sets.push(set);
+    this.refit(set, capsules);
+    return set;
+  }
+
+  // Капсулы набора поменялись (от ветки отпилили кусок): раскладываем их по клеткам заново.
+  // Тела у старых и у новых капсул будим: то, на чём они лежали, могло уйти.
+  refit(set, capsules) {
+    this.rouse(set);
+    set.capsules = capsules.map(({ a, b, r }) => ({ A: a, B: b, r, low: a.clone().min(b).subScalar(r), high: a.clone().max(b).addScalar(r) }));
+    set.grid = new Map();
+    set.capsules.forEach((c, i) => cells(c.low, c.high, (key) => {
+      if (!set.grid.has(key)) set.grid.set(key, []);
+      set.grid.get(key).push(i);
+    }));
+    set.stamp = new Uint32Array(set.capsules.length);
+    set.box.low.setScalar(Infinity);
+    set.box.high.setScalar(-Infinity);
+    for (const c of [...set.capsules, ...set.solids.map((solid) => solid.box)]) {
+      set.box.low.min(c.low);
+      set.box.high.max(c.high);
+    }
+    span(set);
+    this.rouse(set);
+  }
+
+  // Разбудить спящие тела рядом с набором.
+  rouse(set) {
+    for (const b of this.bodies) if (b.asleep && near(set, b)) b.wake();
   }
 
   // Положение object в осях root.
@@ -99,7 +140,6 @@ export class World {
   }
 
   step(dt) {
-    let touched = false;
     for (const set of this.sets) {
       const now = this.frame(set.object, _m);
       set.moved = !now.equals(set.matrix);
@@ -110,15 +150,16 @@ export class World {
         set.matrix.copy(now);
         set.turn.setFromMatrix4(now);
         set.dt = dt;
+        span(set);
       }
+      let changed = set.moved;
       set.solids.forEach((s, i) => {
         if (s.version === set.seen[i]) return;
         set.seen[i] = s.version;
-        touched = true;
+        changed = true;
       });
-      touched ||= set.moved;
+      if (changed) this.rouse(set);
     }
-    if (touched) this.bodies.forEach((b) => b.wake());
     this.time += dt;
     while (this.time >= STEP) {
       this.time -= STEP;
@@ -140,8 +181,8 @@ export class World {
       for (const c of b.capsules) {
         ground(b, c.A, c.r, contacts);
         if (!c.ball) ground(b, c.B, c.r, contacts);
-        for (const set of this.sets) for (const solid of set.solids) press(b, c, set, solid, contacts);
       }
+      for (const set of this.sets) if (overlap(b.low, b.high, set.span)) for (const c of b.capsules) against(b, c, set, contacts);
       for (let k = i + 1; k < awake.length; k++) pair(b, awake[k], contacts);
       for (const o of this.bodies) if (o.asleep) pair(b, o, contacts);
     });
@@ -152,16 +193,68 @@ export class World {
   }
 }
 
-// Рамки капсул с запасом на путь за шаг.
+// Рамка набора в осях root — по углам его рамки в своих осях.
+function span(set) {
+  const { box: { low, high }, span: out } = set;
+  out.low.setScalar(Infinity);
+  out.high.setScalar(-Infinity);
+  if (low.x > high.x) return;
+  for (let k = 0; k < 8; k++) {
+    _s.set(k & 1 ? high.x : low.x, k & 2 ? high.y : low.y, k & 4 ? high.z : low.z).applyMatrix4(set.matrix);
+    out.low.min(_s);
+    out.high.max(_s);
+  }
+}
+
+// Рамки капсул и всего тела с запасом на путь за шаг.
 function bound(b) {
+  b.low.setScalar(Infinity);
+  b.high.setScalar(-Infinity);
   for (const c of b.capsules) {
     c.low.copy(c.A).min(c.B).subScalar(c.r + b.sweep);
     c.high.copy(c.A).max(c.B).addScalar(c.r + b.sweep);
+    b.low.min(c.low);
+    b.high.max(c.high);
   }
 }
 
 const overlap = (low, high, box) => low.x <= box.high.x && box.low.x <= high.x && low.y <= box.high.y
   && box.low.y <= high.y && low.z <= box.high.z && box.low.z <= high.z;
+
+// Клетки сетки (по CELL), в которые заходит рамка low–high: номер клетки — из трёх её индексов по 10 бит.
+function cells(low, high, each) {
+  const x1 = Math.floor(high.x / CELL), y1 = Math.floor(high.y / CELL), z1 = Math.floor(high.z / CELL);
+  for (let x = Math.floor(low.x / CELL); x <= x1; x++) {
+    for (let y = Math.floor(low.y / CELL); y <= y1; y++) {
+      for (let z = Math.floor(low.z / CELL); z <= z1; z++) each((((x & 1023) << 10) | (y & 1023)) * 1024 + (z & 1023));
+    }
+  }
+}
+
+// Капсулы набора, чьи рамки пересекают рамку low–high (в осях набора).
+function around(set, low, high, each) {
+  if (!set.capsules.length) return;
+  set.visit++;
+  cells(low, high, (key) => {
+    for (const i of set.grid.get(key) ?? []) {
+      if (set.stamp[i] === set.visit) continue;
+      set.stamp[i] = set.visit;
+      if (overlap(low, high, set.capsules[i])) each(set.capsules[i]);
+    }
+  });
+}
+
+// Тело b рядом с набором: его шар задевает рамку кубиков или капсулу.
+function near(set, b) {
+  const p = _a.copy(b.position).applyMatrix4(set.inverse), r = b.reach + NEAR;
+  const low = _lo.copy(p).subScalar(r), high = _hi.copy(p).addScalar(r);
+  if (set.solids.some((s) => overlap(low, high, s.box))) return true;
+  let close = false;
+  around(set, low, high, (d) => {
+    if (!close && closest(p, p, d.A, d.B, _c1, _c2) < (r + d.r) ** 2) close = true;
+  });
+  return close;
+}
 
 // Касание тела a с телом b (или с неподвижным, если b — null) в точке p; нормаль n — от b к a, depth —
 // на сколько зашли друг в друга (меньше нуля — сколько ещё до касания). surface — скорость того, обо что бьёмся.
@@ -183,46 +276,67 @@ function ground(b, end, r, contacts) {
   contact(b, null, _p.copy(end).addScaledVector(UP, depth / 2 - r), UP, depth, null, contacts);
 }
 
-// Тела a и o: каждая пара их капсул, чьи рамки пересеклись. Спящее o держит, как неподвижное,
+// Тела a и o: каждая пара их капсул, чьи рамки пересеклись. Сначала у каждого — капсулы в рамке другого:
+// у большого сука их сотни, а рядом с другим телом — единицы. Спящее o держит, как неподвижное,
 // а если в него ударили — просыпается.
 function pair(a, o, contacts) {
-  if (a.position.distanceTo(o.position) > a.reach + o.reach + a.sweep + o.sweep) return;
+  if (!overlap(a.low, a.high, o)) return;
   const b = o.asleep ? null : o;
-  for (const c of a.capsules) {
-    for (const d of o.capsules) {
+  const mine = a.capsules.filter((c) => overlap(c.low, c.high, o));
+  const theirs = mine.length ? o.capsules.filter((d) => overlap(d.low, d.high, a)) : [];
+  for (const c of mine) {
+    for (const d of theirs) {
       if (!overlap(c.low, c.high, d)) continue;
-      if (meet(a, c, b, d, a.sweep + o.sweep, contacts) && o.asleep && a.velocity.length() > 2 * SLEEP_V) o.wake();
+      const depth = meet(c.A, c.B, c.r, d.A, d.B, d.r, a.sweep + o.sweep);
+      if (depth === null) continue;
+      contact(a, b, _p, _n, depth, null, contacts);
+      if (o.asleep && a.velocity.length() > 2 * SLEEP_V) o.wake();
     }
   }
 }
 
-// Две капсулы: ближайшие точки их отрезков ближе суммы радиусов (с запасом margin) — касание.
-function meet(a, c, b, d, margin, contacts) {
-  const dist2 = closest(c.A, c.B, d.A, d.B, _c1, _c2);
-  const reach = c.r + d.r + margin;
-  if (dist2 >= reach * reach) return false;
+// Две капсулы: ближайшие точки их отрезков ближе суммы радиусов (с запасом margin) — касание: на сколько
+// они зашли друг в друга (ответ), нормаль от второй к первой (_n) и точка посередине перекрытия (_p).
+function meet(A1, B1, r1, A2, B2, r2, margin) {
+  const dist2 = closest(A1, B1, A2, B2, _c1, _c2);
+  const reach = r1 + r2 + margin;
+  if (dist2 >= reach * reach) return null;
   const dist = Math.sqrt(dist2);
-  const n = dist > 1e-9 ? _u.copy(_c1).sub(_c2).divideScalar(dist) : _u.copy(UP);
-  const depth = c.r + d.r - dist;
-  contact(a, b, _p.copy(_c1).addScaledVector(n, depth / 2 - c.r), n, depth, null, contacts);
-  return true;
+  if (dist > 1e-9) _n.copy(_c1).sub(_c2).divideScalar(dist);
+  else _n.copy(UP);
+  const depth = r1 + r2 - dist;
+  _p.copy(_c1).addScaledVector(_n, depth / 2 - r1);
+  return depth;
 }
 
-// Капсула и кубики: шарами вдоль её отрезка, через радиус друг от друга. Кубики спрашиваем в их осях.
-function press(b, c, set, solid, contacts) {
+// Капсула тела и неподвижный набор — в осях набора: по кубикам шарами вдоль отрезка капсулы
+// (через радиус друг от друга), с капсулами веток — по сетке.
+function against(b, c, set, contacts) {
   const a = _a.copy(c.A).applyMatrix4(set.inverse), e = _e.copy(c.B).applyMatrix4(set.inverse);
   const pad = c.r + b.sweep;
-  if (!overlap(_w.copy(a).min(e).subScalar(pad), _j.copy(a).max(e).addScalar(pad), solid.box)) return;
-  const count = c.ball ? 1 : Math.ceil(a.distanceTo(e) / c.r) + 1;
-  for (let i = 0; i < count; i++) {
-    const t = count > 1 ? i / (count - 1) : 0;
-    const hit = solid.press(_v.copy(a).lerp(e, t), c.r, b.sweep);
-    if (!hit) continue;
-    const n = _u.copy(hit.normal).applyMatrix3(set.turn).normalize();
-    const at = _p.copy(c.A).lerp(c.B, t).addScaledVector(n, hit.depth / 2 - c.r);
-    const surface = set.moved ? at.clone().sub(_v.copy(at).applyMatrix4(set.back)).divideScalar(set.dt) : null;
-    contact(b, null, at, n, hit.depth, surface, contacts);
+  const low = _lo.copy(a).min(e).subScalar(pad), high = _hi.copy(a).max(e).addScalar(pad);
+  const hit = (depth) => {
+    _p.applyMatrix4(set.matrix);
+    _n.applyMatrix3(set.turn).normalize();
+    const surface = set.moved ? _p.clone().sub(_s.copy(_p).applyMatrix4(set.back)).divideScalar(set.dt) : null;
+    contact(b, null, _p, _n, depth, surface, contacts);
+  };
+  for (const solid of set.solids) {
+    if (!overlap(low, high, solid.box)) continue;
+    const count = c.ball ? 1 : Math.ceil(a.distanceTo(e) / c.r) + 1;
+    for (let i = 0; i < count; i++) {
+      const t = count > 1 ? i / (count - 1) : 0;
+      const pressed = solid.press(_v.copy(a).lerp(e, t), c.r, b.sweep);
+      if (!pressed) continue;
+      _n.copy(pressed.normal);
+      _p.copy(a).lerp(e, t).addScaledVector(_n, pressed.depth / 2 - c.r);
+      hit(pressed.depth);
+    }
   }
+  around(set, low, high, (d) => {
+    const depth = meet(a, e, c.r, d.A, d.B, d.r, b.sweep);
+    if (depth !== null) hit(depth);
+  });
 }
 
 // Ближайшие точки отрезков p1–q1 и p2–q2 (c1 на первом, c2 на втором) и квадрат расстояния между ними
