@@ -28,14 +28,14 @@ const DIRS = 36;
 // по ним считается, как недопил гнётся. Перерезанный насквозь ствол оседает на самую узкую щель (sink, м),
 // у каждой колонки open — сколько её щели осталось после этого.
 export function section(voxels) {
-  const { n } = voxels;
+  const { n, m } = voxels;
   const all = [], intact = [];
-  for (let k = 0; k < n; k++) {
+  for (let k = 0; k < m; k++) {
     for (let i = 0; i < n; i++) {
       const col = k * n + i;
       const gap = voxels.gap[col];
       // Держат только целые колонки тех стволов, что подпилены: у двойного дерева второй ствол сам по себе.
-      if ((!gap && !through(voxels, i, k)) || !voxels.held(voxels.middle * n * n + col)) continue;
+      if ((!gap && !through(voxels, i, k)) || !voxels.held(voxels.middle * n * m + col)) continue;
       const f = {
         col, x: voxels.x(i), z: voxels.z(k), gap,
         mid: ((voxels.gapLow[col] + voxels.gapHigh[col] + 1) / 2) * VOXEL,
