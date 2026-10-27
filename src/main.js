@@ -252,16 +252,22 @@ function standUp(standing) {
 
 // Недопил держит стволы mask — тело, которое клонится и падает: их кроны и кубики над пропилом.
 // Ниже развилки подпилен один ствол — держит оба, выше — только его. Остальные стоят на месте.
-// Вес — древесина кубиков и скелета плюс листва. Момент инерции вокруг вертикали через сгибы:
-// у каждой кроны свой вокруг её центра тяжести плюс m·d².
 function hold(mask) {
-  const { voxels, stems, upper } = round;
-  round.body = voxels.body = mask;
-  const own = stems.filter((s, i) => {
+  const { stems, upper } = round;
+  round.body = round.voxels.body = mask;
+  stems.forEach((s, i) => {
     if (round.standing & (1 << i)) (mask & (1 << i) ? upper : round.root).attach(s.bend);
-    return mask & (1 << i);
   });
-  const zone = voxels.measure(mask);
+  weigh();
+  round.voxels.remesh();
+}
+
+// Вес тела — древесина кубиков над пропилом (пень не падает), скелета и листвы.
+// Момент инерции вокруг вертикали через сгибы: у каждой кроны свой вокруг её центра тяжести плюс m·d².
+function weigh() {
+  const { voxels, stems, body } = round;
+  const own = stems.filter((s, i) => body & (1 << i));
+  const zone = voxels.measure(body, voxels.cutHigh >= 0 ? voxels.middle : 0);
   const zoneMass = DENSITY * zone.volume;
   round.mass = own.reduce((m, s) => m + s.mass, zoneMass);
   round.com = own.reduce((c, s) => c.addScaledVector(s.com, s.mass), zone.center.multiplyScalar(zoneMass)).divideScalar(round.mass);
@@ -271,7 +277,6 @@ function hold(mask) {
     const d = s.com.clone().sub(at);
     return m + s.inertia.elements[4] + s.mass * (d.x * d.x + d.z * d.z);
   }, 0);
-  voxels.remesh();
 }
 
 // Поворот пилы, которую держат горизонтально и смотрят по yaw. В осях пилы x — вдоль шины (side),
@@ -467,6 +472,7 @@ function stand(dt) {
   if (round.voxels.version && round.secVersion !== round.voxels.version) {
     const body = round.voxels.cutStems(round.standing);
     if (body !== round.body) hold(body);
+    else weigh();
     round.sec = section(round.voxels);
     round.secVersion = round.voxels.version;
   }

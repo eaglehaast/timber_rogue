@@ -301,6 +301,10 @@ export class TrunkVoxels {
         }
       }
     }
+    // Сколько древесины в каждом слое и её центр — по маскам стволов: так вес того, что над пропилом,
+    // считается без обхода всей сетки. Ведётся при каждом убранном и перенесённом кубике (tally).
+    this.sums = new Float64Array(this.ny * 16);
+    for (let id = 0; id < this.data.length; id++) if (this.data[id]) this.tally(id, 1);
     // Волокна идут вдоль ствола, по колонкам кубиков. Для каждой колонки: сколько в ней выпилено,
     // нижний и верхний край выреза и наклон пропила, что её перерезал. version растёт с каждым кубиком.
     this.gap = new Uint16Array(this.n * this.m);
@@ -402,9 +406,20 @@ export class TrunkVoxels {
   at(i, j, k) { return this.data[(j * this.m + k) * this.n + i]; }
 
   // Убирает кубик; если он был верхним в колонке, верх колонки опускается до следующего.
+  // Кубик id прибавляется к сумме своего слоя (sign = 1) или вычитается из неё (−1).
+  tally(id, sign) {
+    const layer = this.n * this.m, j = Math.floor(id / layer), col = id - j * layer;
+    const at = (j * 4 + (this.owner ? this.owner[id] : 0)) * 4;
+    this.sums[at] += sign;
+    this.sums[at + 1] += sign * this.x(col % this.n);
+    this.sums[at + 2] += sign * (this.floor + j + 0.5) * VOXEL;
+    this.sums[at + 3] += sign * this.z(Math.floor(col / this.n));
+  }
+
   empty(id) {
     const layer = this.n * this.m;
     this.data[id] = 0;
+    this.tally(id, -1);
     const col = id % layer;
     if (Math.floor(id / layer) !== this.top[col]) return;
     let j = this.top[col] - 1;
@@ -669,11 +684,13 @@ export class TrunkVoxels {
     }
     const part = new TrunkVoxels(this.shape, (jHigh - jLow + 1) * VOXEL, this.skin, this.floor + jLow);
     part.data.fill(0);
+    part.sums.fill(0);
     part.top.fill(-1);
     part.chunks.forEach((c) => { c.dirty = false; });
     for (const id of ids) {
       const j = Math.floor(id / layer);
       part.data[id - jLow * layer] = 1;
+      part.tally(id - jLow * layer, 1);
       part.top[id % layer] = Math.max(part.top[id % layer], j - jLow);
       part.touch(j - jLow);
       this.empty(id);
@@ -687,20 +704,18 @@ export class TrunkVoxels {
     return part;
   }
 
-  // Объём древесины и её центр (в координатах ствола); mask — только этих стволов.
-  measure(mask = 0) {
-    const { n, m, data, owner } = this;
+  // Объём древесины и её центр (в координатах ствола): от слоя from и выше, mask — только этих стволов.
+  measure(mask = 0, from = 0) {
     const center = new THREE.Vector3();
     let count = 0;
-    for (let j = 0, id = 0; j < this.ny; j++) {
-      for (let k = 0; k < m; k++) {
-        for (let i = 0; i < n; i++, id++) {
-          if (!data[id] || (mask && owner && !(owner[id] & mask))) continue;
-          center.x += this.x(i);
-          center.y += (this.floor + j + 0.5) * VOXEL;
-          center.z += this.z(k);
-          count++;
-        }
+    for (let j = Math.max(0, from); j < this.ny; j++) {
+      for (let v = 0; v < 4; v++) {
+        if (mask && this.owner && !(v & mask)) continue;
+        const at = (j * 4 + v) * 4;
+        count += this.sums[at];
+        center.x += this.sums[at + 1];
+        center.y += this.sums[at + 2];
+        center.z += this.sums[at + 3];
       }
     }
     return { volume: count * VOXEL ** 3, center: center.divideScalar(count) };
