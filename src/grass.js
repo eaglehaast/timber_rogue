@@ -40,22 +40,36 @@ function sway(shader) {
       transformed.xz += windDir * lean * transformed.y;`);
 }
 
+// Широколистные низкие растения (одуванчик) крест из двух карточек выдаёт: сверху видно, что их две.
+// Им одна карточка, которая поворачивается вокруг своей оси к камере. Вершины лежат на оси пучка,
+// а side — сдвиг вершины вбок от неё в метрах; в шейдере сдвиг идёт поперёк взгляда.
+function face(shader) {
+  sway(shader);
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>
+      attribute float side;`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      vec2 look = normalize(cameraPosition.xz - transformed.xz);
+      transformed.xz += vec2(-look.y, look.x) * side;`);
+}
+
 // rank — насколько пучок высокий среди всех в атласе: 0 — самый низкий класс, 1 — самый высокий.
-async function atlas(name) {
+// turning — карточка поворачивается к камере (face), а не стоит крестом.
+async function atlas(name, turning = false) {
   const [map] = tiles([`assets/textures/${name}.png`]);
   const material = new THREE.MeshLambertMaterial({ map, alphaTest: 0.5 });
-  material.onBeforeCompile = sway;
+  material.onBeforeCompile = turning ? face : sway;
   const { grid: [cols, rows], aspect, heights } = await (await fetch(`assets/textures/${name}.json`)).json();
   const tallest = Math.max(...heights.map(([, h]) => h)), lowest = Math.min(...heights.map(([, h]) => h));
   const rank = heights.map(([, h]) => (h - lowest) / (tallest - lowest));
-  return { material, cols, rows, aspect, heights, rank };
+  return { material, cols, rows, aspect, heights, rank, turning };
 }
 // Злаки (ежа, мятлик, овсяница…) — один атлас, у каждого сорняка свой: вместе не влезли бы в одну текстуру.
 export const grassTufts = await atlas('grass-tufts');
 export const mugwortTufts = await atlas('mugwort-tufts');
 export const nettleTufts = await atlas('nettle-tufts');
 export const tansyTufts = await atlas('tansy-tufts');
-export const dandelionTufts = await atlas('dandelion-tufts');
+export const dandelionTufts = await atlas('dandelion-tufts', true);
 
 // Плавный шум 0..1 с ячейкой в метр: по нему трава то выше и гуще, то ниже и реже.
 const salt = Math.random() * 1000;
@@ -69,8 +83,8 @@ export function noise(x, z) {
 
 // Трава сплошным покровом: на каждый квадратный метр около density(x, z) × count / size² попыток.
 // Куртины: где шум «дикий», берём в основном высокие пучки и сажаем гуще, между ними — низкая трава.
-export function makeTufts({ material, cols, rows, aspect, heights, rank }, count, size, clear, density) {
-  const pos = [], uv = [], index = [];
+export function makeTufts({ material, cols, rows, aspect, heights, rank, turning }, count, size, clear, density) {
+  const pos = [], uv = [], index = [], side = [];
   for (let n = 0; n < count; n++) {
     const x = (Math.random() - 0.5) * size, z = (Math.random() - 0.5) * size;
     if (clear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r)) continue;
@@ -82,9 +96,11 @@ export function makeTufts({ material, cols, rows, aspect, heights, rank }, count
     const [low, high] = heights[cell];
     const u0 = (cell % cols) / cols, v0 = 1 - (Math.floor(cell / cols) + 1) / rows, u1 = u0 + 1 / cols, v1 = v0 + 1 / rows;
     const h = low + Math.random() * (high - low), w = h * aspect, turn = Math.random() * Math.PI;
-    for (const a of [turn, turn + Math.PI / 2]) {
-      const dx = Math.cos(a) * w / 2, dz = Math.sin(a) * w / 2, k = pos.length / 3;
+    const cards = turning ? [[0, 0]] : [turn, turn + Math.PI / 2].map((a) => [Math.cos(a) * w / 2, Math.sin(a) * w / 2]);
+    for (const [dx, dz] of cards) {
+      const k = pos.length / 3;
       pos.push(x - dx, 0, z - dz, x + dx, 0, z + dz, x + dx, h, z + dz, x - dx, h, z - dz);
+      if (turning) side.push(-w / 2, w / 2, w / 2, -w / 2);
       uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
       index.push(k, k + 1, k + 2, k, k + 2, k + 3, k, k + 2, k + 1, k, k + 3, k + 2);
     }
@@ -93,6 +109,7 @@ export function makeTufts({ material, cols, rows, aspect, heights, rank }, count
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(pos.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  if (turning) geometry.setAttribute('side', new THREE.Float32BufferAttribute(side, 1));
   geometry.setIndex(index);
   const tufts = new THREE.Mesh(geometry, material);
   tufts.receiveShadow = true;
