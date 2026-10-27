@@ -7,7 +7,7 @@ import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
-import { makeGround, makeTufts } from './grass.js';
+import { makeGround, makeTufts, grassTufts, mugwortTufts, nettleTufts, noise } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, blow, gust, stepWind } from './wind.js';
@@ -34,6 +34,8 @@ const SNAP_DIST = 0.03;   // прицел прилипает к начатому
 const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(10));
 // Глаза стоя и присев: присев можно пилить у самой земли.
 const EYE = 1.7, EYE_CROUCH = 1.0;
+const STRIDE = 0.75;   // м — длина шага
+const STEP_RISE = 0.012; // м — на сколько опускается голова на шаге при ходьбе; бегом вдвое больше
 // Точная настройка пилы: шаг стрелками и замедление мыши с зажатым Shift.
 const STEP = THREE.MathUtils.degToRad(0.5);
 const PLAY = VOXEL / 4;    // настолько шина болтается в щели: цепь шире шины
@@ -119,7 +121,13 @@ for (let i = 0; i < skyGeo.attributes.position.count; i++) {
 skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
 scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
 
-scene.add(makeGround(200), makeTufts(1500, 60, PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 })));
+// Трава густая на делянке и редеет к краю земли за 10 м от неё.
+const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - 22, Math.abs(z) - 12), 0, 10);
+// Полынь и крапива растут колониями от корневищ: пятна в несколько метров, у каждой свои, между ними их нет.
+const colonies = (shift) => (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + shift, z / 9), 0.6, 0.85);
+const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 });
+scene.add(makeGround(200), makeTufts(grassTufts, 40000, 60, clear, meadow),
+  makeTufts(mugwortTufts, 6000, 60, clear, colonies(40)), makeTufts(nettleTufts, 6000, 60, clear, colonies(90)));
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 // Плоскость единичная: под длину шины и толщину ствола её растягивает scale.
@@ -146,7 +154,7 @@ const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 const forwardOf = (yaw) => new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
 const yawOf = (v) => Math.atan2(-v.x, -v.z);
 
-const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0, eye: EYE, crouch: false };
+const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0, gait: 0, step: new THREE.Vector3(), eye: EYE, crouch: false };
 // Осмотр с летающей камерой: игрок и пила замирают, камера летает сама по себе.
 let fly = null;
 const keys = new Set();
@@ -224,7 +232,7 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
     sec: null, secVersion: -1,
     twist: null, turn: 0, // как косые площадки закручивают верх вокруг вертикали и на сколько закрутили
     split: 0, tongue: new Set(), // на сколько недопил отщепился вверх и какие его колонки
-    cuts: [], debris: [], left: 0, // сколько зажатых пил брошено в стволе
+    cuts: [], debris: [], left: [], // зажатые пилы, брошенные в стволе
     top: false, slide: null, fall: null, done: false,
     said: {},
   };
@@ -355,6 +363,7 @@ function pose(cut, shift = -BAR_W / 2) {
 }
 
 // Зажатую пилу бросаем в стволе: там остаётся её копия без рук, а в руках — запасная. Пробуем — пил сколько угодно.
+// Когда дерево легло, пропил разжимается, и брошенные пилы забираешь обратно (land).
 function leaveSaw() {
   const left = sawModel.clone();
   const hands = [];
@@ -367,7 +376,7 @@ function leaveSaw() {
   left.position.copy(at.position);
   left.quaternion.copy(at.quaternion);
   round.root.add(left);
-  round.left++;
+  round.left.push(left);
   unsay('pinch');
   unsay('narrow');
 }
@@ -587,10 +596,17 @@ function splitHinge(sec, tip, load) {
   say('split', 'Треск вдоль ствола — его раскалывает вверх от недопила');
 }
 
+// Верх отделился от пня (недопил рвётся на высоте h) и дальше движется с upper. Что на пне
+// после этого ни на чём не держится — кусок между пропилами, обрывок коры, — отваливается.
+function separate(h, tongue, split) {
+  round.upper.add(round.voxels.splitTop(h, tongue, split).group);
+  round.voxels.breakLoose().forEach(dropPiece);
+  round.top = true;
+}
+
 // Верх перерезан по косой круче, чем держит трение, — он съезжает по срезу.
 function startSlide(s) {
-  round.upper.add(round.voxels.splitTop(0).group);
-  round.top = true;
+  separate(round.voxels.middle * VOXEL);
   round.slide = { ...s, s: 0, v: 0 };
   dropSaw();
   crack(0.6);
@@ -633,8 +649,7 @@ function startFall(tip, c, slip = 0, speed = 0) {
   const h = pivotHeight(sec, tip.u, tip.p);
   // Падая, дерево тянет недопил, пока тот не порвётся, то есть до полной прочности.
   if (sec.intact.length) splitHinge(sec, tip, 1);
-  if (!round.top) round.upper.add(round.voxels.splitTop(h, round.tongue, round.split).group);
-  round.top = true;
+  if (!round.top) separate(h, round.tongue, round.split);
   const pivot = new THREE.Group();
   pivot.position.copy(tip.u).multiplyScalar(tip.p).setY(h);
   round.root.add(pivot);
@@ -785,6 +800,9 @@ function fallPiece(piece, dt) {
 
 function land() {
   round.done = true;
+  const back = round.left.length;
+  round.left.forEach((left) => left.removeFromParent());
+  round.left = [];
   // Пришибло, если стоял там, куда лёг ствол: впереди оси по линии падения и не дальше метра вбок.
   const { u: f, pivot, len } = round.fall;
   const at = local(player.pos);
@@ -795,17 +813,16 @@ function land() {
   const hit = struck(round.yard, pivot.position, f, len);
   hit.forEach(wreck);
 
-  if (squashed) showResult('ПРИШИБЛО', ['Не стой на линии падения']);
-  else if (hit.length) showResult('ОЙ', hit.map((o) => o.kind.verdict));
-  else showResult('ЧИСТО!', ['Дерево легло и ничего не задело']);
+  const saws = back ? [back > 1 ? `Зажатые пилы вынул из пня: ${back}` : 'Зажатую пилу вынул из пня'] : [];
+  if (squashed) showResult('ПРИШИБЛО', ['Не стой на линии падения', ...saws]);
+  else if (hit.length) showResult('ОЙ', [...hit.map((o) => o.kind.verdict), ...saws]);
+  else showResult('ЧИСТО!', ['Дерево легло и ничего не задело', ...saws]);
 }
 
 // Пилить можно стоящее дерево и всё, что осталось, когда оно легло: пень, отщеп, спинку. Раунд кончается только по R.
 const canSaw = () => !round.top || round.done;
 
 function showResult(title, notes) {
-  const lost = round.left;
-  if (lost) notes.push(lost > 1 ? `Пил осталось в пне: ${lost}` : 'Одна пила осталась в пне');
   resultEl.innerHTML = `${title}${notes.map((n) => `<small>${n}</small>`).join('')}<small>R — новое дерево</small>`;
   resultEl.hidden = false;
   // Итог висит недолго и остаётся в журнале: дальше можно кромсать пень, пока не нажмёшь R.
@@ -835,10 +852,16 @@ function update(dt) {
     if (keys.has('KeyA')) move.sub(right);
   }
   const moving = move.lengthSq() > 0;
-  if (moving) {
-    const speed = player.crouch ? 1.5 : shift ? 6 : 3;
-    player.pos.addScaledVector(move.normalize(), speed * dt);
-  }
+  const speed = moving ? (player.crouch ? 1.5 : shift ? 6 : 3) : 0;
+  if (moving) player.pos.addScaledVector(move.normalize(), speed * dt);
+  // Шаги: голова на каждом шаге чуть опускается и за два шага раз качается из стороны в сторону.
+  // Фаза bob идёт по пройденному пути (шаг — полоборота), поэтому бегом шаги чаще, а встал — замерли.
+  // Размах растёт со скоростью и плавно приходит и уходит. Головой не крутим: только сдвиг.
+  // gait — скорость в долях обычной ходьбы: 0 стоим, 0.5 присев, 1 идём, 2 бежим.
+  player.gait += (speed / 3 - player.gait) * (1 - Math.exp(-6 * dt));
+  player.bob += (speed * dt * Math.PI) / STRIDE;
+  const rise = STEP_RISE * player.gait;
+  player.step.copy(right).multiplyScalar(Math.sin(player.bob) * rise / 2).setY(-rise * Math.sin(player.bob) ** 2);
   player.eye += ((player.crouch ? EYE_CROUCH : EYE) - player.eye) * (1 - Math.exp(-8 * dt));
   // Шаг назад от приставленной пилы — уходишь от пропила. Зажатая пила остаётся в стволе, в руках — запасная.
   if (mode !== 'free' && !fly && keys.has('KeyS')) {
@@ -921,12 +944,12 @@ function update(dt) {
   const shake = new THREE.Vector3();
   if (mode === 'cut') {
     shake.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.006);
-  } else if (moving) {
-    player.bob += dt * 10;
-    shake.copy(right).multiplyScalar(Math.sin(player.bob) * 0.015).setY(-Math.abs(Math.cos(player.bob)) * 0.02);
+  } else {
+    // В руках пила отстаёт от шага: качается шире головы и с запозданием на четверть шага.
+    shake.copy(right).multiplyScalar(Math.sin(player.bob - 0.8) * player.gait * 0.012).setY(-(Math.cos(player.bob) ** 2) * player.gait * 0.012);
   }
   const [out, down, aside] = SHOTS[shot].hold;
-  const held = player.pos.clone().addScaledVector(forward, out).addScaledVector(right, -aside).setY(player.eye - down);
+  const held = player.pos.clone().addScaledVector(forward, out).addScaledVector(right, -aside).setY(player.eye - down).add(player.step);
   moveSaw(shown ?? { edge: local(held), q: facing(player.yaw) }, shake, dt);
   lamp(sawModel, !!saw && (saw.pinched || !!round.squeeze));
 
@@ -947,7 +970,7 @@ function frame(dt) {
     swap.position.copy(camera.position);
     swap.quaternion.copy(camera.quaternion);
   }
-  camera.position.set(player.pos.x, player.eye, player.pos.z);
+  camera.position.set(player.pos.x, player.eye, player.pos.z).add(player.step);
   camera.rotation.set(player.pitch, player.yaw, 0);
   if (saw && (low || back)) {
     // Смотрим между лампой и пропилом: в кадре и шина в древесине, и корпус с лампой.
