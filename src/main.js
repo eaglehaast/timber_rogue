@@ -6,6 +6,7 @@ import {
 import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
+import { Body, World } from './bodies.js';
 import { dressBark } from './bark.js';
 import { makeGround, makeTufts, grassTufts, mugwortTufts, nettleTufts, noise } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
@@ -212,13 +213,16 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   root.add(voxels.group, ...tree.stems.flatMap((s) => [s.bend, ...s.lows.map((l) => l.tree)]));
   scene.add(root);
   const yard = []; // постройки (yard.js) пока убраны: отвлекают от дерева
+  // Отпилы — твёрдые тела у этого дерева: лежат на земле, на пне и друг на друге.
+  const world = new World(root);
+  world.fix(root, [voxels]);
 
   round = trees[slot] = {
-    slot, base: root.position, root, voxels, yard, ...tree,
+    slot, base: root.position, root, voxels, yard, world, ...tree,
     seed: treeSeed,
     time: 0,
     stumps: [], // на какой высоте спилен ствол (по номеру ствола)
-    cuts: [], debris: [], left: [], // зажатые пилы, брошенные в стволе
+    cuts: [], left: [], // зажатые пилы, брошенные в стволе
   };
   standUp((1 << tree.stems.length) - 1);
   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
@@ -645,11 +649,14 @@ function splitHinge(sec, tip, load) {
   say('split', 'Треск вдоль ствола — его раскалывает вверх от недопила');
 }
 
-// Верх отделился от пня (недопил рвётся на высоте h) и дальше движется с upper. Что на пне
-// после этого ни на чём не держится — кусок между пропилами, обрывок коры, — отваливается.
+// Верх отделился от пня (недопил рвётся на высоте h) и дальше движется с upper: его комель толкает
+// отпилы, что попались на пути. Что на пне после этого ни на чём не держится — кусок между пропилами,
+// обрывок коры, — отваливается.
 function separate(h, tongue, split) {
   round.stems.forEach((_, i) => { if (round.body & (1 << i)) round.stumps[i] = round.voxels.cutLow * VOXEL; });
-  round.upper.add(round.voxels.splitTop(h, tongue, split).group);
+  const log = round.voxels.splitTop(h, tongue, split);
+  round.upper.add(log.group);
+  round.world.fix(round.upper, [log]);
   round.voxels.breakLoose().forEach(dropPiece);
   round.top = true;
 }
@@ -820,32 +827,24 @@ function fallTop(dt) {
   }
 }
 
-// Отпиленный кусок отваливается от ствола наружу, кувыркаясь, и ложится на землю.
+// Отпиленный кусок — твёрдое тело: вес и момент инерции — по его кубикам, форма — вписанные в него шары.
+// Он не летит сам, а падает оттуда, где его отрезало: с пня, из подпила, со спинки.
 function dropPiece(part) {
-  const body = new THREE.Group();
-  body.position.copy(part.center);
-  part.group.position.sub(part.center);
-  body.add(part.group);
-  round.root.add(body);
-  const out = new THREE.Vector3(part.center.x, 0, part.center.z).normalize();
-  round.debris.push({
-    body,
-    velocity: out.multiplyScalar(0.6),
-    spin: new THREE.Vector3(-out.z, 0, out.x),
-    rest: part.center.y - part.low,
-    landed: false,
-  });
-}
-
-function fallPiece(piece, dt) {
-  if (piece.landed) return;
-  piece.velocity.y -= G * dt;
-  piece.body.position.addScaledVector(piece.velocity, dt);
-  piece.body.rotateOnWorldAxis(piece.spin, 2 * dt);
-  if (piece.body.position.y <= piece.rest) {
-    piece.body.position.y = piece.rest;
-    piece.landed = true;
-  }
+  const { volume, center, inertia, balls } = part.form();
+  const object = new THREE.Group();
+  part.group.position.sub(center);
+  object.add(part.group);
+  round.root.add(object);
+  round.world.add(new Body(object, {
+    mass: DENSITY * volume,
+    inertia: inertia.multiplyScalar(DENSITY),
+    position: center,
+    quaternion: new THREE.Quaternion(),
+    capsules: balls.map(({ at, r }) => {
+      const a = at.sub(center);
+      return { a, b: a, r };
+    }),
+  }));
 }
 
 function land() {
@@ -964,8 +963,8 @@ function update(dt) {
     round = tree;
     if (!round.top) stand(dt);
     else if (round.slide) slideTop(dt);
-    round.debris.forEach((piece) => fallPiece(piece, dt));
     if (round.fall && !round.done) fallTop(dt);
+    round.world.step(dt);
   }
   round = here;
 
