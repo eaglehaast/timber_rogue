@@ -208,7 +208,8 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   const root = new THREE.Group();
   root.position.set(x, 0, 0);
   voxels.standing = true;
-  root.add(voxels.group);
+  // Кроны сначала стоят на месте, а над пропилом их потом переносят с сохранением положения (attach).
+  root.add(voxels.group, ...tree.stems.map((s) => s.bend));
   scene.add(root);
   const yard = []; // постройки (yard.js) пока убраны: отвлекают от дерева
 
