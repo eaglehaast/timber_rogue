@@ -54,6 +54,7 @@ async function atlas(name) {
 export const grassTufts = await atlas('grass-tufts');
 export const mugwortTufts = await atlas('mugwort-tufts');
 export const nettleTufts = await atlas('nettle-tufts');
+export const tansyTufts = await atlas('tansy-tufts');
 
 // Плавный шум 0..1 с ячейкой в метр: по нему трава то выше и гуще, то ниже и реже.
 const salt = Math.random() * 1000;
