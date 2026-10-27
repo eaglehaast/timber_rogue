@@ -4,6 +4,7 @@ import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
+import { makeFence, YARD } from './fence.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
@@ -102,11 +103,14 @@ let inspecting = false;
 
 scene.add(new THREE.HemisphereLight(0xb4ccec, 0x5a4a32, 1.1));
 const sun = new THREE.DirectionalLight(0xffe2b8, 2.4);
-sun.position.set(20, 18, 10);
+// Тень накрывает весь участок с забором: солнце стоит, поэтому тени не дрожат. Карта 4096 — около 1,7 см
+// на точку, мельче щелей штакетника: полосы света сквозь забор читаются.
+sun.position.set(40, 36, 20);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = sun.shadow.camera.bottom = -24;
-sun.shadow.camera.right = sun.shadow.camera.top = 24;
+sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.camera.left = sun.shadow.camera.bottom = -36;
+sun.shadow.camera.right = sun.shadow.camera.top = 36;
+sun.shadow.camera.far = 120;
 sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
@@ -121,8 +125,8 @@ for (let i = 0; i < skyGeo.attributes.position.count; i++) {
 skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
 scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
 
-// Трава густая на делянке и редеет к краю земли за 10 м от неё.
-const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - 22, Math.abs(z) - 12), 0, 10);
+// Трава густая во всём дворе и редеет за забором на 8 м.
+const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - YARD.w / 2, Math.abs(z) - YARD.d / 2), 0, 8);
 // Полынь и крапива растут колониями от корневищ: пятна в несколько метров, у каждой свои, между ними их нет.
 const colonies = (shift) => (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + shift, z / 9), 0.6, 0.85);
 // Одуванчик низкий и в высокой траве не выживает: растёт там, где трава ниже (тот же шум 5 м, что у пучков).
@@ -130,10 +134,12 @@ const lawn = (x, z) => meadow(x, z) * (1 - THREE.MathUtils.smoothstep(noise(x / 
 // Клевер тоже любит низкую траву, но разрастается куртинами по несколько метров.
 const clover = (x, z) => lawn(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + 240, z / 9), 0.4, 0.7);
 const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 });
-scene.add(makeGround(200), makeTufts(grassTufts, 40000, 60, clear, meadow),
-  makeTufts(mugwortTufts, 6000, 60, clear, colonies(40)), makeTufts(nettleTufts, 6000, 60, clear, colonies(90)),
-  makeTufts(tansyTufts, 4000, 60, clear, colonies(140)), makeTufts(dandelionTufts, 6000, 60, clear, lawn),
-  makeTufts(cloverTufts, 20000, 60, clear, clover));
+// Растения сажаем в квадрате FIELD метров: весь двор и полоса за забором. Число пучков — на 1000 м².
+const FIELD = 76;
+const plant = (atlas, perThousand, density) => makeTufts(atlas, Math.round(perThousand * FIELD * FIELD / 1000), FIELD, clear, density);
+scene.add(makeGround(200), makeFence(), plant(grassTufts, 11000, meadow),
+  plant(mugwortTufts, 1700, colonies(40)), plant(nettleTufts, 1700, colonies(90)),
+  plant(tansyTufts, 1100, colonies(140)), plant(dandelionTufts, 1700, lawn), plant(cloverTufts, 5500, clover));
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 // Плоскость единичная: под длину шины и толщину ствола её растягивает scale.
@@ -887,6 +893,9 @@ function update(dt) {
     if (dist < minDist) player.pos.set(c.x + (dx / dist) * minDist, player.pos.y, c.z + (dz / dist) * minDist);
   }
   pushOut(round.yard, player.pos, 0.35);
+  // За забор не выйти.
+  player.pos.x = THREE.MathUtils.clamp(player.pos.x, -YARD.w / 2 + 0.4, YARD.w / 2 - 0.4);
+  player.pos.z = THREE.MathUtils.clamp(player.pos.z, -YARD.d / 2 + 0.4, YARD.d / 2 - 0.4);
 
   const candidate = mode === 'free' && canSaw() ? sawCandidate(forward) : null;
 
