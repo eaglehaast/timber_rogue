@@ -71,6 +71,7 @@ export const nettleTufts = await atlas('nettle-tufts');
 export const tansyTufts = await atlas('tansy-tufts');
 export const dandelionTufts = await atlas('dandelion-tufts', true);
 export const cloverTufts = await atlas('clover-tufts', true);
+export const yarrowTufts = await atlas('yarrow-tufts', true);
 
 // Плавный шум 0..1 с ячейкой в метр: по нему трава то выше и гуще, то ниже и реже.
 const salt = Math.random() * 1000;

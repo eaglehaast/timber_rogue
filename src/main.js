@@ -8,7 +8,7 @@ import { makeFence, YARD } from './fence.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
-import { makeGround, makeTufts, grassTufts, mugwortTufts, nettleTufts, tansyTufts, dandelionTufts, cloverTufts, noise } from './grass.js';
+import { makeGround, makeTufts, grassTufts, mugwortTufts, nettleTufts, tansyTufts, dandelionTufts, cloverTufts, yarrowTufts, noise } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, blow, gust, stepWind } from './wind.js';
@@ -133,13 +133,16 @@ const colonies = (shift) => (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(
 const lawn = (x, z) => meadow(x, z) * (1 - THREE.MathUtils.smoothstep(noise(x / 5, z / 5), 0.3, 0.6));
 // Клевер тоже любит низкую траву, но разрастается куртинами по несколько метров.
 const clover = (x, z) => lawn(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + 240, z / 9), 0.4, 0.7);
+// Тысячелистник расползается корневищами редкими широкими пятнами, по всему двору, а не только в низкой траве.
+const yarrow = (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(noise(x / 12 + 190, z / 12), 0.45, 0.8);
 const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 });
 // Растения сажаем в квадрате FIELD метров: весь двор и полоса за забором. Число пучков — на 1000 м².
 const FIELD = 76;
 const plant = (atlas, perThousand, density) => makeTufts(atlas, Math.round(perThousand * FIELD * FIELD / 1000), FIELD, clear, density);
 scene.add(makeGround(200), makeFence(), plant(grassTufts, 11000, meadow),
   plant(mugwortTufts, 1700, colonies(40)), plant(nettleTufts, 1700, colonies(90)),
-  plant(tansyTufts, 1100, colonies(140)), plant(dandelionTufts, 1700, lawn), plant(cloverTufts, 5500, clover));
+  plant(tansyTufts, 1100, colonies(140)), plant(dandelionTufts, 1700, lawn), plant(cloverTufts, 5500, clover),
+  plant(yarrowTufts, 1200, yarrow));
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 // Плоскость единичная: под длину шины и толщину ствола её растягивает scale.
