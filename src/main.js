@@ -34,6 +34,8 @@ const SNAP_DIST = 0.03;   // прицел прилипает к начатому
 const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(10));
 // Глаза стоя и присев: присев можно пилить у самой земли.
 const EYE = 1.7, EYE_CROUCH = 1.0;
+const STRIDE = 0.75;   // м — длина шага
+const STEP_RISE = 0.012; // м — на сколько опускается голова на шаге при ходьбе; бегом вдвое больше
 // Точная настройка пилы: шаг стрелками и замедление мыши с зажатым Shift.
 const STEP = THREE.MathUtils.degToRad(0.5);
 const PLAY = VOXEL / 4;    // настолько шина болтается в щели: цепь шире шины
@@ -152,7 +154,7 @@ const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 const forwardOf = (yaw) => new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
 const yawOf = (v) => Math.atan2(-v.x, -v.z);
 
-const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0, eye: EYE, crouch: false };
+const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0, gait: 0, step: new THREE.Vector3(), eye: EYE, crouch: false };
 // Осмотр с летающей камерой: игрок и пила замирают, камера летает сама по себе.
 let fly = null;
 const keys = new Set();
@@ -850,10 +852,16 @@ function update(dt) {
     if (keys.has('KeyA')) move.sub(right);
   }
   const moving = move.lengthSq() > 0;
-  if (moving) {
-    const speed = player.crouch ? 1.5 : shift ? 6 : 3;
-    player.pos.addScaledVector(move.normalize(), speed * dt);
-  }
+  const speed = moving ? (player.crouch ? 1.5 : shift ? 6 : 3) : 0;
+  if (moving) player.pos.addScaledVector(move.normalize(), speed * dt);
+  // Шаги: голова на каждом шаге чуть опускается и за два шага раз качается из стороны в сторону.
+  // Фаза bob идёт по пройденному пути (шаг — полоборота), поэтому бегом шаги чаще, а встал — замерли.
+  // Размах растёт со скоростью и плавно приходит и уходит. Головой не крутим: только сдвиг.
+  // gait — скорость в долях обычной ходьбы: 0 стоим, 0.5 присев, 1 идём, 2 бежим.
+  player.gait += (speed / 3 - player.gait) * (1 - Math.exp(-6 * dt));
+  player.bob += (speed * dt * Math.PI) / STRIDE;
+  const rise = STEP_RISE * player.gait;
+  player.step.copy(right).multiplyScalar(Math.sin(player.bob) * rise / 2).setY(-rise * Math.sin(player.bob) ** 2);
   player.eye += ((player.crouch ? EYE_CROUCH : EYE) - player.eye) * (1 - Math.exp(-8 * dt));
   // Шаг назад от приставленной пилы — уходишь от пропила. Зажатая пила остаётся в стволе, в руках — запасная.
   if (mode !== 'free' && !fly && keys.has('KeyS')) {
@@ -936,12 +944,12 @@ function update(dt) {
   const shake = new THREE.Vector3();
   if (mode === 'cut') {
     shake.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.006);
-  } else if (moving) {
-    player.bob += dt * 10;
-    shake.copy(right).multiplyScalar(Math.sin(player.bob) * 0.015).setY(-Math.abs(Math.cos(player.bob)) * 0.02);
+  } else {
+    // В руках пила отстаёт от шага: качается шире головы и с запозданием на четверть шага.
+    shake.copy(right).multiplyScalar(Math.sin(player.bob - 0.8) * player.gait * 0.012).setY(-(Math.cos(player.bob) ** 2) * player.gait * 0.012);
   }
   const [out, down, aside] = SHOTS[shot].hold;
-  const held = player.pos.clone().addScaledVector(forward, out).addScaledVector(right, -aside).setY(player.eye - down);
+  const held = player.pos.clone().addScaledVector(forward, out).addScaledVector(right, -aside).setY(player.eye - down).add(player.step);
   moveSaw(shown ?? { edge: local(held), q: facing(player.yaw) }, shake, dt);
   lamp(sawModel, !!saw && (saw.pinched || !!round.squeeze));
 
@@ -962,7 +970,7 @@ function frame(dt) {
     swap.position.copy(camera.position);
     swap.quaternion.copy(camera.quaternion);
   }
-  camera.position.set(player.pos.x, player.eye, player.pos.z);
+  camera.position.set(player.pos.x, player.eye, player.pos.z).add(player.step);
   camera.rotation.set(player.pitch, player.yaw, 0);
   if (saw && (low || back)) {
     // Смотрим между лампой и пропилом: в кадре и шина в древесине, и корпус с лампой.
