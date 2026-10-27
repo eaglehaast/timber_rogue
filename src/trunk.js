@@ -6,6 +6,7 @@ import { random } from './random.js';
 // Пила вырезает из неё настоящую щель, по оставшимся кубикам считается, держит ли недопил.
 export const VOXEL = 0.01;
 const CHUNK = 10; // слоёв в одном куске сетки; при пилении перестраиваются только задетые куски
+const SMOOTH = 3 * VOXEL; // м — с такой округи кубиков берём, куда смотрит поверхность у твёрдого тела
 
 // Срез — полоса колец в полярных координатах: по ширине один оборот вокруг оси, сверху сердцевина, снизу кора.
 // Поверх в середине — сердцевина: плоская картинка с прозрачным краем, квадрат в полрадиуса ствола.
@@ -278,6 +279,11 @@ export class TrunkVoxels {
     this.ny = Math.round(height / VOXEL);
     this.x0 = shape.mid.x - (this.n * VOXEL) / 2;
     this.z0 = shape.mid.z - (this.m * VOXEL) / 2;
+    // Рамка сетки в координатах ствола: за ней древесины нет.
+    this.box = {
+      low: new THREE.Vector3(this.x0, floor * VOXEL, this.z0),
+      high: new THREE.Vector3(this.x0 + this.n * VOXEL, (floor + this.ny) * VOXEL, this.z0 + this.m * VOXEL),
+    };
 
     this.data = new Uint8Array(this.n * this.m * this.ny);
     // top — верхний слой с древесиной в каждой колонке: выше него воздух, даже если там форма ствола
@@ -474,6 +480,45 @@ export class TrunkVoxels {
     return this.at(i, j, k) === 1;
   }
 
+  // Шар с центром p (в координатах ствола) и радиусом r у древесины (твёрдые тела, bodies.js): на сколько
+  // он в неё зашёл (depth больше нуля) или сколько ему до неё (меньше нуля, не дальше reach) и куда его
+  // выталкивать. Каждый кубик — шарик в полкубика и толкает от себя, тем сильнее, чем ближе. Толкают
+  // кубики не ближе SMOOTH: так ступеньки косого среза и маленький шар толкают поперёк самого среза,
+  // а не по граням кубиков, — иначе он стоит на ступеньке, как на полу.
+  press(p, r, reach) {
+    const { n, m, data, top } = this;
+    const layer = n * m;
+    const near = r + reach + VOXEL / 2, far = Math.max(near, SMOOTH), far2 = far * far;
+    const i0 = Math.max(0, Math.floor((p.x - far - this.x0) / VOXEL)), i1 = Math.min(n - 1, Math.floor((p.x + far - this.x0) / VOXEL));
+    const k0 = Math.max(0, Math.floor((p.z - far - this.z0) / VOXEL)), k1 = Math.min(m - 1, Math.floor((p.z + far - this.z0) / VOXEL));
+    const j0 = Math.max(0, Math.floor((p.y - far) / VOXEL) - this.floor);
+    const j1 = Math.min(this.ny - 1, Math.floor((p.y + far) / VOXEL) - this.floor);
+    let near2 = far2, x = 0, y = 0, z = 0;
+    for (let k = k0; k <= k1; k++) {
+      const dz = p.z - this.z(k);
+      for (let i = i0; i <= i1; i++) {
+        const col = k * n + i, last = Math.min(j1, top[col]);
+        const dx = p.x - this.x(i);
+        for (let j = j0; j <= last; j++) {
+          if (!data[j * layer + col]) continue;
+          const dy = p.y - (this.floor + j + 0.5) * VOXEL;
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 >= far2) continue;
+          near2 = Math.min(near2, d2);
+          const d = Math.sqrt(d2), w = (far - d) / (d + 1e-9);
+          x += dx * w;
+          y += dy * w;
+          z += dz * w;
+        }
+      }
+    }
+    const len = Math.hypot(x, y, z);
+    if (near2 >= near * near || len < 1e-9) return null;
+    hit.normal.set(x / len, y / len, z / len);
+    hit.depth = r + VOXEL / 2 - Math.sqrt(near2);
+    return hit;
+  }
+
   // Вырезает щель пилы: кубики, чьи центры лежат в плоскости полотна (толщина — один кубик без дыр
   // при любом наклоне), от from до to по ходу пилы от origin и в пределах длины шины.
   carve({ origin, along, side, normal }, from, to, barLength) {
@@ -516,7 +561,8 @@ export class TrunkVoxels {
   // Отвалиться может только то, что граничит с только что вырезанными кубиками, поэтому заливку
   // запускаем от их соседей. Ниже и выше полосы, где работала пила, ствол цельный: кто дотянулся
   // до её края или до уже признанного держащимся куска — держится, и заливка сразу обрывается.
-  // Когда верх упал, сверху держать некому: держит только низ пня.
+  // Когда верх упал, сверху держать некому: держит только низ пня. Пень держит и сама земля: он уходит
+  // в неё корнями, и рез, дошедший до земли, низ от неё не отделяет.
   // Вверх-вниз идём в первую очередь, так до края полосы обычно доходим за несколько шагов.
   // Что залилось целиком, не дотянувшись, — отвалилось и переносится в свою сетку.
   breakLoose() {
@@ -542,8 +588,8 @@ export class TrunkVoxels {
         const id = stack.pop();
         piece.push(id);
         const j = Math.floor(id / layer);
-        // Стоящий ствол держит и пень снизу, и верх сверху; у пня держит только земля под пропилами.
-        if (j <= lo || (this.standing && j >= hi)) return held.add(no);
+        // Стоящий ствол держит и пень снизу, и верх сверху; у пня держит только земля.
+        if (j <= lo || j + this.floor === 0 || (this.standing && j >= hi)) return held.add(no);
         for (const nb of this.neighbours(id)) {
           if (!data[nb]) continue;
           if (stamp[nb] >= first) {
@@ -674,7 +720,6 @@ export class TrunkVoxels {
   }
 
   // Переносит перечисленные кубики в новую сетку высотой ровно в их слои — отдельное тело.
-  // Заодно считает его центр и нижнюю точку (в координатах ствола): по ним кусок падает на землю.
   detach(ids) {
     const layer = this.n * this.m;
     let jLow = Infinity, jHigh = -1;
@@ -698,8 +743,6 @@ export class TrunkVoxels {
       this.touch(j);
       this.removed.push(id);
     }
-    part.center = part.measure().center;
-    part.low = part.floor * VOXEL;
     part.remesh();
     this.remesh();
     return part;
@@ -720,6 +763,76 @@ export class TrunkVoxels {
       }
     }
     return { volume: count * VOXEL ** 3, center: center.divideScalar(count) };
+  }
+
+  // Отвалившийся кусок как твёрдое тело (bodies.js): объём, центр, момент инерции вокруг центра на единицу
+  // плотности (в осях ствола) и шары, вписанные в древесину. Кусок делим на клетки примерно в треть его
+  // размера, и в каждой клетке у края куска шар стоит у середины её древесины, радиусом до ближайшей
+  // пустоты: так шар не выходит из куска. Внутри шары не нужны: их закрывают те, что у края.
+  form() {
+    const { n, m, ny, data } = this;
+    const { volume, center } = this.measure();
+    // Рамка вокруг древесины с запасом в кубик по краям: там пусто, от этой пустоты и меряем.
+    let i0 = n, i1 = -1, k0 = m, k1 = -1;
+    for (let col = 0; col < n * m; col++) {
+      if (this.top[col] < 0) continue;
+      const i = col % n, k = (col - i) / n;
+      i0 = Math.min(i0, i);
+      i1 = Math.max(i1, i);
+      k0 = Math.min(k0, k);
+      k1 = Math.max(k1, k);
+    }
+    const W = i1 - i0 + 3, D = k1 - k0 + 3, H = ny + 2;
+    const far = new Float32Array(W * D * H);
+    const padded = (i, j, k) => ((j + 1) * D + k - k0 + 1) * W + i - i0 + 1;
+    const cell = Math.round(THREE.MathUtils.clamp(Math.cbrt(volume / 27), 0.02, 0.1) / VOXEL);
+    const cw = Math.ceil((i1 - i0 + 1) / cell), ch = Math.ceil(ny / cell), cells = cw * ch * Math.ceil((k1 - k0 + 1) / cell);
+    const cellOf = (i, j, k) => (Math.floor((k - k0) / cell) * ch + Math.floor(j / cell)) * cw + Math.floor((i - i0) / cell);
+    const sum = new Float64Array(cells * 4);
+    let xx = 0, yy = 0, zz = 0, xy = 0, xz = 0, yz = 0, count = 0;
+    const each = (visit) => {
+      for (let j = 0; j < ny; j++) {
+        for (let k = k0; k <= k1; k++) for (let i = i0; i <= i1; i++) if (data[(j * m + k) * n + i]) visit(i, j, k);
+      }
+    };
+    each((i, j, k) => {
+      far[padded(i, j, k)] = 1e10;
+      const x = this.x(i) - center.x, y = (this.floor + j + 0.5) * VOXEL - center.y, z = this.z(k) - center.z;
+      xx += x * x; yy += y * y; zz += z * z;
+      xy += x * y; xz += x * z; yz += y * z;
+      count++;
+      const c = cellOf(i, j, k) * 4;
+      sum[c] += i; sum[c + 1] += j; sum[c + 2] += k; sum[c + 3]++;
+    });
+    distance(far, W, D, H);
+    // Сам кубик тоже вертится: его собственный момент — m·a²/6.
+    const own = (count * VOXEL * VOXEL) / 6;
+    const inertia = new THREE.Matrix3().set(
+      yy + zz + own, -xy, -xz,
+      -xy, xx + zz + own, -yz,
+      -xz, -yz, xx + yy + own,
+    ).multiplyScalar(VOXEL ** 3);
+    // В каждой клетке — кубик древесины, ближайший к её середине. У края клетка, где есть кубик рядом с пустотой.
+    const best = new Float64Array(cells).fill(Infinity), pick = new Int32Array(cells * 3), edge = new Uint8Array(cells);
+    each((i, j, k) => {
+      const c = cellOf(i, j, k), s = sum[c * 4 + 3];
+      if (far[padded(i, j, k)] <= 3) edge[c] = 1;
+      const d = (i - sum[c * 4] / s) ** 2 + (j - sum[c * 4 + 1] / s) ** 2 + (k - sum[c * 4 + 2] / s) ** 2;
+      if (d >= best[c]) return;
+      best[c] = d;
+      pick.set([i, j, k], c * 3);
+    });
+    const balls = [];
+    for (let c = 0; c < cells; c++) {
+      if (!edge[c]) continue;
+      const [i, j, k] = pick.subarray(c * 3, c * 3 + 3);
+      const r = (Math.sqrt(far[padded(i, j, k)]) - 0.5) * VOXEL;
+      balls.push({ at: new THREE.Vector3(this.x(i), (this.floor + j + 0.5) * VOXEL, this.z(k)), r });
+    }
+    // Шар целиком внутри другого лишний.
+    balls.sort((a, b) => b.r - a.r);
+    const kept = balls.filter((b, i) => !balls.slice(0, i).some((o) => o.at.distanceTo(b.at) + b.r <= o.r));
+    return { volume, center, inertia, balls: kept };
   }
 
   // Кусок целиком над полосой пропилов клонится весь, целиком под ней — стоит, а через который
@@ -909,6 +1022,47 @@ export class TrunkVoxels {
       geometry.addGroup(barkFaces * 6, index.length - barkFaces * 6, 1);
       return geometry;
     });
+  }
+}
+
+// Ответ press: один на все вызовы, тело забирает из него нормаль и глубину сразу.
+const hit = { normal: new THREE.Vector3(), depth: 0 };
+
+// Квадрат расстояния (в кубиках) от каждой клетки сетки W × D × H до ближайшей нулевой — точное
+// евклидово, по одной оси за проход (Фельценшваб и Хуттенлохер, 2004). Ноль — пусто, большое число — древесина.
+function distance(f, W, D, H) {
+  const size = Math.max(W, D, H);
+  const line = new Float64Array(size), out = new Float64Array(size), v = new Int32Array(size), z = new Float64Array(size + 1);
+  const pass = (lines, len, index) => {
+    for (let a = 0; a < lines; a++) {
+      for (let q = 0; q < len; q++) line[q] = f[index(a, q)];
+      parabolas(line, len, out, v, z);
+      for (let q = 0; q < len; q++) f[index(a, q)] = out[q];
+    }
+  };
+  pass(D * H, W, (a, q) => a * W + q);
+  pass(W * H, D, (a, q) => (Math.floor(a / W) * D + q) * W + (a % W));
+  pass(W * D, H, (a, q) => q * D * W + a);
+}
+
+// Одна линия: каждая клетка — вершина параболы (q − v)² + f[v], ответ — нижняя огибающая всех парабол.
+function parabolas(f, n, d, v, z) {
+  let k = 0;
+  v[0] = 0;
+  z[0] = -Infinity;
+  z[1] = Infinity;
+  for (let q = 1; q < n; q++) {
+    let s;
+    while ((s = (f[q] + q * q - f[v[k]] - v[k] * v[k]) / (2 * q - 2 * v[k])) <= z[k]) k--;
+    k++;
+    v[k] = q;
+    z[k] = s;
+    z[k + 1] = Infinity;
+  }
+  k = 0;
+  for (let q = 0; q < n; q++) {
+    while (z[k + 1] < q) k++;
+    d[q] = (q - v[k]) ** 2 + f[v[k]];
   }
 }
 
