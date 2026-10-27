@@ -479,9 +479,9 @@ function stand(dt) {
   round.time += dt;
   const g = gust(round.base);
   round.sway.copy(wind.dir).multiplyScalar(g * wind.max);
-  if (round.voxels.version && round.secVersion !== round.voxels.version) {
+  if (round.voxels.cutHigh >= 0 && round.secVersion !== round.voxels.version) {
     const body = round.voxels.cutStems(round.standing);
-    if (body !== round.body) hold(body);
+    if (body && body !== round.body) hold(body);
     else weigh();
     round.sec = section(round.voxels);
     lift();
