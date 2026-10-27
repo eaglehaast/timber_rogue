@@ -34,7 +34,8 @@ export function section(voxels) {
     for (let i = 0; i < n; i++) {
       const col = k * n + i;
       const gap = voxels.gap[col];
-      if (!gap && !through(voxels, i, k)) continue;
+      // Держат только целые колонки тех стволов, что подпилены: у двойного дерева второй ствол сам по себе.
+      if ((!gap && !through(voxels, i, k)) || !voxels.held(voxels.middle * n * n + col)) continue;
       const f = {
         col, x: voxels.x(i), z: voxels.z(k), gap,
         mid: ((voxels.gapLow[col] + voxels.gapHigh[col] + 1) / 2) * VOXEL,
