@@ -75,22 +75,57 @@ function branch(parent, from, axes) {
     turn += Math.PI / 2;
     const at = section(parent, s);
     for (const side of [0, Math.PI]) {
-      const phi = turn + side + rand(-0.3, 0.3);
-      const out = at.frame[0].clone().multiplyScalar(Math.cos(phi)).addScaledVector(at.frame[1], Math.sin(phi));
+      const out = around(at, turn + side + rand(-0.3, 0.3));
       if (random() > chance(parent, out, s)) continue;
-      const el = level === 1 ? rand(0.6, 1.1) : rand(0.5, 1.0);
-      const dir = at.tangent.clone().multiplyScalar(Math.cos(el)).addScaledVector(out, Math.sin(el)).normalize();
-      const r0 = Math.min(at.r * (level === 1 ? rand(0.35, 0.65) : rand(0.35, 0.65)), level === 3 ? 0.012 : Infinity);
-      const len = level === 1 ? rand(3, 6) * (1 - 0.6 * (s / parent.len)) : level === 2 ? rand(0.8, 2) * (1 - 0.4 * (s / parent.len)) : rand(0.3, 0.7);
-      const droop = [0, 0.12, 0.15, 0.05][level];
-      const ctrl = walk(at.center, dir, len, Math.min(0.3, len / 3), (d) => {
-        wobble(d, 0.15).addScaledVector(UP, -droop).normalize();
-      });
-      const axis = makeAxis(ctrl, (q, l) => Math.max(0.004, r0 * (1 - q / l) ** 0.7), {
-        parent, attach: s, level, joint: r0 / at.r < 0.35 ? 'twig' : 'collar',
-      });
-      axes.push(axis);
-      if (level < 3) branch(axis, 0.3 * axis.len, axes);
+      bud(parent, s, out, axes);
+    }
+  }
+}
+
+// Направление поперёк оси в сечении at под углом phi в его рамке.
+const around = (at, phi) => at.frame[0].clone().multiplyScalar(Math.cos(phi)).addScaledVector(at.frame[1], Math.sin(phi));
+
+// Ветвь из почки на оси parent на длине дуги s, наружу в сторону out, со всем, что на ней вырастет.
+function bud(parent, s, out, axes) {
+  const level = parent.level + 1;
+  const at = section(parent, s);
+  const el = level === 1 ? rand(0.6, 1.1) : rand(0.5, 1.0);
+  const dir = at.tangent.clone().multiplyScalar(Math.cos(el)).addScaledVector(out, Math.sin(el)).normalize();
+  const r0 = Math.min(at.r * rand(0.35, 0.65), level === 3 ? 0.012 : Infinity);
+  const len = level === 1 ? rand(3, 6) * (1 - 0.6 * (s / parent.len)) : level === 2 ? rand(0.8, 2) * (1 - 0.4 * (s / parent.len)) : rand(0.3, 0.7);
+  const droop = [0, 0.12, 0.15, 0.05][level];
+  const ctrl = walk(at.center, dir, len, Math.min(0.3, len / 3), (d) => {
+    wobble(d, 0.15).addScaledVector(UP, -droop).normalize();
+  });
+  const axis = makeAxis(ctrl, (q, l) => Math.max(0.004, r0 * (1 - q / l) ** 0.7), {
+    parent, attach: s, level, joint: r0 / at.r < 0.35 ? 'twig' : 'collar',
+  });
+  axes.push(axis);
+  if (level < 3) branch(axis, 0.3 * axis.len, axes);
+  return axis;
+}
+
+// Низ ствола, в зоне пиления, до длины дуги above: клён и здесь не голый. Редкие нижние ветви и волчки — пучки тонких побегов из спящих почек, торчащие вверх: чаще у земли,
+// где ствол раздаётся. Каждая такая ветвь помечена low: при валке она уходит с тем, на чём растёт.
+function low(trunk, above, axes) {
+  for (let n = Math.floor(rand(0, 3.5)); n > 0; n--) {
+    const s = rand(0.9, above - 0.2);
+    bud(trunk, s, around(section(trunk, s), random() * Math.PI * 2), axes).low = true;
+  }
+  for (let n = Math.floor(rand(0, 3.5)); n > 0; n--) {
+    const s0 = 0.1 + (above - 0.3) * random() ** 2;
+    const phi = random() * Math.PI * 2;
+    for (let k = 2 + Math.floor(random() * 4); k > 0; k--) {
+      const s = s0 + rand(-0.05, 0.05);
+      const at = section(trunk, s);
+      const el = rand(0.25, 0.6);
+      const dir = at.tangent.clone().multiplyScalar(Math.cos(el)).addScaledVector(around(at, phi + rand(-0.5, 0.5)), Math.sin(el)).normalize();
+      const r0 = rand(0.005, 0.014), len = rand(0.4, 1.4);
+      const shoot = makeAxis(walk(at.center, dir, len, len / 3, (d) => wobble(d, 0.12).addScaledVector(UP, 0.05).normalize()),
+        (q, l) => Math.max(0.003, r0 * (1 - q / l) ** 0.7), { parent: trunk, attach: s, level: 2, joint: 'twig' });
+      shoot.low = true;
+      axes.push(shoot);
+      branch(shoot, 0.4 * len, axes);
     }
   }
 }
@@ -139,6 +174,7 @@ function leader(stem, index, zone, height, split, axes, parent = null) {
   const above = trunk.points.find((q) => q.p.y >= zone).s;
   // Кора ствола ложится так же, как на кубиках: по кругу — азимут на местности на радиус низа, вдоль — высота.
   trunk.bark = { radius: stem.radius, s: above, y: zone };
+  low(trunk, above, axes);
   for (const { f, dir } of stubs) {
     const s = above + f * (height - zone);
     const at = section(trunk, s);
@@ -330,15 +366,23 @@ export function growMaple(shape, zone, height, bark, from) {
   const skeleton = growSkeleton(shape, zone, height);
   const { axes, trunk } = skeleton;
   const stemOf = (a) => (a.stem !== undefined ? a.stem : stemOf(a.parent));
-  const crowns = shape.stems.map((_, i) => {
-    const own = axes.filter((a) => stemOf(a) === i);
+  const lowOf = (a) => (a.low ? a : a.parent && lowOf(a.parent));
+  const dress = (own) => {
     const tree = new THREE.Group();
     tree.add(new THREE.Mesh(barkGeometry(own, from), bark));
     const { mesh, cards } = leafCards(own, trunk);
     tree.add(mesh);
-    return { tree, cards, axis: own[0] };
-  });
-  const cards = crowns.flatMap((c) => c.cards);
+    return { tree, cards };
+  };
+  // Нижние ветви и волчки — каждая со своим, отдельной группой: y — на какой высоте она сидит на стволе.
+  const lows = axes.filter((a) => a.low).map((root) => ({
+    root, ...dress(axes.filter((a) => lowOf(a) === root)), y: section(root.parent, root.attach).center.y,
+  }));
+  const crowns = shape.stems.map((_, i) => ({
+    ...dress(axes.filter((a) => stemOf(a) === i && !lowOf(a))), axis: axes.find((a) => a.stem === i),
+    lows: lows.filter((l) => stemOf(l.root) === i).map(({ tree, y }) => ({ tree, y })),
+  }));
+  const cards = [...crowns, ...lows].flatMap((c) => c.cards);
   const branches = axes.filter((a) => a.level > 0).reduce((m, a) => wood(a, zone).reduce((w, [dm]) => w + dm, m), 0);
   for (const { axis, at, up, h } of cards) {
     axis.leaves.mass += (LEAF_SHARE * branches) / cards.length;
@@ -357,5 +401,5 @@ export function growMaple(shape, zone, height, bark, from) {
       crowns[stemOf(a)].tree.add(knot);
     }
   }
-  return { skeleton, crowns: crowns.map(({ tree, axis }) => ({ tree, ...measure(axis, zone) })) };
+  return { skeleton, crowns: crowns.map(({ tree, axis, lows }) => ({ tree, lows, ...measure(axis, zone) })) };
 }

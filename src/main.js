@@ -175,13 +175,13 @@ const barL = () => sawModel.userData.bar;
 function growTree(voxels) {
   const { shape } = voxels;
   const { skeleton, crowns } = growMaple(shape, ZONE_H, TREE_H, voxels.skin[0], ZONE_H - 0.03);
-  const stems = crowns.map(({ tree, com, mass, inertia }, i) => {
+  const stems = crowns.map(({ tree, lows, com, mass, inertia }, i) => {
     const bend = new THREE.Group();
     bend.position.copy(shape.stems[i].center(ZONE_H)).setY(ZONE_H - 0.03);
     tree.position.copy(bend.position).negate();
     bend.add(tree);
     bend.updateMatrixWorld(true);
-    return { bend, com, mass, inertia };
+    return { bend, lows, com, mass, inertia };
   });
   return { skeleton, stems };
 }
@@ -209,7 +209,7 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   root.position.set(x, 0, 0);
   voxels.standing = true;
   // Кроны сначала стоят на месте, а над пропилом их потом переносят с сохранением положения (attach).
-  root.add(voxels.group, ...tree.stems.map((s) => s.bend));
+  root.add(voxels.group, ...tree.stems.flatMap((s) => [s.bend, ...s.lows.map((l) => l.tree)]));
   scene.add(root);
   const yard = []; // постройки (yard.js) пока убраны: отвлекают от дерева
 
@@ -248,6 +248,16 @@ function standUp(standing) {
     said: {},
   });
   hold(standing);
+}
+
+// Нижние ветви и волчки подпиленного ствола, что растут выше пропила, клонятся и падают с верхом,
+// а ниже — остаются на пне.
+function lift() {
+  const y = round.voxels.middle * VOXEL;
+  round.stems.forEach((s, i) => {
+    if (!(round.standing & (1 << i))) return;
+    for (const l of s.lows) (round.body & (1 << i) && l.y > y ? round.upper : round.root).attach(l.tree);
+  });
 }
 
 // Недопил держит стволы mask — тело, которое клонится и падает: их кроны и кубики над пропилом.
@@ -468,6 +478,7 @@ function stand(dt) {
     const body = round.voxels.cutStems(round.standing);
     if (body !== round.body) hold(body);
     round.sec = section(round.voxels);
+    lift();
     round.secVersion = round.voxels.version;
   }
   const { sec } = round;
