@@ -126,7 +126,7 @@ for (let i = 0; i < skyGeo.attributes.position.count; i++) {
 skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
 scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
 // Дальний план локации — за туманом двора, внутри неба. Самое красивое место панорамы — перед игроком на старте.
-const panorama = await makePanorama('tushna', { radius: 140, eye: EYE, haze: HAZE, thin: 0.2 });
+const panorama = await makePanorama('tushna', { radius: 140, eye: EYE });
 panorama.rotation.y = Math.PI / 2;
 scene.add(panorama);
 
