@@ -56,7 +56,7 @@ function face(shader) {
 // rank — насколько пучок высокий среди всех в атласе: 0 — самый низкий класс, 1 — самый высокий.
 // turning — карточка поворачивается к камере (face), а не стоит крестом.
 async function atlas(name, turning = false) {
-  const [map] = tiles([`assets/textures/${name}.png`]);
+  const [map] = tiles([`assets/textures/${name}.webp`]);
   const material = new THREE.MeshLambertMaterial({ map, alphaTest: 0.5 });
   material.onBeforeCompile = turning ? face : sway;
   const { grid: [cols, rows], aspect, heights } = await (await fetch(`assets/textures/${name}.json`)).json();
@@ -70,6 +70,8 @@ export const mugwortTufts = await atlas('mugwort-tufts');
 export const nettleTufts = await atlas('nettle-tufts');
 export const tansyTufts = await atlas('tansy-tufts');
 export const dandelionTufts = await atlas('dandelion-tufts', true);
+export const cloverTufts = await atlas('clover-tufts', true);
+export const yarrowTufts = await atlas('yarrow-tufts', true);
 
 // Плавный шум 0..1 с ячейкой в метр: по нему трава то выше и гуще, то ниже и реже.
 const salt = Math.random() * 1000;
