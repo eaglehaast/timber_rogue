@@ -5,7 +5,7 @@
 стоит в конце имени файла: orchard_01_tall.png. Все пучки нарисованы в один рост кадра,
 настоящую высоту в метрах задаёт класс.
 
-Пишет assets/textures/<имя>.png (атлас, клетки по CELL пикселей в ширину) и <имя>.json:
+Пишет assets/textures/<имя>.webp (атлас без потерь, exact: цвет под прозрачными пикселями сохраняется — на четверть меньше PNG, клетки по CELL пикселей в ширину) и <имя>.json:
 сетку атласа, отношение ширины клетки к высоте и диапазон высот каждой клетки.
 """
 import json
@@ -51,7 +51,7 @@ def main(folder, name):
     for n, (img, _) in enumerate(cells):
         atlas.paste(img, (n % cols * CELL, n // cols * h))
     out = Path('assets/textures') / name
-    atlas.save(out.with_suffix('.png'), optimize=True)
+    atlas.save(out.with_suffix('.webp'), lossless=True, exact=True, quality=100, method=6)
     out.with_suffix('.json').write_text(json.dumps({
         'grid': [cols, rows], 'aspect': round(CELL / h, 4), 'heights': [hs for _, hs in cells],
     }) + '\n')

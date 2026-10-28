@@ -56,7 +56,7 @@ function face(shader) {
 // rank — насколько пучок высокий среди всех в атласе: 0 — самый низкий класс, 1 — самый высокий.
 // turning — карточка поворачивается к камере (face), а не стоит крестом.
 async function atlas(name, turning = false) {
-  const [map] = tiles([`assets/textures/${name}.png`]);
+  const [map] = tiles([`assets/textures/${name}.webp`]);
   const material = new THREE.MeshLambertMaterial({ map, alphaTest: 0.5 });
   material.onBeforeCompile = turning ? face : sway;
   const { grid: [cols, rows], aspect, heights } = await (await fetch(`assets/textures/${name}.json`)).json();
