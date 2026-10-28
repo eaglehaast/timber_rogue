@@ -5,6 +5,7 @@ import {
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
 import { makeFence, YARD } from './fence.js';
+import { makePanorama } from './panorama.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
@@ -124,6 +125,10 @@ for (let i = 0; i < skyGeo.attributes.position.count; i++) {
 }
 skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
 scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
+// Дальний план локации — за туманом двора, внутри неба. Самое красивое место панорамы — перед игроком на старте.
+const panorama = await makePanorama('tushna', { radius: 140, eye: EYE, haze: HAZE, thin: 0.2 });
+panorama.rotation.y = Math.PI / 2;
+scene.add(panorama);
 
 // Трава густая во всём дворе и редеет за забором на 8 м.
 const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - YARD.w / 2, Math.abs(z) - YARD.d / 2), 0, 8);
