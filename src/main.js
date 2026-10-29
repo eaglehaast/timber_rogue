@@ -77,10 +77,9 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scene = new THREE.Scene();
-// Свет: тёплое низкое солнце и холодная тень от неба, у горизонта — дымка. Даль тонет в ней,
-// и глазу проще: что далеко, то бледнее.
+// Свет: тёплое низкое солнце и холодная тень от неба, у горизонта — дымка.
+// Тумана в сцене нет: край земли закрывают панорамы, а воздух нарисован на них самих.
 const HAZE = 0xcfdbe3, ZENITH = 0x5d8fcf;
-scene.fog = new THREE.Fog(HAZE, 25, 110);
 // Угол обзора по вертикали. Широкий угол у ствола растягивает картинку и укачивает,
 // поэтому по умолчанию он умеренный, а клавиши − и = его меняют.
 const FOV_MIN = 40, FOV_MAX = 75;
@@ -124,11 +123,14 @@ for (let i = 0; i < skyGeo.attributes.position.count; i++) {
   skyColors.push(c.r, c.g, c.b);
 }
 skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
-scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
-// Дальний план локации — за туманом двора, внутри неба. Самое красивое место панорамы — перед игроком на старте.
-const panorama = await makePanorama('tushna', { radius: 140, eye: EYE });
-panorama.rotation.y = Math.PI / 2;
-scene.add(panorama);
+scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+// Окружение локации — два кольца внутри неба: средний план (луг, стога, сараи) сразу за полосой травы
+// за забором и горы за ним. Самое красивое место гор — перед игроком на старте.
+for (const [name, radius] of [['tushna-mid', 45], ['tushna', 140]]) {
+  const ring = await makePanorama(name, { radius, eye: EYE });
+  ring.rotation.y = Math.PI / 2;
+  scene.add(ring);
+}
 
 // Трава густая во всём дворе и редеет за забором на 8 м.
 const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - YARD.w / 2, Math.abs(z) - YARD.d / 2), 0, 8);
