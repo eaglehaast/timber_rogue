@@ -5,12 +5,11 @@ import { generator } from './random.js';
 // Забор по периметру участка W × D метров с центром в начале координат: штакетник со всех сторон,
 // к дороге (z = +D/2) — с калиткой. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
 // чуть видно улицу, а солнце кладёт полосы на траву. Столбы — бруски, крашеные так же.
-// Высоту, щели, тон краски и тени, а у столбов — высоту, толщину и прокрас подбираем клавишами.
+// Высоту, щели, ширину досок, тон краски и тени, а у столбов — толщину и прокрас подбираем клавишами.
 export const YARD = { w: 60, d: 40 };
 export const HEIGHTS = [1.5, 1.8, 2.1, 2.4];
 export const GAPS = { узкие: 0.015, средние: 0.03, широкие: 0.055 };
 export const TONES = { 'как на картинке': [1, 1], выгоревший: [0.65, 1.1], 'старый серый': [0.4, 0.9] }; // насыщенность, светлота
-export const POST_RISES = [-0.3, -0.15, 0, 0.15]; // м: верх столба выше (+) или ниже (−) верха досок
 export const BOARD_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м
 export const POST_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м: сторона бруска
 export const COATS = { 'как доски': 0, 'второй слой': 0.45, густо: 0.75, сплошь: 1 };
@@ -118,21 +117,34 @@ function side(a, b) {
   return { length, place };
 }
 
-// Штакетник: столбы через 2,5 м, две прожилины, доски по 10 см ровным рядом. Наугад только картинка доски
+// Штакетник: столбы через 2,5 м, две прожилины, доски ровным рядом. Наугад только картинка доски
 // и с какого места она начинается, поэтому забор меняет высоту, не перетасовывая доски.
 // Прожилины прибиты к столбам снаружи, доски — к прожилинам: чем толще столб, тем дальше они от его оси.
-function picket({ length, place }, { height, gap, boardWidth, postRise, postWidth }, rnd, put, gate) {
-  const nearGate = (s, half) => gate !== undefined && Math.abs(s - gate) < half;
+// В каждом пролёте доски делят его поровну, и каждый столб приходится на середину щели: доски заходят
+// на него с обеих сторон одинаково. Столб срезан вровень с плечами досок — там, где начинается их угол.
+const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до земли, у калитки — выше
+function picket({ length, place }, { height, gap, boardWidth, postWidth }, rnd, put, gate) {
+  const posts = [];
+  for (let s = 0; s <= length + 0.01; s += 2.5) if (gate === undefined || Math.abs(s - gate) >= 0.8) posts.push(s);
+  if (gate !== undefined) posts.push(gate - 0.6, gate + 0.6);
+  posts.sort((a, b) => a - b);
   const r = postWidth / 2, rails = r + 0.026, front = rails + 0.037;
-  for (let s = 0; s <= length + 0.01; s += 2.5) if (!nearGate(s, 0.8)) put('post', post(postWidth, height + postRise).applyMatrix4(place(s, 0, 0)));
+  const shoulder = LIFT + height - boardWidth / 2;
+  for (const s of posts) {
+    const atGate = gate !== undefined && Math.abs(s - gate) < 0.7;
+    put('post', (atGate ? post(postWidth * 1.2, shoulder + 0.25) : post(postWidth, shoulder)).applyMatrix4(place(s, 0, 0)));
+  }
   for (const y of [0.3, height - 0.45]) put('rail', block(length, 0.08, 0.05, [length / RAIL_SPAN, 1]).applyMatrix4(place(length / 2, rails, y)));
-  for (let s = 0.05; s + boardWidth < length - 0.05; s += boardWidth + gap) {
-    const mid = s + boardWidth / 2, inGate = nearGate(mid, 0.55);
-    put('board', board(boardWidth, inGate ? height - 0.17 : height, 0.022, rnd()).applyMatrix4(place(mid, front, inGate ? 0.12 : 0.05)));
+  for (let i = 1; i < posts.length; i++) {
+    const a = posts[i - 1], span = posts[i] - a, inGate = gate !== undefined && a < gate && gate < posts[i];
+    const n = Math.max(1, Math.round(span / (boardWidth + gap))), step = span / n;
+    for (let k = 0; k < n; k++) {
+      put('board', board(boardWidth, inGate ? height - 0.17 : height, 0.022, rnd())
+        .applyMatrix4(place(a + (k + 0.5) * step, front, inGate ? GATE_LIFT : LIFT)));
+    }
   }
   if (gate === undefined) return;
-  // Калитка — проём между столбами потолще, её доски держит укосина из угла в угол.
-  for (const s of [gate - 0.6, gate + 0.6]) put('post', post(postWidth * 1.2, height + postRise + 0.25).applyMatrix4(place(s, 0, 0)));
+  // Доски калитки держит укосина из угла в угол.
   const across = 0.9, up = height - 0.8;
   put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, rails, 0.34, -Math.atan2(across, up))));
 }

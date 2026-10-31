@@ -4,7 +4,7 @@ import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeFence, YARD, HEIGHTS, GAPS, TONES, POST_RISES, BOARD_WIDTHS, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
+import { makeFence, YARD, HEIGHTS, GAPS, TONES, BOARD_WIDTHS, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
 import { makePanorama } from './panorama.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
@@ -149,13 +149,12 @@ const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r:
 const FIELD = 76;
 const plant = (atlas, perThousand, density) => makeTufts(atlas, Math.round(perThousand * FIELD * FIELD / 1000), FIELD, clear, density);
 // Забор подбираем на глаз клавишами: H — высота, G — щели, M — ширина досок, T — тон краски, N — тень;
-// у столбов U — высота относительно досок, I — толщина, J — прокрас.
+// у столбов I — толщина, J — прокрас.
 const cm = (v) => Math.round(v * 1000) / 10;
 const FENCE_KEYS = {
   KeyH: ['height', HEIGHTS, 1.8, (v) => `Забор ${v} м`],
   KeyG: ['gap', Object.keys(GAPS), 'средние', (v) => `Щели ${v}`],
   KeyT: ['tone', Object.keys(TONES), 'выгоревший', (v) => `Краска: ${v}`],
-  KeyU: ['postRise', POST_RISES, -0.15, (v) => `Столбы ${v > 0 ? 'выше' : 'ниже'} досок на ${Math.abs(cm(v))} см`],
   KeyI: ['postWidth', POST_WIDTHS, 0.1, (v) => `Столбы ${cm(v)} × ${cm(v)} см`],
   KeyJ: ['postCoat', Object.keys(COATS), 'как доски', (v) => `Прокрас столбов: ${v}`],
   KeyM: ['boardWidth', BOARD_WIDTHS, 0.1, (v) => `Доски ${cm(v)} см`],
