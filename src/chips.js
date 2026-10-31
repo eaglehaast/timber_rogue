@@ -5,7 +5,8 @@ import * as THREE from 'three';
 // каждая — за многих: из ствола в 20 см их летит около тысячи в секунду.
 const MAX = 20000;         // столько щепок лежит сразу; новые занимают место самых старых
 const PER_M3 = 3e6;        // щепок на кубометр выпиленной древесины
-const SPEED = 4;           // м/с — так цепь бросает щепку (каждую — от половины до полутора)
+const SPEED = 6;           // м/с — быстрее цепь щепку не бросает: такая улетает метра на полтора
+const FAN = 0.5;           // струя расходится конусом: в сторону щепка уходит не больше чем на половину пути
 const DRAG = 3;            // 1/с — так быстро воздух гасит скорость лёгкой щепки
 const SPIN = 30;           // рад/с — так щепка кувыркается в полёте
 const GRAVITY = 9.8;
@@ -24,12 +25,14 @@ export class Chips extends THREE.InstancedMesh {
   }
 
   // Цепь выпилила volume (м³) и выходит из древесины в точке at, двигаясь по направлению dir.
+  // Струя — конус: в сторону щепка уходит тем дальше, чем дальше улетела, и куча ложится веером от реза.
+  // Скорости — от нуля до SPEED поровну: щепки ложатся по всей длине веера, а у реза, где он узок, их гуще.
   spray(at, dir, volume) {
     for (this.due += volume * PER_M3; this.due >= 1; this.due--) {
       const chip = {
         i: this.next,
         p: at.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(0.005)),
-        v: dir.clone().multiplyScalar(SPEED * (0.5 + Math.random())).add(new THREE.Vector3().randomDirection().multiplyScalar(SPEED / 5)),
+        v: dir.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(FAN * Math.random())).multiplyScalar(SPEED * Math.random()),
         q: new THREE.Quaternion().random(),
         axis: new THREE.Vector3().randomDirection(),
         size: new THREE.Vector3(0.008 + Math.random() * 0.006, 0.004 + Math.random() * 0.004, 1),

@@ -5,7 +5,7 @@ import {
   SPLIT_MIN,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeSaw, dressSaw, lamp, runChain, stopChain, PACKS, BARS, BAR_W } from './saw.js';
+import { makeSaw, dressSaw, lamp, runChain, PACKS, BARS, BAR_W } from './saw.js';
 import { Chips } from './chips.js';
 import { growMaple, DENSITY } from './maple.js';
 import { Limb, Kerf, combine, THIN } from './limbs.js';
@@ -171,6 +171,7 @@ const keys = new Set();
 let mode = 'free';
 let saw = null;
 let under = false;   // ветку пилить снизу вверх, верхней кромкой шины (U)
+let trigger = false; // курок пилы — левая кнопка мыши — нажат
 // Деревья делянки и то, с которым сейчас имеем дело: у которого пила, а без пилы — ближайшее.
 // Координаты пропилов, пилы в стволе и всего, что считает физика, — от основания своего дерева (round.base).
 const trees = [];
@@ -570,7 +571,6 @@ function spray(cut, volume) {
 // в её пропиле и уходит с ним, куда бы ветку ни унесло, а забираешь её, когда ветка по нему разойдётся (part).
 function leaveSaw() {
   const left = sawModel.clone();
-  stopChain(left);
   const hands = [];
   left.traverse((part) => {
     part.layers.set(0);
@@ -1410,7 +1410,6 @@ function update(dt) {
   const shake = new THREE.Vector3();
   if (mode === 'cut') {
     shake.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.006);
-    runChain(sawModel);
   } else {
     // В руках пила отстаёт от шага: качается шире головы и с запозданием на четверть шага.
     shake.copy(right).multiplyScalar(Math.sin(player.bob - 0.8) * player.gait * 0.012).setY(-(Math.cos(player.bob) ** 2) * player.gait * 0.012);
@@ -1419,6 +1418,7 @@ function update(dt) {
   const held = player.pos.clone().addScaledVector(forward, out).addScaledVector(right, -aside).setY(player.eye - down).add(player.step);
   moveSaw(shown ?? { edge: local(held), q: facing(player.yaw) }, shake, dt);
   lamp(sawModel, !!saw && (saw.pinched || !!round.squeeze));
+  runChain(sawModel, trigger, !!saw?.pinched, dt);
 
   if (fly) flyCamera(dt, shift);
   else frame(dt);
@@ -1639,6 +1639,7 @@ canvas.addEventListener('mousedown', (e) => {
   note(`mouse${e.button} ${mode}`);
   if (e.button === 2) setInspecting(true);
   if (e.button !== 0) return;
+  trigger = true;
   if (document.pointerLockElement !== canvas) lockPointer();
   if (fly) return;
   if (mode === 'aim' && !saw.pinched) {
@@ -1655,7 +1656,10 @@ canvas.addEventListener('mousedown', (e) => {
 });
 addEventListener('mouseup', (e) => {
   note(`up${e.button} ${mode}`);
-  if (e.button === 0 && mode === 'cut') mode = 'aim';
+  if (e.button === 0) {
+    trigger = false;
+    if (mode === 'cut') mode = 'aim';
+  }
   if (e.button === 2) setInspecting(false);
 });
 addEventListener('wheel', (e) => {
