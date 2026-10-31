@@ -946,7 +946,7 @@ function update(dt) {
     const c = shape.center(y).add(round.base);
     const dx = player.pos.x - c.x, dz = player.pos.z - c.z;
     const dist = Math.hypot(dx, dz);
-    const minDist = shape.scale(y) * shape.profile(Math.atan2(dz, dx)) + 0.35;
+    const minDist = shape.outline(Math.atan2(dz, dx), y) + 0.35;
     if (dist < minDist) player.pos.set(c.x + (dx / dist) * minDist, player.pos.y, c.z + (dz / dist) * minDist);
   }
   pushOut(round.yard, player.pos, 0.35);
