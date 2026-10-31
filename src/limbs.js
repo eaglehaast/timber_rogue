@@ -1,10 +1,13 @@
 import * as THREE from 'three';
 import { barkGeometry, leafMesh, segments, section, pointAt, girth } from './maple.js';
+import { TENSILE, COMPRESSIVE, E } from './physics.js';
 
 // Ветка, которую можно отпилить: кусок скелета клёна (maple.js) — куски осей parts ({ axis, from, to,
 // cutFrom, cutTo }, родитель раньше детей) и листья cards на них. Крона ствола, нижняя ветвь, отпиленный
 // сук — всё это ветки. Ветка рисует себя (кора, торцы, листва), знает свой вес и форму для столкновений
 // и делится пропилом надвое. Всё — в осях скелета: в них ветку и держит её группа group.
+// Где ветку что-то давит (нагрузки loads — { axis, s, f, p }: сила f по линии через точку p), она знает,
+// что тянет и гнёт каждое её сечение и где она сломается.
 export const THIN = 0.01;  // м — радиус: ветку тоньше пальца не пилим
 const TWIG = 0.005;        // м — радиус: тоньше в столкновениях не участвует
 const RUN = 4;             // столько точек оси (шагов по 5 см) идёт в одну капсулу
@@ -24,7 +27,8 @@ export class Limb {
     this.group.userData.limb = this;
   }
 
-  // Кора с торцами и листва — заново, по нынешним кускам; заодно форма для столкновений (shape).
+  // Кора с торцами и листва — заново, по нынешним кускам; заодно форма для столкновений (shape), что за каждой
+  // точкой осей (tails) и вес всей ветки (weight).
   dress() {
     for (const mesh of this.meshes) {
       mesh.geometry.dispose();
@@ -34,7 +38,92 @@ export class Limb {
     for (const mesh of this.meshes) mesh.castShadow = mesh.receiveShadow = true;
     this.group.add(...this.meshes);
     this.shape = this.capsules();
+    this.tails = this.tally();
+    this.weight = this.weigh();
     return this;
+  }
+
+  // Что за каждой точкой каждой оси — дальше по ней и на всём, что растёт на ней дальше: масса и масса × центр
+  // (tails). Дети идут в parts после родителя: с конца каждый ребёнок сосчитан раньше, чем его родитель.
+  tally() {
+    const tails = new Map(), cards = Map.groupBy(this.cards, (c) => c.axis), kids = Map.groupBy(this.parts, (p) => p.axis.parent);
+    for (const part of [...this.parts].reverse()) {
+      const a = part.axis, n = a.points.length, mass = new Float64Array(n), moment = new Float64Array(3 * n);
+      const add = (i, m, x, y, z) => {
+        mass[i] += m;
+        moment[3 * i] += x;
+        moment[3 * i + 1] += y;
+        moment[3 * i + 2] += z;
+      };
+      segments(part, this.zone, (m, p, len, r, t, i) => add(i, m, m * p.x, m * p.y, m * p.z));
+      for (const { s, mass: m, center: c } of cards.get(a) ?? []) add(index(a, s), m, m * c.x, m * c.y, m * c.z);
+      for (const { axis: child } of kids.get(a) ?? []) {
+        const tail = tails.get(child);
+        add(index(a, child.attach), tail.mass[0], ...tail.moment.subarray(0, 3));
+      }
+      for (let i = n - 2; i >= 0; i--) add(i, mass[i + 1], ...moment.subarray(3 * i + 3, 3 * i + 6));
+      tails.set(a, { mass, moment });
+    }
+    return tails;
+  }
+
+  // Масса того, что за точкой s оси a, и её центр.
+  heft(a, s) {
+    const tail = this.tails.get(a), i = Math.min(a.points.length - 1, Math.ceil(s / (a.len / (a.points.length - 1))));
+    const mass = tail?.mass[i] ?? 0;
+    return { mass, center: mass ? new THREE.Vector3(...tail.moment.subarray(3 * i, 3 * i + 3)).divideScalar(mass) : null };
+  }
+
+  // Что давит на то, что за сечением оси a в точке s: нагрузки loads и вес (g — ускорение свободного
+  // падения в осях ветки). Отдаёт сечение q, силу F и её момент M вокруг середины сечения: сечение держит
+  // то же обратно. Вдоль оси (F·t) больше нуля — его растягивает, меньше — сжимает.
+  forces(a, s, loads, g) {
+    const q = pointAt(a, s), past = beyond(a, s), F = new THREE.Vector3(), M = new THREE.Vector3();
+    for (const l of loads) {
+      if (!past(l.axis, l.s)) continue;
+      F.add(l.f);
+      M.add(_d.copy(l.p).sub(q.p).cross(l.f));
+    }
+    const { mass, center } = this.heft(a, s);
+    if (mass) {
+      F.addScaledVector(g, mass);
+      M.add(center.sub(q.p).cross(_e.copy(g).multiplyScalar(mass)));
+    }
+    return { q, F, M };
+  }
+
+  // Комель оси a в этой ветке — откуда она растёт: ветвь — от коры родителя, ствол — от верха кубиков,
+  // отпиленный кусок — от пропила.
+  root(a) {
+    const part = this.parts.find((p) => p.axis === a);
+    return Math.max(part?.from ?? 0, a.stem !== undefined ? a.points.find((q) => q.p.y >= this.zone)?.s ?? a.len : section(a.parent, a.attach).r);
+  }
+
+  // Податливость ветки в точке s оси a, м/Н: на столько точка уходит под силой в ньютон поперёк оси, как конец
+  // консоли от комля оси до s с сечением посередине: L³ / (3·E·I).
+  yielding(a, s) {
+    const base = this.root(a), L = s - base;
+    return L > 0 ? L ** 3 / ((3 * E * Math.PI * section(a, (s + base) / 2).r ** 4) / 4) : 0;
+  }
+
+  // Где ветку ломает: самое нагруженное сечение на пути от каждой нагрузки к комлю ветки — { axis, s, ratio },
+  // ratio — какую долю своей прочности сечение держит (strain).
+  weakest(loads, g) {
+    let worst = null;
+    const seen = new Set();
+    for (const l of loads) {
+      for (let a = l.axis, s = l.s; a && this.parts.some((p) => p.axis === a); s = a.attach, a = a.parent) {
+        const from = this.root(a);
+        for (const q of a.points) {
+          if (q.s > s || q.s < from || seen.has(q)) continue;
+          seen.add(q);
+          const { F, M } = this.forces(a, q.s, loads, g);
+          const ratio = strain(F.dot(q.t), M.addScaledVector(q.t, -M.dot(q.t)).length(), q.r);
+          if (!worst || ratio > worst.ratio) worst = { axis: a, s: q.s, ratio };
+        }
+      }
+    }
+    return worst;
   }
 
   // Вес, центр тяжести и момент инерции вокруг него (в осях ветки): древесина — цилиндрами по шагу оси,
@@ -52,7 +141,8 @@ export class Limb {
     return sum(bits);
   }
 
-  // Форма для столкновений — капсулы по осям толще TWIG, по RUN точек: { a, b, r, axis, from, to }.
+  // Форма для столкновений — капсулы по осям толще TWIG, по RUN точек: { a, b, r, axis, from, to, soft }.
+  // soft — податливость концов капсулы (yielding): ветка не камень, под тем, что на неё давит, она гнётся.
   // Ветвь сидит в родителе, а у пропила кончается торцом: с этих концов капсулы поджаты на свой радиус,
   // чтобы куски по обе стороны пропила и ветвь с родителем не заходили друг в друга. Короткий толстый
   // кусок (чурка, на которую капсулы не хватает) — кольцами шаров толщиной в сам кусок.
@@ -68,7 +158,10 @@ export class Limb {
         const marks = [s0, ...a.points.filter((q, i) => i % RUN === 0 && q.s > s0 + 0.01 && q.s < s1 - 0.01).map((q) => q.s), s1];
         for (let i = 1; i < marks.length; i++) {
           const p = pointAt(a, marks[i - 1]), q = pointAt(a, marks[i]);
-          out.push({ a: p.p, b: q.p, r: (p.r + q.r) / 2, axis: a, from: p.s, to: q.s, ...around(p.p, q.p, (p.r + q.r) / 2) });
+          out.push({
+            a: p.p, b: q.p, r: (p.r + q.r) / 2, axis: a, from: p.s, to: q.s, soft: [this.yielding(a, p.s), this.yielding(a, q.s)],
+            ...around(p.p, q.p, (p.r + q.r) / 2),
+          });
         }
       } else if (to - from > 0 && cutFrom && cutTo && section(a, from).r >= TWIG) {
         const q = pointAt(a, (from + to) / 2), half = (to - from) / 2;
@@ -106,28 +199,53 @@ export class Limb {
   // то, что до него. За пропилом — дальше по оси и всё, что растёт на ней дальше s. Пропилы и листья
   // уходят с тем куском, на котором сидят. Обе ветки надо одеть заново (dress).
   split(axis, s) {
-    const beyond = (a, at) => {
-      if (a === axis) return at > s;
-      for (let c = a; c.parent; c = c.parent) if (c.parent === axis) return c.attach > s;
-      return false;
-    };
+    const past = beyond(axis, s);
     const near = [], far = [];
     for (const part of this.parts) {
-      if (part.axis !== axis) (beyond(part.axis) ? far : near).push(part);
+      if (part.axis !== axis) (past(part.axis) ? far : near).push(part);
       else {
         if (s > part.from) near.push({ ...part, to: s, cutTo: true });
         far.push({ ...part, from: Math.max(s, part.from), cutFrom: s > part.from || part.cutFrom });
       }
     }
-    const piece = new Limb(far, this.cards.filter((c) => beyond(c.axis, c.s)), this);
-    piece.kerfs = this.kerfs.filter((k) => beyond(k.axis, k.s));
+    const piece = new Limb(far, this.cards.filter((c) => past(c.axis, c.s)), this);
+    piece.kerfs = this.kerfs.filter((k) => past(k.axis, k.s));
     for (const k of piece.kerfs) piece.group.add(k.mark);
     this.parts = near;
-    this.cards = this.cards.filter((c) => !beyond(c.axis, c.s));
-    this.kerfs = this.kerfs.filter((k) => !beyond(k.axis, k.s));
+    this.cards = this.cards.filter((c) => !past(c.axis, c.s));
+    this.kerfs = this.kerfs.filter((k) => !past(k.axis, k.s));
     return piece;
   }
 }
+
+// Какую долю своей прочности держит круглое сечение радиуса r, когда его тянет вдоль оси сила N (сжимает —
+// меньше нуля) и гнёт момент M. Ломается оно целиком: по одну сторону нейтральной линии (в радиусах — y0
+// от середины) древесина сжата во всю прочность на сжатие, по другую растянута во всю прочность на разрыв.
+// Такая пара держит N(y0) и M(y0) — на этой кривой и лежит предел: нагрузка на луче (N, M) доходит до неё
+// на доле, которую мы и отдаём. Сжатая сторона у круга — сегмент над y0, площадь acos y0 − y0·√(1 − y0²).
+export function strain(N, M, r) {
+  const n = N / r ** 2, m = M / r ** 3;
+  if (m < 1e-9) return n > 0 ? n / (TENSILE * Math.PI) : -n / (COMPRESSIVE * Math.PI);
+  const pull = (y) => TENSILE * Math.PI - (TENSILE + COMPRESSIVE) * (Math.acos(y) - y * Math.sqrt(1 - y * y));
+  const bend = (y) => (2 / 3) * (1 - y * y) ** 1.5 * (TENSILE + COMPRESSIVE);
+  let lo = -1, hi = 1;
+  for (let i = 0; i < 40; i++) {
+    const y = (lo + hi) / 2;
+    if (pull(y) * m - bend(y) * n < 0) lo = y;
+    else hi = y;
+  }
+  return m / bend((lo + hi) / 2);
+}
+
+// За точкой s оси axis — та же ось дальше s и всё, что растёт на ней дальше: лежит ли там точка at оси a.
+const beyond = (axis, s) => (a, at) => {
+  if (a === axis) return at > s;
+  for (let c = a; c.parent; c = c.parent) if (c.parent === axis) return c.attach > s;
+  return false;
+};
+
+// Номер точки оси a, с которой начинается шаг, где лежит длина дуги s.
+const index = (a, s) => THREE.MathUtils.clamp(Math.floor(s / (a.len / (a.points.length - 1))), 0, a.points.length - 2);
 
 // Середина капсулы и докуда она от неё достаёт: так луч быстро пропускает далёкие капсулы.
 const around = (a, b, r) => ({ mid: a.clone().lerp(b, 0.5), reach: a.distanceTo(b) / 2 + r });
@@ -178,8 +296,9 @@ const _ba = new THREE.Vector3(), _oa = new THREE.Vector3(), _oc = new THREE.Vect
 
 // Пропил поперёк ветки: ось axis, длина дуги s, плоскость — сечение (нормаль — касательная оси).
 // В плоскости — свои оси x, y по рамке оси n, b. Сечение — обвод (outline, SIDES точек) и клетки N×N:
-// древесина — те, чья середина внутри обвода; пила их выпиливает. Выпилена вся — ветка отделилась.
-// На коре по пропилу — тёмная щель (mark) там, где он вышел к коре.
+// древесина — те, чья середина внутри обвода; пила их выпиливает (cut 1 — щель). Где недопил под нагрузкой
+// смяло, щель сомкнулась (cut 2): там её стенки упёрлись друг в друга и держат сжатие. Выпилена вся
+// древесина — ветка отделилась. На коре по пропилу — тёмная щель (mark) там, где он вышел к коре.
 const SIDES = 48;
 const CELL = 0.006; // м — клетка сечения, не крупнее этого (но не меньше 8 и не больше 64 клеток поперёк)
 const SLIT = 0.01;  // м — ширина щели от цепи
@@ -307,6 +426,67 @@ export class Kerf {
     if (changed) this.slit();
   }
 
+  // Что держит сечение пропила, когда на то, что за ним, давят сила F и момент M вокруг середины (в осях
+  // ветки). Держат недопил (тянется и сжимается) и сомкнутая щель (только сжатие). Ломается сечение, как
+  // в strain: по одну сторону нейтральной линии всё растянуто во всю свою прочность, по другую — сжато.
+  // Линия — поперёк момента вокруг середины того, что держит; где она встанет, ищем по пределу в осях
+  // (сила, момент): двигая линию через клетки, обходим его выпуклый многоугольник, и нагрузка на луче
+  // из нуля выходит из него на доле 1/ratio. closing — клетки щели, что при этом на сжатой стороне:
+  // их сомкнёт; пусто — щель только раскрывается. squeezed — целое сечение сжато всё: зажмёт с любой стороны.
+  strain(F, M) {
+    const N = F.dot(this.normal), { n, b } = this.point, A = this.cell ** 2, C = COMPRESSIVE * A;
+    const cx = (id) => this.x(id % this.N), cy = (id) => this.x(Math.floor(id / this.N));
+    const bear = [], open = [];
+    let ox = 0, oy = 0;
+    for (let id = 0; id < this.wood.length; id++) {
+      if (!this.wood[id]) continue;
+      if (this.cut[id] === 1) open.push(id);
+      else {
+        bear.push(id);
+        ox += cx(id);
+        oy += cy(id);
+      }
+    }
+    const bend = Math.hypot(M.dot(n), M.dot(b));
+    const squeezed = N / (Math.PI * this.r ** 2) + (4 * bend) / (Math.PI * this.r ** 3) < 0;
+    if (!bear.length || !(N || bend)) return { ratio: bear.length ? 0 : Infinity, closing: [], squeezed };
+    ox /= bear.length;
+    oy /= bear.length;
+    let dx = -M.dot(b) - N * ox, dy = M.dot(n) - N * oy;
+    const m = Math.hypot(dx, dy);
+    [dx, dy] = m > 1e-9 ? [dx / m, dy / m] : [1, 0];
+    const u = new Float64Array(this.wood.length);
+    for (const id of [...bear, ...open]) u[id] = (cx(id) - ox) * dx + (cy(id) - oy) * dy;
+    bear.sort((p, q) => u[p] - u[q]);
+    const pull = (id) => (this.cut[id] ? 0 : TENSILE * A);
+    // Вершины предела против часовой: сначала растянуто всё, что выше линии (up), потом всё, что ниже.
+    // Луч нагрузки (N, m) выходит через ребро, что смотрит на него, и на нём доля пути λ — наименьшая.
+    let best = { lambda: Infinity };
+    const edge = (p, q, at, up) => {
+      const ex = q[0] - p[0], ey = q[1] - p[1], den = N * ey - m * ex;
+      if (den <= 0) return;
+      const lambda = Math.max(0, p[0] * ey - p[1] * ex) / den;
+      if (lambda < best.lambda) best = { lambda, at, up };
+    };
+    for (const up of [true, false]) {
+      let p = up ? [0, 0] : [-C * bear.length, 0];
+      if (up) for (const id of bear) p = [p[0] + pull(id), p[1] + pull(id) * u[id]];
+      for (const id of bear) {
+        const k = (up ? -1 : 1) * (pull(id) + C), q = [p[0] + k, p[1] + k * u[id]];
+        edge(p, q, u[id], up);
+        p = q;
+      }
+    }
+    const { lambda, at, up } = best;
+    const closing = open.filter((id) => (up ? at - u[id] : u[id] - at) > this.cell / 2);
+    return { ratio: 1 / lambda, closing, squeezed };
+  }
+
+  // Недопил смяло: щель там, где он сжат, сомкнулась.
+  close(ids) {
+    for (const id of ids) this.cut[id] = 2;
+  }
+
   // Щель на коре: по тем азимутам, где пропил дошёл до коры, — тёмная полоска по ширине цепи.
   slit() {
     const pos = [], index = [];
@@ -330,4 +510,4 @@ export class Kerf {
     this.mark.geometry.setIndex(index);
   }
 }
-const _d = new THREE.Vector3();
+const _d = new THREE.Vector3(), _e = new THREE.Vector3();
