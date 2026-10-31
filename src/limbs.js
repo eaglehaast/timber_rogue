@@ -413,20 +413,25 @@ export class Kerf {
   }
 
   // Выпилить клетки, чьи середины от from до to по ходу пилы от origin и в пределах длины шины.
+  // Возвращает, сколько древесины выпилено (м³).
   carve({ origin, along, side }, from, to, length) {
     const [ex, ey] = this.flat(origin), [ax, ay] = this.flat(along, true), [sx, sy] = this.flat(side, true);
-    let changed = false;
+    let changed = false, cut = 0;
     for (let j = 0, id = 0; j < this.N; j++) {
       for (let i = 0; i < this.N; i++, id++) {
         if (this.cut[id]) continue;
         const vx = this.x(i) - ex, vy = this.x(j) - ey, d = vx * ax + vy * ay;
         if (d < from || d > to || Math.abs(vx * sx + vy * sy) > length / 2) continue;
         this.cut[id] = 1;
-        if (this.wood[id]) this.left--;
+        if (this.wood[id]) {
+          this.left--;
+          cut++;
+        }
         changed = true;
       }
     }
     if (changed) this.slit();
+    return cut * this.cell ** 2 * SLIT;
   }
 
   // Что держит сечение пропила, когда на то, что за ним, давят сила F и момент M вокруг середины (в осях

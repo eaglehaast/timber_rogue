@@ -5,7 +5,8 @@ import {
   SPLIT_MIN,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
+import { makeSaw, dressSaw, lamp, runChain, PACKS, BARS, BAR_W } from './saw.js';
+import { Chips } from './chips.js';
 import { growMaple, DENSITY } from './maple.js';
 import { Limb, Kerf, combine, THIN } from './limbs.js';
 import { Body, World } from './bodies.js';
@@ -145,7 +146,8 @@ const aimPlane = new THREE.Mesh(
   }),
 );
 const sawModel = makeSaw(recall('pack', PACKS), recall('bar', BARS));
-scene.add(aimPlane, sawModel);
+const chips = new Chips();
+scene.add(aimPlane, sawModel, chips);
 // Пила и прицел — на своём слое: их видит только взгляд игрока, а вид сбоку показывает
 // одно дерево, иначе мотор заслоняет пропил.
 const TOOLS = 1;
@@ -169,6 +171,7 @@ const keys = new Set();
 let mode = 'free';
 let saw = null;
 let under = false;   // ветку пилить снизу вверх, верхней кромкой шины (U)
+let trigger = false; // курок пилы — левая кнопка мыши — нажат
 // Деревья делянки и то, с которым сейчас имеем дело: у которого пила, а без пилы — ближайшее.
 // Координаты пропилов, пилы в стволе и всего, что считает физика, — от основания своего дерева (round.base).
 const trees = [];
@@ -225,6 +228,7 @@ const fallen = (tree, i) => !(tree.standing & (1 << i)) || (tree.done && Boolean
 const regrow = () => {
   blow(Math.random() * Math.PI * 2, 0.05 + Math.random() * 0.2, Math.random() * 9);
   PLOT.forEach((_, slot) => newRound(slot));
+  chips.clear();
 };
 
 // Вырастить заново дерево на месте slot делянки. treeSeed — зерно, из которого оно растёт
@@ -538,6 +542,28 @@ function inWorld(cut) {
   cut.limb.group.updateWorldMatrix(true, false);
   const m = cut.limb.group.matrixWorld;
   return { origin: origin.clone().applyMatrix4(m), along: along.transformDirection(m), side: side.transformDirection(m) };
+}
+
+// Цепь выпиливает полосу от from до кромки по ходу пилы, а выпиленное летит щепками.
+function bite(from) {
+  const volume = (saw.kerf ?? round.voxels).carve(basis(saw), from, 0, barL());
+  if (volume) spray(saw, volume);
+}
+
+// Щепки вылетают там, где цепь выходит из древесины, и летят по её ходу: по режущей кромке цепь бежит
+// к мотору, а у пилы, перевёрнутой под U, — к носу. Где выходит: луч с конца кромки (со стороны хода цепи,
+// чуть впереди кромки, где ещё не выпилено) упирается в кору. Если конец кромки сам в древесине, шина там
+// сидит в щели, и цепь выносит щепки из её устья — на коре позади кромки.
+function spray(cut, volume) {
+  const { origin, along, side } = basis(cut), run = cut.under ? -1 : 1, wood = woodOf(cut);
+  const end = origin.clone().addScaledVector(along, VOXEL).addScaledVector(side, (run * barL()) / 2);
+  const hit = wood.pass(end, side.clone().multiplyScalar(-run), barL());
+  if (!hit) return;
+  const enter = Math.max(0, hit.enter);
+  const back = enter ? 0 : wood.pass(end, along.clone().negate(), REACH).exit;
+  const w = inWorld(cut);
+  const at = w.origin.addScaledVector(w.along, VOXEL - back).addScaledVector(w.side, run * (barL() / 2 - enter));
+  chips.spray(at, w.side.multiplyScalar(run), volume);
 }
 
 // Зажатую пилу бросаем в стволе: там остаётся её копия без рук, а в руках — запасная. Пробуем — пил сколько угодно.
@@ -1325,19 +1351,19 @@ function update(dt) {
     else unsay('body');
     saw.edge.addScaledVector(basis(saw).along, step);
     saw.depth += step;
+    bite(-step - VOXEL);
     if (kerf) {
-      kerf.carve(basis(saw), -step - VOXEL, 0, barL());
       if (kerf.through) {
         part(limb, kerf);
         crack(0.3);
       } else bear(limb, kerf, ...pressing(limb));
     } else {
-      round.voxels.carve(basis(saw), -step - VOXEL, 0, barL());
       round.voxels.breakLoose().forEach(dropPiece);
       round.voxels.remesh();
     }
   }
   if (saw?.loose) rest(saw);
+  chips.step(dt);
   // Живут все деревья делянки: то, от которого отошёл, падает дальше.
   stepWind(dt);
   const here = round;
@@ -1392,6 +1418,7 @@ function update(dt) {
   const held = player.pos.clone().addScaledVector(forward, out).addScaledVector(right, -aside).setY(player.eye - down).add(player.step);
   moveSaw(shown ?? { edge: local(held), q: facing(player.yaw) }, shake, dt);
   lamp(sawModel, !!saw && (saw.pinched || !!round.squeeze));
+  runChain(sawModel, trigger, !!saw?.pinched, dt);
 
   if (fly) flyCamera(dt, shift);
   else frame(dt);
@@ -1474,7 +1501,7 @@ function steer(axis, angle) {
     if (saw.stuck) return;
     saw.q.copy(q);
     saw.blocked = false;
-    if (mode === 'cut') (saw.kerf ?? round.voxels).carve(basis(saw), -VOXEL, 0, barL());
+    if (mode === 'cut') bite(-VOXEL);
   }
   // Мышь шлёт сотни событий в секунду, а кромку на кору кладём раз за кадр (rest в update).
   if (!saw.depth) saw.loose = true;
@@ -1612,6 +1639,7 @@ canvas.addEventListener('mousedown', (e) => {
   note(`mouse${e.button} ${mode}`);
   if (e.button === 2) setInspecting(true);
   if (e.button !== 0) return;
+  trigger = true;
   if (document.pointerLockElement !== canvas) lockPointer();
   if (fly) return;
   if (mode === 'aim' && !saw.pinched) {
@@ -1628,7 +1656,10 @@ canvas.addEventListener('mousedown', (e) => {
 });
 addEventListener('mouseup', (e) => {
   note(`up${e.button} ${mode}`);
-  if (e.button === 0 && mode === 'cut') mode = 'aim';
+  if (e.button === 0) {
+    trigger = false;
+    if (mode === 'cut') mode = 'aim';
+  }
   if (e.button === 2) setInspecting(false);
 });
 addEventListener('wheel', (e) => {
