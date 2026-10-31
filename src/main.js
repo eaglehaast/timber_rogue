@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { TrunkVoxels, trunkShape, VOXEL, dressWood } from './trunk.js';
 import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
+  SPLIT_MIN,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
@@ -27,7 +28,6 @@ const SEATING = 0.04;     // ствол прошёл такую долю пут�
 const PINCH = 3;          // мм: уже этого — закусило, цепь встала
 const STRAIN = 0.5;       // недопил ветки держит такую долю своей прочности — щель уже сужается или раскрывается
 const RESULT_SHOWN = 4000; // мс: столько итог раунда висит на экране
-const SPLIT_MIN = 0.02;   // м: отщеп короче этого — волосяная трещина, её не видно и она ничего не меняет
 const OPEN = 14;          // мм: шире — щель раскрывается
 const LEAN = THREE.MathUtils.degToRad(0.4); // настолько наклонился ствол — это уже заметно
 // Больше этого ствол стоя не наклоняется: недопил теряет устойчивость, и дальше его ведёт падение.
@@ -180,11 +180,13 @@ const barL = () => sawModel.userData.bar;
 // Выше зоны пиления — клён (maple.js): скелет из осей, стволы ниже зоны идут по форме кубиков (trunkShape)
 // и выше продолжают её же сечением; кора чуть заходит в кубики, чтобы на стыке не было щели.
 // Крона каждого ствола и каждая его нижняя ветвь — ветки (limbs.js), от них можно отпиливать.
-// Крона качается на своём сгибе bend — над осью ствола у верха зоны. Торец ветки — те же кольца, что на срезе.
+// Крона качается на своём сгибе bend — над осью ствола у верха зоны. Торец ветки — те же кольца, что на срезе,
+// стенки раскола — те же рваные волокна, что у отщепа.
 function growTree(voxels) {
   const { shape } = voxels;
   const { skeleton, crowns } = growMaple(shape, ZONE_H, TREE_H, ZONE_H - 0.03);
-  const skin = [voxels.skin[0], new THREE.MeshLambertMaterial({ map: voxels.skin[1].map })];
+  const wood = voxels.skin[1];
+  const skin = [voxels.skin[0], new THREE.MeshLambertMaterial({ map: wood.map }), new THREE.MeshLambertMaterial({ map: wood.userData.fibres })];
   const grow = ({ parts, cards, cloud }, stem) => Object.assign(new Limb(parts, cards, { skin, cloud, zone: ZONE_H }), { stem }).dress();
   const stems = crowns.map((c, i) => {
     const bend = new THREE.Group();
@@ -973,9 +975,9 @@ function dropPiece(part) {
   }));
 }
 
-// Ветка разошлась по пропилу kerf — его допилили или недопил не выдержал: что за ним — отдельное тело.
-// Пила из него свободна, а ту, что в нём зажало и бросили, забираешь.
-function part(limb, kerf) {
+// Ветка разошлась по пропилу kerf — его допилили или недопил не выдержал (и его, может быть, раскололо
+// вдоль: chair): что за ним — отдельное тело. Пила из него свободна, а ту, что в нём зажало и бросили, забираешь.
+function part(limb, kerf, chair = null) {
   limb.kerfs.splice(limb.kerfs.indexOf(kerf), 1);
   kerf.mark.removeFromParent();
   kerf.mark.geometry.dispose();
@@ -983,7 +985,7 @@ function part(limb, kerf) {
     unsay('freed');
     say('freed', 'Ветка разошлась по пропилу — зажатую пилу вынул');
   }
-  sever(limb, kerf.axis, kerf.s);
+  sever(limb, kerf.axis, kerf.s, chair);
   if (saw?.kerf === kerf) {
     mode = 'free';
     saw = null;
@@ -991,12 +993,13 @@ function part(limb, kerf) {
 }
 
 // Недопил ветки под нагрузкой (strain у Kerf). Не держит — сминается там, где сжат: щель там смыкается
-// и зажимает пилу, если она в ней. Или рвётся — ветка расходится по пропилу, и что на ней лежало, оседает.
+// и зажимает пилу, если она в ней. Или рвётся — ветка расходится по пропилу, и что на ней лежало, оседает;
+// толстый растянутый недопил при этом раскалывает ветку вдоль (Kerf.tongue).
 // Пока держит, но на пределе, тому, кто пилит, видно, к чему идёт. true — ветку разорвало.
 function bear(limb, kerf, loads, g) {
   const { F, M } = limb.forces(kerf.axis, kerf.s, loads, g);
   for (;;) {
-    const { ratio, closing, squeezed } = kerf.strain(F, M);
+    const { ratio, closing, squeezed, pulled, d } = kerf.strain(F, M);
     if (ratio < 1) {
       if (ratio > STRAIN && saw?.kerf === kerf && mode === 'cut') {
         if (closing.length) say('tight', 'Щель сужается — ветку здесь сжимает, сейчас закусит');
@@ -1007,9 +1010,12 @@ function bear(limb, kerf, loads, g) {
     unsay('tight');
     unsay('tear');
     if (!closing.length) {
-      part(limb, kerf);
-      crack(0.6);
-      say('broke', 'Недопил не выдержал — ветку переломило по пропилу');
+      const chair = kerf.tongue(pulled, d);
+      part(limb, kerf, chair);
+      crack(chair ? 0.8 : 0.6);
+      say('broke', chair
+        ? `Недопил не выдержал — его растянутые волокна раскололи ветку вдоль на ${Math.round((chair.to - chair.from) * 100)} см`
+        : 'Недопил не выдержал — ветку переломило по пропилу');
       return true;
     }
     kerf.close(closing);
@@ -1032,12 +1038,12 @@ function pressing(limb) {
   return [body ? loadsOn(body, limb) : [], gravityIn(limb)];
 }
 
-// Ветку limb перепилило или сломало на оси axis в точке s: всё, что дальше, — отдельное тело и падает.
-// Отпиленный кусок распадается на два тела, лежащее дерево ложится заново без отпавшего. Со стоящего
-// дерева ушёл вес — оно клонится иначе.
-function sever(limb, axis, s) {
+// Ветку limb перепилило или сломало на оси axis в точке s (chair — раскол вдоль, Limb.split): всё, что дальше, —
+// отдельное тело и падает. Отпиленный кусок распадается на два тела, лежащее дерево ложится заново без
+// отпавшего. Со стоящего дерева ушёл вес — оно клонится иначе.
+function sever(limb, axis, s, chair) {
   const frame = round.world.frame(limb.group, new THREE.Matrix4());
-  const piece = limb.split(axis, s).dress();
+  const piece = limb.split(axis, s, chair).dress();
   limb.dress();
   const body = bodyOf(limb);
   if (body?.limbs) relay(body);
