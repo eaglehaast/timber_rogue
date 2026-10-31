@@ -4,7 +4,7 @@ import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeFence, YARD, HEIGHTS, GAPS, TONES, POST_RISES, POST_WIDTHS, COATS, SHADES, setTone, setCoat, setShade } from './fence.js';
+import { makeFence, YARD, HEIGHTS, GAPS, TONES, POST_RISES, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
 import { makePanorama } from './panorama.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
@@ -158,16 +158,16 @@ const FENCE_KEYS = {
   KeyU: ['postRise', POST_RISES, -0.15, (v) => `Столбы ${v > 0 ? 'выше' : 'ниже'} досок на ${Math.abs(cm(v))} см`],
   KeyI: ['postWidth', POST_WIDTHS, 0.1, (v) => `Столбы ${cm(v)} × ${cm(v)} см`],
   KeyJ: ['postCoat', Object.keys(COATS), 'как доски', (v) => `Прокрас столбов: ${v}`],
-  KeyN: ['shade', Object.keys(SHADES), 'как от неба', (v) => `Тень: ${v}`],
+  KeyN: ['shadow', Object.keys(SHADOWS), 'густая', (v) => `Тень на заборе: ${v}`],
 };
 const fenceKey = (key) => `fence${key[0].toUpperCase()}${key.slice(1)}`;
 const fenceLook = Object.fromEntries(Object.values(FENCE_KEYS).map(([key, list, fallback]) => [key, recall(fenceKey(key), list, fallback)]));
 // Краску меняем на ходу, а размеры — пересобирая забор.
-const PAINTS = ['tone', 'postCoat', 'shade'];
+const PAINTS = ['tone', 'postCoat', 'shadow'];
 function repaint() {
   setTone(TONES[fenceLook.tone]);
   setCoat(COATS[fenceLook.postCoat]);
-  setShade(SHADES[fenceLook.shade]);
+  setShadow(SHADOWS[fenceLook.shadow]);
 }
 repaint();
 let fence = makeFence(fenceLook);

@@ -13,7 +13,7 @@ export const TONES = { 'как на картинке': [1, 1], выгоревш�
 export const POST_RISES = [-0.3, -0.15, 0, 0.15]; // м: верх столба выше (+) или ниже (−) верха досок
 export const POST_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м: сторона бруска
 export const COATS = { 'как доски': 0, 'второй слой': 0.45, густо: 0.75, сплошь: 1 };
-export const SHADES = { 'как от неба': [1, 1], светлее: [1.3, 1.15], сочнее: [1.4, 1.5], 'ярко-синяя': [1.6, 1.9] }; // светлота, насыщенность
+export const SHADOWS = { густая: 1, плотная: 0.85, средняя: 0.7, лёгкая: 0.55, прозрачная: 0.4 }; // доля солнца, которую тень отнимает
 
 // Картинки от ChatGPT: по 10 досок и прожилин; доски бесшовные по обеим осям, прожилины — по длине.
 // Каждая деталь берёт одну из них наугад; столбы красят теми же картинками, что и доски.
@@ -25,18 +25,16 @@ const BOARD = 0.1; // м: ширина доски
 
 // Краска меняется на ходу поверх картинки. Тон общий на весь забор: насыщенность и светлота.
 // Прокрас coat — сколько потёртостей закрыто вторым слоем: столбы красят гуще досок.
-// Тень shade — светлее и сочнее, чем её даёт свет неба: доски в тени не уходят в серо-синюю муть.
+// Густота тени shadow — сколько солнца отнимает тень на заборе: и падающая от досок и деревьев,
+// и на стороне, отвёрнутой от солнца. На освещённых местах ничего не меняется.
 const tone = { saturation: { value: 1 }, light: { value: 1 } };
-const shade = { light: { value: 1 }, saturation: { value: 1 } };
+const shadow = { value: 1 };
 const coats = { board: { value: 0 }, post: { value: 0 } };
 export function setTone([saturation, light]) {
   tone.saturation.value = saturation;
   tone.light.value = light;
 }
-export function setShade([light, saturation]) {
-  shade.light.value = light;
-  shade.saturation.value = saturation;
-}
+export function setShadow(density) { shadow.value = density; }
 export function setCoat(coat) { coats.post.value = coat; }
 // Средний цвет краски на картинках досок (линейный), им закрашиваем потёртости — где синего мало.
 const PAINT = 'vec3(0.067, 0.24, 0.63)';
@@ -44,19 +42,23 @@ function painted(map, coat) {
   const material = new THREE.MeshLambertMaterial({ map });
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, {
-      fenceSaturation: tone.saturation, fenceLight: tone.light, fenceCoat: coat,
-      fenceShadeLight: shade.light, fenceShadeSaturation: shade.saturation,
+      fenceSaturation: tone.saturation, fenceLight: tone.light, fenceCoat: coat, fenceShadow: shadow,
     });
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform float fenceSaturation, fenceLight, fenceCoat, fenceShadeLight, fenceShadeSaturation;
-        vec3 fenceSaturate(vec3 c, float s) { return max(mix(vec3(dot(c, vec3(0.299, 0.587, 0.114))), c, s), 0.0); }`)
+        uniform float fenceSaturation, fenceLight, fenceCoat, fenceShadow;`)
       .replace('#include <map_fragment>', `#include <map_fragment>
         float fenceWorn = 1.0 - smoothstep(0.1, 0.35, diffuseColor.b - diffuseColor.r);
         diffuseColor.rgb = mix(diffuseColor.rgb, ${PAINT}, fenceCoat * mix(0.3, 1.0, fenceWorn));
-        diffuseColor.rgb = fenceSaturate(diffuseColor.rgb, fenceSaturation) * fenceLight;`)
+        float fenceLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+        diffuseColor.rgb = mix(vec3(fenceLuma), diffuseColor.rgb, fenceSaturation) * fenceLight;`)
+      // Солнце — первый направленный свет. Без тени доска получала бы его под тем же углом с любой стороны:
+      // тонкая доска с двух сторон одинаково повёрнута к солнцу. Тень возвращает часть этого света.
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
-        reflectedLight.indirectDiffuse = fenceSaturate(reflectedLight.indirectDiffuse, fenceShadeSaturation) * fenceShadeLight;`);
+        #if NUM_DIR_LIGHTS > 0
+          vec3 fenceSun = directionalLights[0].color * abs(dot(normal, directionalLights[0].direction)) * BRDF_Lambert(diffuseColor.rgb);
+          reflectedLight.directDiffuse = mix(fenceSun, reflectedLight.directDiffuse, fenceShadow);
+        #endif`);
   };
   material.customProgramCacheKey = () => 'fence';
   return material;
