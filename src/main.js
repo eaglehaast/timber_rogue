@@ -446,10 +446,8 @@ function sawCandidate(forward) {
   }) ?? fresh;
 }
 
-// Пила у ветки толще пальца под прицелом: плоскость пропила — поперёк ветки, шина режет её сверху вниз,
-// мотором к тебе, а под U — снизу вверх, верхней кромкой. Ветку, что торчит почти отвесно, — как ствол:
-// от тебя (под U — к себе), мотор справа. На стоящем стволе пилятся ветви, но не сам ствол. Пропил рядом
-// с начатым на той же ветке — в него и встаёт.
+// Пила у ветки толще пальца под прицелом (как она встаёт — mount). На стоящем стволе пилятся ветви,
+// но не сам ствол. Пропил рядом с начатым на той же ветке — в него и встаёт.
 // Ветку ищем у всех деревьев: упавшее лежит далеко от своего пня. eye и look — глаза и взгляд в мире.
 function limbCandidate(eye, look, forward) {
   let best = null;
@@ -468,7 +466,15 @@ function limbCandidate(eye, look, forward) {
   if (Math.hypot(at.x - player.pos.x, at.z - player.pos.z) > REACH || at.y > MAX_ENTRY) return null;
   if (r < THIN || (axis.level === 0 && limb.stem !== undefined && !fallen(tree, limb.stem))) return null;
   const kerf = limb.kerfs.find((k) => k.axis === axis && Math.abs(k.s - s) < SNAP_DIST) ?? new Kerf(axis, s);
+  return mount({ tree, limb, kerf }, eye, forward);
+}
+
+// Пила в пропиле kerf ветки limb: плоскость пропила — поперёк ветки, шина режет её сверху вниз, мотором
+// к глазам eye, а под U — снизу вверх, верхней кромкой. Ветку, что торчит почти отвесно, — как ствол:
+// по взгляду forward от тебя (под U — к себе), мотор справа.
+function mount({ tree, limb, kerf }, eye, forward) {
   // Дальше — в осях ветки: шина режет по along, мотор — с конца side.
+  limb.group.updateWorldMatrix(true, false);
   const inverse = new THREE.Matrix4().copy(limb.group.matrixWorld).invert();
   const inPlane = (v) => v.transformDirection(inverse).addScaledVector(kerf.normal, -v.dot(kerf.normal));
   const normal = kerf.normal.clone();
@@ -1513,7 +1519,7 @@ function hint() {
   if (round.fall && !round.done) return 'Падает! Беги!';
   if (fly) return 'Осмотр · F — вернуться';
   if (saw?.blocked) return 'Упёрлась корпусом · поверни пилу или вынь (S)';
-  if (saw?.pinched && saw.kerf) return saw.kerf.squeezed ? 'Зажало: ветку сжимает со всех сторон · оставь пилу (S) и сначала разгрузи ветку' : 'Зажало · оставь пилу (S) и пили с другой стороны (U)';
+  if (saw?.pinched && saw.kerf) return saw.kerf.squeezed ? 'Зажало: ветку сжимает со всех сторон · оставь пилу (S) и сначала разгрузи ветку' : 'Зажало · пили с другой стороны (U)';
   return '';
 }
 
@@ -1566,9 +1572,14 @@ addEventListener('keydown', (e) => {
     unsay('bar');
     say('bar', `Шина ${next * 100} см`);
   }
-  // Ветку пилить сверху вниз или снизу вверх — с той стороны, где её не сжимает.
+  // Ветку пилить сверху вниз или снизу вверх — с той стороны, где её не сжимает. Пилу, что стоит на ветке,
+  // ставишь в тот же пропил с другой стороны; зажатую не вынуть — она остаётся в ветке, а ставишь запасную.
   if (e.code === 'KeyU') {
     under = !under;
+    if (saw?.kerf) {
+      if (saw.pinched) leaveSaw();
+      saw = mount(saw, new THREE.Vector3(player.pos.x, player.eye, player.pos.z), forwardOf(player.yaw));
+    }
     unsay('under');
     say('under', under ? 'Ветку пилишь снизу, верхней кромкой шины' : 'Ветку пилишь сверху');
   }
