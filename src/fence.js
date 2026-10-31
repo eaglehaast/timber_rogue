@@ -5,11 +5,14 @@ import { generator } from './random.js';
 // Забор по периметру участка W × D метров с центром в начале координат: штакетник со всех сторон,
 // к дороге (z = +D/2) — с калиткой. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
 // чуть видно улицу, а солнце кладёт полосы на траву. Столбы — металлические трубы.
-// Высоту, щели и тон краски подбираем клавишами.
+// Высоту, щели и тон краски, а у столбов — выцветание, высоту и толщину подбираем клавишами.
 export const YARD = { w: 60, d: 40 };
 export const HEIGHTS = [1.5, 1.8, 2.1, 2.4];
 export const GAPS = { узкие: 0.015, средние: 0.03, широкие: 0.055 };
 export const TONES = { 'как на картинке': [1, 1], выгоревший: [0.65, 1.1], 'старый серый': [0.4, 0.9] }; // насыщенность, светлота
+export const FADES = { чёрные: 0, потёртые: 0.35, выцветшие: 0.65, серые: 0.9 }; // насколько краска столбов сошла до серого
+export const POST_RISES = [-0.3, -0.15, 0, 0.15]; // м: верх столба выше (+) или ниже (−) верха досок
+export const POST_WIDTHS = [0.06, 0.076, 0.108, 0.13, 0.16]; // м: диаметр трубы
 
 // Картинки от ChatGPT: по 10 досок, труб и прожилин; доски и трубы бесшовные по обеим осям,
 // прожилины — по длине. Каждая деталь берёт одну из них наугад.
@@ -18,28 +21,33 @@ const KINDS = 10;
 // а вверх растянута вдвое против своих пропорций, чтобы сучки не повторялись через каждые 30 см.
 const BOARD_SPAN = 0.7, POST_SPAN = 0.6, RAIL_SPAN = 1.6;
 
-// Тон краски общий на весь забор и меняется на ходу: насыщенность и светлота поверх картинки.
-const tone = { saturation: { value: 1 }, light: { value: 1 } };
+// Краска меняется на ходу поверх картинки: насыщенность, светлота и выцветание до серого,
+// при котором рисунок картинки (ржавчина, потёртости) остаётся пятнами тона. У досок с прожилинами
+// краска одна, у столбов своя.
+const paint = (saturation = 1, light = 1, fade = 0) =>
+  ({ saturation: { value: saturation }, light: { value: light }, fade: { value: fade } });
+const boards = paint(), posts = paint();
 export function setTone([saturation, light]) {
-  tone.saturation.value = saturation;
-  tone.light.value = light;
+  boards.saturation.value = saturation;
+  boards.light.value = light;
 }
-function painted(map) {
+export function setFade(fade) { posts.fade.value = fade; }
+function painted(map, { saturation, light, fade }) {
   const material = new THREE.MeshLambertMaterial({ map });
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.fenceSaturation = tone.saturation;
-    shader.uniforms.fenceLight = tone.light;
+    Object.assign(shader.uniforms, { fenceSaturation: saturation, fenceLight: light, fenceFade: fade });
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float fenceSaturation, fenceLight;')
+      .replace('#include <common>', '#include <common>\nuniform float fenceSaturation, fenceLight, fenceFade;')
       .replace('#include <map_fragment>', `#include <map_fragment>
         float fenceLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-        diffuseColor.rgb = mix(vec3(fenceLuma), diffuseColor.rgb, fenceSaturation) * fenceLight;`);
+        diffuseColor.rgb = mix(vec3(fenceLuma), diffuseColor.rgb, fenceSaturation) * fenceLight;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.5, 0.48, 0.45) * (0.6 + 2.0 * fenceLuma), fenceFade);`);
   };
   material.customProgramCacheKey = () => 'fence';
   return material;
 }
-const materials = Object.fromEntries(['board', 'post', 'rail'].map((name) => [name,
-  tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures/fence-${name}-${i + 1}.jpg`)).map(painted)]));
+const materials = Object.fromEntries([['board', boards], ['post', posts], ['rail', boards]].map(([name, tone]) => [name,
+  tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures/fence-${name}-${i + 1}.jpg`)).map((map) => painted(map, tone))]));
 
 // Доска с верхом углом: пятиугольник шириной w и высотой h, толщиной t. Картинка лежит по ширине доски
 // и повторяется вверх, начиная с места shift: соседние доски одной картинки не совпадают.
@@ -88,19 +96,21 @@ function side(a, b) {
 // Штакетник: трубы через 2,5 м, две прожилины, доски по 10 см ровным рядом. Наугад только картинка доски
 // и с какого места она начинается, поэтому забор меняет высоту, не перетасовывая доски.
 const BOARD = 0.1;
-function picket({ length, place }, { height, gap }, rnd, put, gate) {
+// Прожилины прикручены к трубам снаружи, доски — к прожилинам: чем толще труба, тем дальше они от её оси.
+function picket({ length, place }, { height, gap, postRise, postWidth }, rnd, put, gate) {
   const nearGate = (s, half) => gate !== undefined && Math.abs(s - gate) < half;
-  for (let s = 0; s <= length + 0.01; s += 2.5) if (!nearGate(s, 0.8)) put('post', pipe(0.054, height - 0.15).applyMatrix4(place(s, 0, 0)));
-  for (const y of [0.3, height - 0.45]) put('rail', block(length, 0.08, 0.05, [length / RAIL_SPAN, 1]).applyMatrix4(place(length / 2, 0.08, y)));
+  const r = postWidth / 2, rails = r + 0.026, front = rails + 0.037;
+  for (let s = 0; s <= length + 0.01; s += 2.5) if (!nearGate(s, 0.8)) put('post', pipe(r, height + postRise).applyMatrix4(place(s, 0, 0)));
+  for (const y of [0.3, height - 0.45]) put('rail', block(length, 0.08, 0.05, [length / RAIL_SPAN, 1]).applyMatrix4(place(length / 2, rails, y)));
   for (let s = 0.05; s + BOARD < length - 0.05; s += BOARD + gap) {
     const mid = s + BOARD / 2, inGate = nearGate(mid, 0.55);
-    put('board', board(BOARD, inGate ? height - 0.17 : height, 0.022, rnd()).applyMatrix4(place(mid, 0.12, inGate ? 0.12 : 0.05)));
+    put('board', board(BOARD, inGate ? height - 0.17 : height, 0.022, rnd()).applyMatrix4(place(mid, front, inGate ? 0.12 : 0.05)));
   }
   if (gate === undefined) return;
   // Калитка — проём между трубами потолще, её доски держит укосина из угла в угол.
-  for (const s of [gate - 0.6, gate + 0.6]) put('post', pipe(0.065, height + 0.1).applyMatrix4(place(s, 0, 0)));
+  for (const s of [gate - 0.6, gate + 0.6]) put('post', pipe(r * 1.2, height + postRise + 0.25).applyMatrix4(place(s, 0, 0)));
   const across = 0.9, up = height - 0.8;
-  put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, 0.08, 0.34, -Math.atan2(across, up))));
+  put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, rails, 0.34, -Math.atan2(across, up))));
 }
 
 export function makeFence(look) {
@@ -109,7 +119,7 @@ export function makeFence(look) {
   const parts = { board: [], post: [], rail: [] };
   for (const name in parts) parts[name] = Array.from({ length: KINDS }, () => []);
   const put = (name, geometry) => parts[name][Math.floor(rnd() * KINDS)].push(geometry);
-  const options = { height: look.height, gap: GAPS[look.gap] };
+  const options = { ...look, gap: GAPS[look.gap] };
   const x = YARD.w / 2, z = YARD.d / 2;
   // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
   picket(side({ x: -x, z }, { x, z }), options, rnd, put, x + 8);
