@@ -5,11 +5,12 @@ import { generator } from './random.js';
 // Забор по периметру участка W × D метров с центром в начале координат: штакетник со всех сторон,
 // к дороге (z = +D/2) — с калиткой. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
 // чуть видно улицу, а солнце кладёт полосы на траву. Столбы — бруски, крашеные так же.
-// Высоту, щели, ширину досок, тон краски и тени, а у столбов — толщину и прокрас подбираем клавишами.
+// Высоту, щели, ширину досок, возраст, тон краски и тени, а у столбов — толщину и прокрас подбираем клавишами.
 export const YARD = { w: 60, d: 40 };
 export const HEIGHTS = [1.5, 1.8, 2.1, 2.4];
 export const GAPS = { узкие: 0.015, средние: 0.03, широкие: 0.055 };
 export const TONES = { 'как на картинке': [1, 1], выгоревший: [0.65, 1.1], 'старый серый': [0.4, 0.9] }; // насыщенность, светлота
+export const AGES = { 'как новый': 0, обжитой: 0.5, старый: 1, ветхий: 1.8 }; // во сколько раз сильнее кривизна
 export const BOARD_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м
 export const POST_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м: сторона бруска
 export const COATS = { 'как доски': 0, 'второй слой': 0.45, густо: 0.75, сплошь: 1 };
@@ -111,36 +112,58 @@ function side(a, b) {
   const dir = new THREE.Vector2(b.x - a.x, b.z - a.z), length = dir.length();
   dir.normalize();
   const yaw = Math.atan2(-dir.y, dir.x);
-  const place = (s, off, y, tilt = 0) => new THREE.Matrix4().compose(
+  // tilt — наклон вдоль стороны, lean — поперёк неё, наружу (+) или во двор (−).
+  const place = (s, off, y, tilt = 0, lean = 0) => new THREE.Matrix4().compose(
     new THREE.Vector3(a.x + dir.x * s - dir.y * off, y, a.z + dir.y * s + dir.x * off),
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, tilt, 'YXZ')), new THREE.Vector3(1, 1, 1));
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(lean, yaw, tilt, 'YXZ')), new THREE.Vector3(1, 1, 1));
   return { length, place };
 }
 
-// Штакетник: столбы через 2,5 м, две прожилины, доски ровным рядом. Наугад только картинка доски
-// и с какого места она начинается, поэтому забор меняет высоту, не перетасовывая доски.
+// Штакетник: столбы через 2,5 м, на них в каждом пролёте две прожилины, к ним прибиты доски ровным рядом.
 // Прожилины прибиты к столбам снаружи, доски — к прожилинам: чем толще столб, тем дальше они от его оси.
 // В каждом пролёте доски делят его поровну, и каждый столб приходится на середину щели: доски заходят
 // на него с обеих сторон одинаково. Столб срезан вровень с плечами досок — там, где начинается их угол.
+//
+// Забор стоит не первый год. Столбы просели в землю или их выперло морозом и они накренились —
+// прожилины легли между ними под уклон, а доски на прожилинах повторяют этот уклон и крен. Сами доски
+// прибиты не по линейке: чуть вкось, чуть выше-ниже, чуть разной длины. Угловые столбы держат две стороны
+// и стоят ровно. Всё это — доли градуса и сантиметры, умноженные на возраст age: при нуле забор как новый.
+// Случайные отклонения тянем всегда, даже при нуле, поэтому возраст меняет кривизну, не перетасовывая забор.
 const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до земли, у калитки — выше
-function picket({ length, place }, { height, gap, boardWidth, postWidth }, rnd, put, gate) {
+const DEG = Math.PI / 180;
+function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, rnd, put, gate) {
+  const wobble = (size) => (rnd() + rnd() - 1) * size * age; // чаще около нуля, изредка до ±size
   const posts = [];
   for (let s = 0; s <= length + 0.01; s += 2.5) if (gate === undefined || Math.abs(s - gate) >= 0.8) posts.push(s);
   if (gate !== undefined) posts.push(gate - 0.6, gate + 0.6);
   posts.sort((a, b) => a - b);
+  const corner = (s) => s < 0.01 || s > length - 0.01;
+  const sag = posts.map((s) => (corner(s) ? 0 : wobble(0.04)));       // м: просел (−) или выперло (+)
+  const lean = posts.map((s) => (corner(s) ? 0 : wobble(2.5 * DEG)));  // крен поперёк забора
   const r = postWidth / 2, rails = r + 0.026, front = rails + 0.037;
   const shoulder = LIFT + height - boardWidth / 2;
-  for (const s of posts) {
+  posts.forEach((s, i) => {
     const atGate = gate !== undefined && Math.abs(s - gate) < 0.7;
-    put('post', (atGate ? post(postWidth * 1.2, shoulder + 0.25) : post(postWidth, shoulder)).applyMatrix4(place(s, 0, 0)));
-  }
-  for (const y of [0.3, height - 0.45]) put('rail', block(length, 0.08, 0.05, [length / RAIL_SPAN, 1]).applyMatrix4(place(length / 2, rails, y)));
+    const geometry = atGate ? post(postWidth * 1.2, shoulder + 0.25) : post(postWidth, shoulder);
+    put('post', geometry.applyMatrix4(place(s, 0, sag[i], wobble(1.5 * DEG), lean[i])));
+  });
   for (let i = 1; i < posts.length; i++) {
     const a = posts[i - 1], span = posts[i] - a, inGate = gate !== undefined && a < gate && gate < posts[i];
+    const slope = (sag[i] - sag[i - 1]) / span, tilt = Math.atan(slope);
+    const height0 = (s) => sag[i - 1] + slope * (s - a); // насколько сдвинулся пролёт у места s
+    const lean0 = (s) => lean[i - 1] + (lean[i] - lean[i - 1]) * (s - a) / span;
+    // Прожилину крепят к столбу на высоте y — с креном столба она уходит наружу на y·крен.
+    for (const y of [0.3, height - 0.45]) {
+      const mid = a + span / 2, tip = lean0(mid);
+      put('rail', block(span, 0.08, 0.05, [span / RAIL_SPAN, 1]).applyMatrix4(place(mid, rails + y * tip, y + height0(mid), tilt, tip)));
+    }
     const n = Math.max(1, Math.round(span / (boardWidth + gap))), step = span / n;
     for (let k = 0; k < n; k++) {
-      put('board', board(boardWidth, inGate ? height - 0.17 : height, 0.022, rnd())
-        .applyMatrix4(place(a + (k + 0.5) * step, front, inGate ? GATE_LIFT : LIFT)));
+      const s = a + (k + 0.5) * step + wobble(0.006);
+      const h = (inGate ? height - 0.17 : height) + wobble(0.012);
+      const y = (inGate ? GATE_LIFT : LIFT) + height0(s) + wobble(0.012);
+      put('board', board(boardWidth, h, 0.022, rnd())
+        .applyMatrix4(place(s, front, y, tilt + wobble(1.2 * DEG), lean0(s) + wobble(0.6 * DEG))));
     }
   }
   if (gate === undefined) return;
@@ -155,7 +178,7 @@ export function makeFence(look) {
   const parts = { board: [], post: [], rail: [] };
   for (const name in parts) parts[name] = Array.from({ length: KINDS }, () => []);
   const put = (name, geometry) => parts[name][Math.floor(rnd() * KINDS)].push(geometry);
-  const options = { ...look, gap: GAPS[look.gap] };
+  const options = { ...look, gap: GAPS[look.gap], age: AGES[look.age] };
   const x = YARD.w / 2, z = YARD.d / 2;
   // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
   picket(side({ x: -x, z }, { x, z }), options, rnd, put, x + 8);

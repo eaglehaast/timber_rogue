@@ -4,7 +4,7 @@ import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeFence, YARD, HEIGHTS, GAPS, TONES, BOARD_WIDTHS, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
+import { makeFence, YARD, HEIGHTS, GAPS, TONES, BOARD_WIDTHS, AGES, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
 import { makePanorama } from './panorama.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
@@ -148,7 +148,8 @@ const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r:
 // Растения сажаем в квадрате FIELD метров: весь двор и полоса за забором. Число пучков — на 1000 м².
 const FIELD = 76;
 const plant = (atlas, perThousand, density) => makeTufts(atlas, Math.round(perThousand * FIELD * FIELD / 1000), FIELD, clear, density);
-// Забор подбираем на глаз клавишами: H — высота, G — щели, M — ширина досок, T — тон краски, N — тень;
+// Забор подбираем на глаз клавишами: H — высота, G — щели, M — ширина досок, O — возраст,
+// T — тон краски, N — тень;
 // у столбов I — толщина, J — прокрас.
 const cm = (v) => Math.round(v * 1000) / 10;
 const FENCE_KEYS = {
@@ -158,6 +159,7 @@ const FENCE_KEYS = {
   KeyI: ['postWidth', POST_WIDTHS, 0.1, (v) => `Столбы ${cm(v)} × ${cm(v)} см`],
   KeyJ: ['postCoat', Object.keys(COATS), 'как доски', (v) => `Прокрас столбов: ${v}`],
   KeyM: ['boardWidth', BOARD_WIDTHS, 0.1, (v) => `Доски ${cm(v)} см`],
+  KeyO: ['age', Object.keys(AGES), 'обжитой', (v) => `Забор ${v}`],
   KeyN: ['shadow', Object.keys(SHADOWS), 'лёгкая', (v) => `Тень на заборе: ${v}`],
 };
 const fenceKey = (key) => `fence${key[0].toUpperCase()}${key.slice(1)}`;
