@@ -101,20 +101,17 @@ function chance(parent, out, s) {
   return parent.level === 1 ? 0.6 : 0.65 * (1 - 0.4 * (s / parent.len));
 }
 
-// Ствол и всё, что на нём. shape — низ ствола (trunkShape): ниже zone ось ствола идёт точно по нему,
-// выше — растёт сама. height — высота дерева.
-export function growSkeleton(shape, zone, height) {
-  const axes = [];
-  const R = shape.radius * shape.scale(zone);
-  const light = flat(shape.leanAz);
+// Лидер — ствол дерева. stem — его низ (ствол формы trunkShape): ниже zone ось идёт точно по нему,
+// выше растёт сама до высоты height: тянется к свету, всё слабее, и вверх; иногда теряет вершину —
+// новый лидер уходит вбок, старая вершина остаётся сухим пеньком. split — где он раздваивается выше зоны.
+function leader(stem, index, zone, height, split, axes, parent = null) {
+  const R = stem.radius * stem.scale(zone);
+  const light = flat(stem.leanAz);
   const ctrl = [];
-  for (let y = 0; y < zone; y += STEP) ctrl.push(shape.center(y).setY(y));
-  // Ствол выше зоны: тянется к свету, всё слабее, и вверх; иногда теряет вершину — новый лидер уходит вбок,
-  // старая вершина остаётся сухим пеньком.
+  for (let y = 0; y < zone; y += STEP) ctrl.push(stem.center(y).setY(y));
   const stubs = [];
-  let split = random() < 0.45 ? zone + rand(1.5, 4) : Infinity;
   const pull = rand(0.02, 0.1);
-  const top = walk(shape.center(zone).setY(zone), shape.axis(zone), height - zone, 0.4, (d, f) => {
+  const top = walk(stem.center(zone).setY(zone), stem.axis(zone), height - zone, 0.4, (d, f) => {
     // От зоны ствол уходит плавно, а не изломом: увод к свету и шатание набирают силу за первые метры.
     const ease = THREE.MathUtils.smoothstep(f, 0, 0.25);
     wobble(d, 0.06 * ease).addScaledVector(light, pull * ease * (1 - f)).addScaledVector(UP, 0.04).normalize();
@@ -125,21 +122,45 @@ export function growSkeleton(shape, zone, height) {
     }
   });
   ctrl.push(...top);
-  const ground = (s, len) => (s < zone ? shape.radius * shape.scale(s) : 0);
-  const trunkR = (s, len) => (s < zone ? ground(s, len) : Math.max(0.01, R * (1 - (s - zone) / (len - zone)) ** 1.2 * (s > split ? 0.8 : 1)));
-  const trunk = makeAxis(ctrl, trunkR, {});
-  // Сечение ствола: внизу — профиль trunkShape (по азимуту на местности), выше зоны за полтора метра круглеет.
+  const ground = (s) => stem.radius * stem.scale(s);
+  const trunkR = (s, len) => (s < zone ? ground(s) : Math.max(0.01, R * (1 - (s - zone) / (len - zone)) ** 1.2 * (s > split ? 0.8 : 1)));
+  // Второй ствол двойного дерева растёт от общего комля: сидит на первом у земли, как равный.
+  const trunk = makeAxis(ctrl, trunkR, parent ? { parent, joint: 'codominant' } : {});
+  trunk.stem = index;
+  // Сечение ствола: внизу — профиль ствола формы (по азимуту на местности), выше зоны за полтора метра круглеет.
   trunk.profile = (az, s) => {
     const [n, b] = section(trunk, s).frame;
     const world = Math.atan2(n.z * Math.cos(az) + b.z * Math.sin(az), n.x * Math.cos(az) + b.x * Math.sin(az));
-    return THREE.MathUtils.lerp(shape.profile(world) / shape.radius, 1, THREE.MathUtils.clamp((s - zone) / 1.5, 0, 1));
+    return THREE.MathUtils.lerp(stem.profile(world) / stem.radius, 1, THREE.MathUtils.clamp((s - zone) / 1.5, 0, 1));
   };
   trunk.light = light;
   axes.push(trunk);
   // Кривая ствола внизу идёт почти по вертикали, поэтому длина дуги до зоны — почти высота.
   const above = trunk.points.find((q) => q.p.y >= zone).s;
   // Кора ствола ложится так же, как на кубиках: по кругу — азимут на местности на радиус низа, вдоль — высота.
-  trunk.bark = { radius: shape.radius, s: above, y: zone };
+  trunk.bark = { radius: stem.radius, s: above, y: zone };
+  for (const { f, dir } of stubs) {
+    const s = above + f * (height - zone);
+    const at = section(trunk, s);
+    const r0 = at.r * 0.8;
+    axes.push(makeAxis(walk(at.center, dir, rand(0.15, 0.4), 0.1, () => {}), (q, l) => r0 * (1 - 0.3 * q / l),
+      { parent: trunk, attach: s, joint: 'collar', level: 1, dead: true }));
+  }
+  return { trunk, above };
+}
+
+// Ствол и всё, что на нём. shape — низ дерева (trunkShape), один или два ствола: каждый — свой лидер.
+// height — высота дерева; второй ствол двойного чуть ниже первого. У одиночного ствол раздваивается
+// выше зоны почти у половины деревьев.
+export function growSkeleton(shape, zone, height) {
+  const axes = [];
+  const twin = shape.stems.length > 1;
+  const split = !twin && random() < 0.45 ? zone + rand(1.5, 4) : Infinity;
+  const { trunk, above } = leader(shape.stems[0], 0, zone, height, split, axes);
+  for (let i = 1; i < shape.stems.length; i++) {
+    const other = leader(shape.stems[i], i, zone, height * rand(0.8, 0.95), Infinity, axes, trunk);
+    branch(other.trunk, other.above + 0.3, axes);
+  }
 
   if (split < Infinity) {
     // Второй лидер выходит из развилки. При узком угле в развилке зажимается кора.
@@ -153,16 +174,9 @@ export function growSkeleton(shape, zone, height) {
     const other = makeAxis(walk(at.center, dir, len, 0.4, (d, f) => wobble(d, 0.06).addScaledVector(UP, 0.05 * f).normalize()),
       (q, l) => Math.max(0.01, r0 * (1 - q / l) ** 0.75),
       { parent: trunk, attach: s, joint: 'codominant', included: angle < 0.55 ? rand(0.3, 0.8) : 0, includedTo: rand(0.2, 0.6) });
-    other.light = light;
+    other.light = trunk.light;
     axes.push(other);
     branch(other, 0.5, axes);
-  }
-  for (const { f, dir } of stubs) {
-    const s = above + f * (height - zone);
-    const at = section(trunk, s);
-    const r0 = at.r * 0.8;
-    axes.push(makeAxis(walk(at.center, dir, rand(0.15, 0.4), 0.1, () => {}), (q, l) => r0 * (1 - 0.3 * q / l),
-      { parent: trunk, attach: s, joint: 'collar', level: 1, dead: true }));
   }
   branch(trunk, above + 0.3, axes);
   axes.forEach((a, i) => { a.id = i; });
@@ -170,13 +184,14 @@ export function growSkeleton(shape, zone, height) {
 }
 
 // Масса, центр тяжести и тензор инерции (вокруг центра тяжести) оси со всем, что на ней растёт.
+// Второй ствол двойного дерева сидит на первом, но это своё тело: в счёт первого он не идёт.
 // Древесина — кусками по STEP; то, что сидит внутри родителя, и ствол ниже зоны (его считают кубики) не в счёт.
 function wood(a, zone) {
   const inside = a.parent ? section(a.parent, a.attach).r : 0;
   const parts = [];
   for (let i = 0; i < a.points.length - 1; i++) {
     const q = a.points[i];
-    if (q.s < inside || (a.joint === 'trunk' && q.p.y < zone)) continue;
+    if (q.s < inside || (a.stem !== undefined && q.p.y < zone)) continue;
     parts.push([DENSITY * Math.PI * q.r * q.r * (a.points[i + 1].s - q.s), q.p.clone().lerp(a.points[i + 1].p, 0.5)]);
   }
   return parts;
@@ -187,7 +202,7 @@ export function measure(axis, zone) {
   (function gather(a) {
     parts.push(...wood(a, zone));
     if (a.leaves.mass) parts.push([a.leaves.mass, a.leaves.center]);
-    a.children.forEach(gather);
+    a.children.forEach((c) => c.stem === undefined && gather(c));
   })(axis);
   const mass = parts.reduce((m, [dm]) => m + dm, 0);
   const com = parts.reduce((c, [dm, p]) => c.addScaledVector(p, dm), new THREE.Vector3()).divideScalar(mass);
@@ -210,7 +225,7 @@ function barkGeometry(axes, from) {
     const sides = THREE.MathUtils.clamp(Math.ceil((2 * Math.PI * r0) / 0.03), 5, 32);
     const every = r0 < 0.02 ? 2 : 1;
     // Ствол начинается кольцом ниже from: трубка заходит внутрь кубиков и при качании не открывает щель.
-    const first = a.joint === 'trunk' ? a.points.findIndex((q) => q.p.y >= from) - 1 : 0;
+    const first = a.stem !== undefined ? a.points.findIndex((q) => q.p.y >= from) - 1 : 0;
     const rings = a.points.filter((q, i) => i >= first && (i % every === 0 || i === a.points.length - 1));
     const mean = rings.reduce((m, q) => m + q.r, 0) / rings.length;
     const start = pos.length / 3;
@@ -310,13 +325,20 @@ function leafCards(axes, trunk) {
 // Клён выше зоны пиления: кора от from (чуть ниже зоны, чтобы на стыке с кубиками не было щели) и листва.
 // Масса листьев — доля LEAF_SHARE от массы ветвей — поровну на карточки, к осям, на которых они сидят.
 // Узлы ствола (пустышки 'trunk' с радиусом) — по ним падающее дерево ложится на землю.
+// У каждого ствола своя крона (tree) со своими массой и инерцией: стволы двойного дерева падают порознь.
 export function growMaple(shape, zone, height, bark, from) {
   const skeleton = growSkeleton(shape, zone, height);
   const { axes, trunk } = skeleton;
-  const tree = new THREE.Group();
-  tree.add(new THREE.Mesh(barkGeometry(axes, from), bark));
-  const { mesh, cards } = leafCards(axes, trunk);
-  tree.add(mesh);
+  const stemOf = (a) => (a.stem !== undefined ? a.stem : stemOf(a.parent));
+  const crowns = shape.stems.map((_, i) => {
+    const own = axes.filter((a) => stemOf(a) === i);
+    const tree = new THREE.Group();
+    tree.add(new THREE.Mesh(barkGeometry(own, from), bark));
+    const { mesh, cards } = leafCards(own, trunk);
+    tree.add(mesh);
+    return { tree, cards, axis: own[0] };
+  });
+  const cards = crowns.flatMap((c) => c.cards);
   const branches = axes.filter((a) => a.level > 0).reduce((m, a) => wood(a, zone).reduce((w, [dm]) => w + dm, m), 0);
   for (const { axis, at, up, h } of cards) {
     axis.leaves.mass += (LEAF_SHARE * branches) / cards.length;
@@ -324,7 +346,7 @@ export function growMaple(shape, zone, height, bark, from) {
     axis.leaves.count = (axis.leaves.count ?? 0) + 1;
   }
   for (const a of axes) if (a.leaves.count) a.leaves.center.divideScalar(a.leaves.count);
-  for (const a of axes.filter((x) => x.joint === 'trunk' || x.joint === 'codominant')) {
+  for (const a of axes.filter((x) => x.level === 0 || x.joint === 'codominant')) {
     for (let s = 0; s <= a.len; s += 0.5) {
       const at = section(a, s);
       if (at.center.y < zone) continue;
@@ -332,8 +354,8 @@ export function growMaple(shape, zone, height, bark, from) {
       knot.name = 'trunk';
       knot.userData.r = at.r;
       knot.position.copy(at.center);
-      tree.add(knot);
+      crowns[stemOf(a)].tree.add(knot);
     }
   }
-  return { tree, skeleton, ...measure(trunk, zone) };
+  return { skeleton, crowns: crowns.map(({ tree, axis }) => ({ tree, ...measure(axis, zone) })) };
 }
