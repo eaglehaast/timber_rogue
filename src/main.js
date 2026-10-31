@@ -4,7 +4,7 @@ import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeFence, YARD, HEIGHTS, GAPS, TONES, POST_RISES, POST_WIDTHS, setTone } from './fence.js';
+import { makeFence, YARD, HEIGHTS, GAPS, TONES, POST_RISES, POST_WIDTHS, COATS, SHADES, setTone, setCoat, setShade } from './fence.js';
 import { makePanorama } from './panorama.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
@@ -148,8 +148,8 @@ const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r:
 // Растения сажаем в квадрате FIELD метров: весь двор и полоса за забором. Число пучков — на 1000 м².
 const FIELD = 76;
 const plant = (atlas, perThousand, density) => makeTufts(atlas, Math.round(perThousand * FIELD * FIELD / 1000), FIELD, clear, density);
-// Забор подбираем на глаз клавишами: H — высота, G — щели, T — тон краски;
-// у столбов U — высота относительно досок, I — толщина.
+// Забор подбираем на глаз клавишами: H — высота, G — щели, T — тон краски, N — тень;
+// у столбов U — высота относительно досок, I — толщина, J — прокрас.
 const cm = (v) => Math.round(v * 1000) / 10;
 const FENCE_KEYS = {
   KeyH: ['height', HEIGHTS, 1.8, (v) => `Забор ${v} м`],
@@ -157,10 +157,19 @@ const FENCE_KEYS = {
   KeyT: ['tone', Object.keys(TONES), 'выгоревший', (v) => `Краска: ${v}`],
   KeyU: ['postRise', POST_RISES, -0.15, (v) => `Столбы ${v > 0 ? 'выше' : 'ниже'} досок на ${Math.abs(cm(v))} см`],
   KeyI: ['postWidth', POST_WIDTHS, 0.1, (v) => `Столбы ${cm(v)} × ${cm(v)} см`],
+  KeyJ: ['postCoat', Object.keys(COATS), 'как доски', (v) => `Прокрас столбов: ${v}`],
+  KeyN: ['shade', Object.keys(SHADES), 'как от неба', (v) => `Тень: ${v}`],
 };
 const fenceKey = (key) => `fence${key[0].toUpperCase()}${key.slice(1)}`;
 const fenceLook = Object.fromEntries(Object.values(FENCE_KEYS).map(([key, list, fallback]) => [key, recall(fenceKey(key), list, fallback)]));
-setTone(TONES[fenceLook.tone]);
+// Краску меняем на ходу, а размеры — пересобирая забор.
+const PAINTS = ['tone', 'postCoat', 'shade'];
+function repaint() {
+  setTone(TONES[fenceLook.tone]);
+  setCoat(COATS[fenceLook.postCoat]);
+  setShade(SHADES[fenceLook.shade]);
+}
+repaint();
 let fence = makeFence(fenceLook);
 function refence() {
   scene.remove(fence);
@@ -1168,8 +1177,7 @@ addEventListener('keydown', (e) => {
     const [key, list, , label] = FENCE_KEYS[e.code];
     fenceLook[key] = cycle(list, fenceLook[key]);
     keep(fenceKey(key), fenceLook[key]);
-    // Краску меняем на ходу, а размеры — пересобирая забор.
-    if (key === 'tone') setTone(TONES[fenceLook.tone]);
+    if (PAINTS.includes(key)) repaint();
     else refence();
     unsay('fence');
     say('fence', label(fenceLook[key]));

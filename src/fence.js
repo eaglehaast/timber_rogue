@@ -5,13 +5,15 @@ import { generator } from './random.js';
 // Забор по периметру участка W × D метров с центром в начале координат: штакетник со всех сторон,
 // к дороге (z = +D/2) — с калиткой. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
 // чуть видно улицу, а солнце кладёт полосы на траву. Столбы — бруски, крашеные так же.
-// Высоту, щели и тон краски, а у столбов — высоту и толщину подбираем клавишами.
+// Высоту, щели, тон краски и тени, а у столбов — высоту, толщину и прокрас подбираем клавишами.
 export const YARD = { w: 60, d: 40 };
 export const HEIGHTS = [1.5, 1.8, 2.1, 2.4];
 export const GAPS = { узкие: 0.015, средние: 0.03, широкие: 0.055 };
 export const TONES = { 'как на картинке': [1, 1], выгоревший: [0.65, 1.1], 'старый серый': [0.4, 0.9] }; // насыщенность, светлота
 export const POST_RISES = [-0.3, -0.15, 0, 0.15]; // м: верх столба выше (+) или ниже (−) верха досок
 export const POST_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м: сторона бруска
+export const COATS = { 'как доски': 0, 'второй слой': 0.45, густо: 0.75, сплошь: 1 };
+export const SHADES = { 'как от неба': [1, 1], светлее: [1.3, 1.15], сочнее: [1.4, 1.5], 'ярко-синяя': [1.6, 1.9] }; // светлота, насыщенность
 
 // Картинки от ChatGPT: по 10 досок и прожилин; доски бесшовные по обеим осям, прожилины — по длине.
 // Каждая деталь берёт одну из них наугад; столбы красят теми же картинками, что и доски.
@@ -21,28 +23,52 @@ const KINDS = 10;
 const BOARD_SPAN = 0.7, RAIL_SPAN = 1.6;
 const BOARD = 0.1; // м: ширина доски
 
-// Тон краски общий на весь забор и меняется на ходу: насыщенность и светлота поверх картинки.
+// Краска меняется на ходу поверх картинки. Тон общий на весь забор: насыщенность и светлота.
+// Прокрас coat — сколько потёртостей закрыто вторым слоем: столбы красят гуще досок.
+// Тень shade — светлее и сочнее, чем её даёт свет неба: доски в тени не уходят в серо-синюю муть.
 const tone = { saturation: { value: 1 }, light: { value: 1 } };
+const shade = { light: { value: 1 }, saturation: { value: 1 } };
+const coats = { board: { value: 0 }, post: { value: 0 } };
 export function setTone([saturation, light]) {
   tone.saturation.value = saturation;
   tone.light.value = light;
 }
-function painted(map) {
+export function setShade([light, saturation]) {
+  shade.light.value = light;
+  shade.saturation.value = saturation;
+}
+export function setCoat(coat) { coats.post.value = coat; }
+// Средний цвет краски на картинках досок (линейный), им закрашиваем потёртости — где синего мало.
+const PAINT = 'vec3(0.067, 0.24, 0.63)';
+function painted(map, coat) {
   const material = new THREE.MeshLambertMaterial({ map });
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.fenceSaturation = tone.saturation;
-    shader.uniforms.fenceLight = tone.light;
+    Object.assign(shader.uniforms, {
+      fenceSaturation: tone.saturation, fenceLight: tone.light, fenceCoat: coat,
+      fenceShadeLight: shade.light, fenceShadeSaturation: shade.saturation,
+    });
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float fenceSaturation, fenceLight;')
+      .replace('#include <common>', `#include <common>
+        uniform float fenceSaturation, fenceLight, fenceCoat, fenceShadeLight, fenceShadeSaturation;
+        vec3 fenceSaturate(vec3 c, float s) { return max(mix(vec3(dot(c, vec3(0.299, 0.587, 0.114))), c, s), 0.0); }`)
       .replace('#include <map_fragment>', `#include <map_fragment>
-        float fenceLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-        diffuseColor.rgb = mix(vec3(fenceLuma), diffuseColor.rgb, fenceSaturation) * fenceLight;`);
+        float fenceWorn = 1.0 - smoothstep(0.1, 0.35, diffuseColor.b - diffuseColor.r);
+        diffuseColor.rgb = mix(diffuseColor.rgb, ${PAINT}, fenceCoat * mix(0.3, 1.0, fenceWorn));
+        diffuseColor.rgb = fenceSaturate(diffuseColor.rgb, fenceSaturation) * fenceLight;`)
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        reflectedLight.indirectDiffuse = fenceSaturate(reflectedLight.indirectDiffuse, fenceShadeSaturation) * fenceShadeLight;`);
   };
   material.customProgramCacheKey = () => 'fence';
   return material;
 }
-const materials = Object.fromEntries(['board', 'rail'].map((name) => [name,
-  tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures/fence-${name}-${i + 1}.jpg`)).map(painted)]));
+// Столбы красят теми же картинками, что и доски, но своим прокрасом.
+const maps = (name) => tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures/fence-${name}-${i + 1}.jpg`));
+const boardMaps = maps('board');
+const materials = {
+  board: boardMaps.map((map) => painted(map, coats.board)),
+  post: boardMaps.map((map) => painted(map, coats.post)),
+  rail: maps('rail').map((map) => painted(map, coats.board)),
+};
 
 // Доска с верхом углом: пятиугольник шириной w и высотой h, толщиной t. Картинка лежит по ширине доски
 // и повторяется вверх, начиная с места shift: соседние доски одной картинки не совпадают.
@@ -95,7 +121,7 @@ function side(a, b) {
 function picket({ length, place }, { height, gap, postRise, postWidth }, rnd, put, gate) {
   const nearGate = (s, half) => gate !== undefined && Math.abs(s - gate) < half;
   const r = postWidth / 2, rails = r + 0.026, front = rails + 0.037;
-  for (let s = 0; s <= length + 0.01; s += 2.5) if (!nearGate(s, 0.8)) put('board', post(postWidth, height + postRise).applyMatrix4(place(s, 0, 0)));
+  for (let s = 0; s <= length + 0.01; s += 2.5) if (!nearGate(s, 0.8)) put('post', post(postWidth, height + postRise).applyMatrix4(place(s, 0, 0)));
   for (const y of [0.3, height - 0.45]) put('rail', block(length, 0.08, 0.05, [length / RAIL_SPAN, 1]).applyMatrix4(place(length / 2, rails, y)));
   for (let s = 0.05; s + BOARD < length - 0.05; s += BOARD + gap) {
     const mid = s + BOARD / 2, inGate = nearGate(mid, 0.55);
@@ -103,7 +129,7 @@ function picket({ length, place }, { height, gap, postRise, postWidth }, rnd, pu
   }
   if (gate === undefined) return;
   // Калитка — проём между столбами потолще, её доски держит укосина из угла в угол.
-  for (const s of [gate - 0.6, gate + 0.6]) put('board', post(postWidth * 1.2, height + postRise + 0.25).applyMatrix4(place(s, 0, 0)));
+  for (const s of [gate - 0.6, gate + 0.6]) put('post', post(postWidth * 1.2, height + postRise + 0.25).applyMatrix4(place(s, 0, 0)));
   const across = 0.9, up = height - 0.8;
   put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, rails, 0.34, -Math.atan2(across, up))));
 }
@@ -111,7 +137,7 @@ function picket({ length, place }, { height, gap, postRise, postWidth }, rnd, pu
 export function makeFence(look) {
   const root = new THREE.Group();
   const rnd = generator(7);
-  const parts = { board: [], rail: [] };
+  const parts = { board: [], post: [], rail: [] };
   for (const name in parts) parts[name] = Array.from({ length: KINDS }, () => []);
   const put = (name, geometry) => parts[name][Math.floor(rnd() * KINDS)].push(geometry);
   const options = { ...look, gap: GAPS[look.gap] };
