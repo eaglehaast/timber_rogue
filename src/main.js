@@ -6,7 +6,7 @@ import {
 import { struck, wreck, pushOut } from './yard.js';
 import { makeFence, YARD, HEIGHTS, GAPS, TONES, BOARD_WIDTHS, AGES, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
 import { makePanorama } from './panorama.js';
-import { tiles } from './surface.js';
+import { makeSky } from './sky.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
@@ -119,27 +119,7 @@ sun.shadow.camera.far = 120;
 sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
-// Небо — акварельная растяжка на сфере изнутри: нижний край картинки на горизонте, верхний в зените,
-// по кругу она повторяется дважды (сама бесшовная). Ниже горизонта — её нижний край.
-// Краски неба, солнца и луны — как нарисованы: тональная кривая сцены их не трогает.
-const skyGeo = new THREE.SphereGeometry(150, 64, 32);
-{
-  const p = skyGeo.attributes.position, uv = skyGeo.attributes.uv;
-  for (let i = 0; i < p.count; i++) uv.setY(i, Math.max(0, Math.asin(p.getY(i) / 150) / (Math.PI / 2)));
-}
-const [skyMap, sunMap, moonMap] = tiles(['sky', 'sun', 'moon'].map((n) => `assets/textures/${n}.${n === 'sky' ? 'jpg' : 'png'}`));
-skyMap.repeat.x = 2;
-skyMap.wrapT = THREE.ClampToEdgeWrapping;
-scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ map: skyMap, side: THREE.BackSide, toneMapped: false })));
-// Солнце и дневная луна — картинки, всегда лицом к игроку, на небе в 145 м. Луна в первой четверти:
-// стоит на 90° восточнее солнца, левее его, и освещённым правым боком смотрит на него.
-function disc(map, direction, degrees) {
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, toneMapped: false, depthWrite: false }));
-  sprite.position.copy(direction).multiplyScalar(145);
-  sprite.scale.setScalar(145 * THREE.MathUtils.degToRad(degrees));
-  return sprite;
-}
-scene.add(disc(sunMap, SUN, 5), disc(moonMap, SUN.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2).setY(0.4).normalize(), 4));
+scene.add(await makeSky(SUN));
 // Окружение локации — два кольца внутри неба: средний план (луг, стога, сараи) сразу за полосой травы
 // за забором и горы за ним. Самое красивое место гор — перед игроком на старте.
 for (const [name, radius] of [['tushna-mid', 45], ['tushna', 140]]) {
