@@ -3,14 +3,15 @@ import { tiles } from './surface.js';
 import { generator } from './random.js';
 
 // Забор по периметру участка W × D метров с центром в начале координат: штакетник со всех сторон,
-// к дороге (z = +D/2) — с калиткой. Доски крашеные, верх углом, между ними сквозные щели: сквозь них
-// чуть видно улицу, а солнце кладёт полосы на траву. Высоту, щели и тон краски подбираем клавишами.
+// к дороге (z = +D/2) — с калиткой. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
+// чуть видно улицу, а солнце кладёт полосы на траву. Столбы — металлические трубы.
+// Высоту, щели и тон краски подбираем клавишами.
 export const YARD = { w: 60, d: 40 };
 export const HEIGHTS = [1.5, 1.8, 2.1, 2.4];
-export const GAPS = { узкие: [0.01, 0.02], средние: [0.02, 0.04], широкие: [0.04, 0.07] };
+export const GAPS = { узкие: 0.015, средние: 0.03, широкие: 0.055 };
 export const TONES = { 'как на картинке': [1, 1], выгоревший: [0.65, 1.1], 'старый серый': [0.4, 0.9] }; // насыщенность, светлота
 
-// Картинки от ChatGPT: по 10 досок, столбов и прожилин; доски и столбы бесшовные по обеим осям,
+// Картинки от ChatGPT: по 10 досок, труб и прожилин; доски и трубы бесшовные по обеим осям,
 // прожилины — по длине. Каждая деталь берёт одну из них наугад.
 const KINDS = 10;
 // Метров на одно повторение картинки вдоль детали: по ширине картинка ложится на доску целиком,
@@ -50,13 +51,14 @@ function board(w, h, t, shift) {
   for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / w + 0.5, p.getY(i) / BOARD_SPAN + shift);
   return geometry;
 }
-// Брусок с основанием в нуле; картинка на гранях повторяется [вдоль, вверх] раз.
-function block(sx, sy, sz, [along, up]) {
-  const geometry = new THREE.BoxGeometry(sx, sy, sz).translate(0, sy / 2, 0);
+// Брусок или труба с основанием в нуле; картинка на гранях повторяется [вдоль, вверх] раз.
+function repeat(geometry, [along, up]) {
   const uv = geometry.attributes.uv;
   for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * along, uv.getY(i) * up);
   return geometry;
 }
+const block = (sx, sy, sz, times) => repeat(new THREE.BoxGeometry(sx, sy, sz).translate(0, sy / 2, 0), times);
+const pipe = (r, h) => repeat(new THREE.CylinderGeometry(r, r, h, 12).translate(0, h / 2, 0), [1, h / POST_SPAN]);
 
 // Детали одной картинки сливаем в одну геометрию: тысяча досок — один вызов отрисовки.
 function merge(parts) {
@@ -83,24 +85,20 @@ function side(a, b) {
   return { length, place };
 }
 
-// Штакетник: столбы через 2,5 м, две прожилины, доски 9–14 см неровные по высоте и наклону. Изредка доски нет.
-// Слепок случайностей не зависит от высоты: забор меняет её, не перетасовывая доски.
-function picket({ length, place }, { height, gap: [g0, g1] }, rnd, put, gate) {
-  const between = (a, b) => a + rnd() * (b - a);
-  const post = height - 0.15;
-  for (let s = 0; s <= length + 0.01; s += 2.5) put('post', block(0.12, post, 0.12, [1, post / POST_SPAN]).applyMatrix4(place(s, 0, 0)));
+// Штакетник: трубы через 2,5 м, две прожилины, доски по 10 см ровным рядом. Наугад только картинка доски
+// и с какого места она начинается, поэтому забор меняет высоту, не перетасовывая доски.
+const BOARD = 0.1;
+function picket({ length, place }, { height, gap }, rnd, put, gate) {
+  const nearGate = (s, half) => gate !== undefined && Math.abs(s - gate) < half;
+  for (let s = 0; s <= length + 0.01; s += 2.5) if (!nearGate(s, 0.8)) put('post', pipe(0.038, height - 0.15).applyMatrix4(place(s, 0, 0)));
   for (const y of [0.3, height - 0.45]) put('rail', block(length, 0.08, 0.05, [length / RAIL_SPAN, 1]).applyMatrix4(place(length / 2, 0.06, y)));
-  for (let s = 0.05; s < length - 0.05;) {
-    const w = between(0.09, 0.14), mid = s + w / 2, inGate = gate !== undefined && Math.abs(mid - gate) < 0.55;
-    if (rnd() > 0.03) {
-      const h = inGate ? height - 0.17 : height - between(0, 0.08);
-      put('board', board(w, h, 0.022, rnd()).applyMatrix4(place(mid, 0.1, inGate ? 0.12 : 0.05, between(-0.025, 0.025))));
-    }
-    s += w + between(g0, g1);
+  for (let s = 0.05; s + BOARD < length - 0.05; s += BOARD + gap) {
+    const mid = s + BOARD / 2, inGate = nearGate(mid, 0.55);
+    put('board', board(BOARD, inGate ? height - 0.17 : height, 0.022, rnd()).applyMatrix4(place(mid, 0.1, inGate ? 0.12 : 0.05)));
   }
   if (gate === undefined) return;
-  // Калитка — проём с толстыми столбами, её доски держит укосина из угла в угол.
-  for (const s of [gate - 0.6, gate + 0.6]) put('post', block(0.16, height + 0.1, 0.16, [1, (height + 0.1) / POST_SPAN]).applyMatrix4(place(s, 0, 0)));
+  // Калитка — проём между трубами потолще, её доски держит укосина из угла в угол.
+  for (const s of [gate - 0.6, gate + 0.6]) put('post', pipe(0.05, height + 0.1).applyMatrix4(place(s, 0, 0)));
   const across = 0.9, up = height - 0.8;
   put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, 0.07, 0.34, -Math.atan2(across, up))));
 }
