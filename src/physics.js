@@ -284,11 +284,16 @@ export function deflection(sec, c, weight, height, split = 0) {
   return theta.setLength(Math.min(size, closing(sec, dir, sec.x0 * dir.x + sec.z0 * dir.z, 0)));
 }
 
-// Ширина пропила в точке x, мм: пила оставляет щель в кубик (open, м — что от неё осталось после оседания),
-// а наклон ствола раскрывает её позади и сжимает впереди — упругий (theta) вокруг центра недопила,
-// осевший (give) вокруг оси, у которой осел.
-export function kerfWidth(sec, theta, give, x, open = VOXEL - sec.sink) {
+// На сколько (м) наклон ствола раскрывает щель в точке x (меньше нуля — сжимает): позади раскрывает,
+// впереди сжимает — упругий (theta) вокруг центра недопила (sec.x0, sec.z0), осевший (give) вокруг оси,
+// у которой осел.
+export function opening(sec, theta, give, x) {
   const t = give.tilt;
-  return Math.max(0, 1000 * (open + theta.x * (sec.x0 - x.x) + theta.z * (sec.z0 - x.z)
-    + t.x * (give.at.x - x.x) + t.z * (give.at.z - x.z)));
+  return theta.x * (sec.x0 - x.x) + theta.z * (sec.z0 - x.z) + t.x * (give.at.x - x.x) + t.z * (give.at.z - x.z);
+}
+
+// Ширина пропила в точке x, мм: пила оставляет щель в кубик (open, м — что от неё осталось после оседания),
+// а наклон ствола её раскрывает или сжимает.
+export function kerfWidth(sec, theta, give, x, open = VOXEL - sec.sink) {
+  return Math.max(0, 1000 * (open + opening(sec, theta, give, x)));
 }
