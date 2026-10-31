@@ -6,6 +6,7 @@ import {
 import { struck, wreck, pushOut } from './yard.js';
 import { makeFence, YARD, HEIGHTS, GAPS, TONES, BOARD_WIDTHS, AGES, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
 import { makePanorama } from './panorama.js';
+import { tiles } from './surface.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
@@ -77,9 +78,8 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scene = new THREE.Scene();
-// Свет: тёплое низкое солнце и холодная тень от неба, у горизонта — дымка.
+// Свет: тёплое низкое солнце и холодная тень от неба.
 // Тумана в сцене нет: край земли закрывают панорамы, а воздух нарисован на них самих.
-const HAZE = 0xcfdbe3, ZENITH = 0x5d8fcf;
 // Угол обзора по вертикали. Широкий угол у ствола растягивает картинку и укачивает,
 // поэтому по умолчанию он умеренный, а клавиши − и = его меняют.
 const FOV_MIN = 40, FOV_MAX = 75;
@@ -107,7 +107,10 @@ scene.add(new THREE.HemisphereLight(0xb4ccec, 0x8f8a66, 1.1));
 const sun = new THREE.DirectionalLight(0xffe2b8, 2.4);
 // Тень накрывает весь участок с забором: солнце стоит, поэтому тени не дрожат. Карта 4096 — около 1,7 см
 // на точку, мельче щелей штакетника: полосы света сквозь забор читаются.
-sun.position.set(40, 36, 20);
+// Солнце низкое и сбоку — справа от взгляда со старта, чуть впереди: стволы освещены наполовину,
+// длинные тени деревьев ложатся поперёк луга, а сквозь щели правого забора по траве тянутся полосы света.
+const SUN = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 22), THREE.MathUtils.degToRad(180 - 80));
+sun.position.copy(SUN).multiplyScalar(60);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
 sun.shadow.camera.left = sun.shadow.camera.bottom = -36;
@@ -116,16 +119,27 @@ sun.shadow.camera.far = 120;
 sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
-// Небо — сфера изнутри: от дымки у горизонта к синеве в зените.
-const skyGeo = new THREE.SphereGeometry(150, 32, 16);
-const skyColors = [];
-for (let i = 0; i < skyGeo.attributes.position.count; i++) {
-  const up = Math.max(0, skyGeo.attributes.position.getY(i) / 150);
-  const c = new THREE.Color(HAZE).lerp(new THREE.Color(ZENITH), Math.sqrt(up));
-  skyColors.push(c.r, c.g, c.b);
+// Небо — акварельная растяжка на сфере изнутри: нижний край картинки на горизонте, верхний в зените,
+// по кругу она повторяется дважды (сама бесшовная). Ниже горизонта — её нижний край.
+// Краски неба, солнца и луны — как нарисованы: тональная кривая сцены их не трогает.
+const skyGeo = new THREE.SphereGeometry(150, 64, 32);
+{
+  const p = skyGeo.attributes.position, uv = skyGeo.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setY(i, Math.max(0, Math.asin(p.getY(i) / 150) / (Math.PI / 2)));
 }
-skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
-scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+const [skyMap, sunMap, moonMap] = tiles(['sky', 'sun', 'moon'].map((n) => `assets/textures/${n}.${n === 'sky' ? 'jpg' : 'png'}`));
+skyMap.repeat.x = 2;
+skyMap.wrapT = THREE.ClampToEdgeWrapping;
+scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ map: skyMap, side: THREE.BackSide, toneMapped: false })));
+// Солнце и дневная луна — картинки, всегда лицом к игроку, на небе в 145 м. Луна в первой четверти:
+// стоит на 90° восточнее солнца, левее его, и освещённым правым боком смотрит на него.
+function disc(map, direction, degrees) {
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, toneMapped: false, depthWrite: false }));
+  sprite.position.copy(direction).multiplyScalar(145);
+  sprite.scale.setScalar(145 * THREE.MathUtils.degToRad(degrees));
+  return sprite;
+}
+scene.add(disc(sunMap, SUN, 5), disc(moonMap, SUN.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2).setY(0.4).normalize(), 4));
 // Окружение локации — два кольца внутри неба: средний план (луг, стога, сараи) сразу за полосой травы
 // за забором и горы за ним. Самое красивое место гор — перед игроком на старте.
 for (const [name, radius] of [['tushna-mid', 45], ['tushna', 140]]) {
@@ -159,7 +173,7 @@ const FENCE_KEYS = {
   KeyI: ['postWidth', POST_WIDTHS, 0.1, (v) => `Столбы ${cm(v)} × ${cm(v)} см`],
   KeyJ: ['postCoat', Object.keys(COATS), 'как доски', (v) => `Прокрас столбов: ${v}`],
   KeyM: ['boardWidth', BOARD_WIDTHS, 0.1, (v) => `Доски ${cm(v)} см`],
-  KeyO: ['age', Object.keys(AGES), 'обжитой', (v) => `Забор ${v}`],
+  KeyO: ['age', Object.keys(AGES), 'ветхий', (v) => `Забор ${v}`],
   KeyN: ['shadow', Object.keys(SHADOWS), 'лёгкая', (v) => `Тень на заборе: ${v}`],
 };
 const fenceKey = (key) => `fence${key[0].toUpperCase()}${key.slice(1)}`;
