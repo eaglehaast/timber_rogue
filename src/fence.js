@@ -1,132 +1,197 @@
 import * as THREE from 'three';
+import { tiles } from './surface.js';
+import { generator } from './random.js';
 
-// Забор по периметру участка W × D метров с центром в начале координат. Стороны разные, как в деревне:
-// к дороге (z = +D/2) — штакетник с калиткой, к полям (z = −D/2) — жерди на кольях, к соседям — рабица.
-// Каждая доска и жердь — своя геометрия: щели сквозные, сквозь них видно улицу, а солнце кладёт полосы на траву.
-// Пока всё одноцветное — проверяем пропорции; текстуры досок придут от ChatGPT.
+// Забор по периметру участка W × D метров с центром в начале координат: штакетник со всех сторон,
+// к дороге (z = +D/2) — с калиткой. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
+// чуть видно улицу, а солнце кладёт полосы на траву. Столбы — бруски, крашеные так же.
+// Высоту, щели, ширину досок, возраст, тон краски и тени, а у столбов — толщину и прокрас подбираем клавишами.
 export const YARD = { w: 60, d: 40 };
+export const HEIGHTS = [1.5, 1.8, 2.1, 2.4];
+export const GAPS = { узкие: 0.015, средние: 0.03, широкие: 0.055 };
+export const TONES = { 'как на картинке': [1, 1], выгоревший: [0.65, 1.1], 'старый серый': [0.4, 0.9] }; // насыщенность, светлота
+export const AGES = { 'как новый': 0, обжитой: 0.5, старый: 1, ветхий: 1.8 }; // во сколько раз сильнее кривизна
+export const BOARD_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м
+export const POST_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м: сторона бруска
+export const COATS = { 'как доски': 0, 'второй слой': 0.45, густо: 0.75, сплошь: 1 };
+export const SHADOWS = { густая: 1, плотная: 0.85, средняя: 0.7, лёгкая: 0.55, прозрачная: 0.4 }; // доля солнца, которую тень отнимает
 
-const wood = new THREE.MeshLambertMaterial({ color: 0xb3a58f });
-const metal = new THREE.MeshLambertMaterial({ color: 0x8a8d8f });
-const between = (a, b) => a + Math.random() * (b - a);
+// Картинки от ChatGPT: по 10 досок и прожилин; доски бесшовные по обеим осям, прожилины — по длине.
+// Каждая деталь берёт одну из них наугад; столбы красят теми же картинками, что и доски.
+const KINDS = 10;
+// Метров на одно повторение картинки вдоль детали: по ширине картинка ложится на доску целиком,
+// а вверх растянута вдвое против своих пропорций, чтобы сучки не повторялись через каждые 30 см.
+const BOARD_SPAN = 0.7, RAIL_SPAN = 1.6;
+const BOARD = 0.1; // м: такую ширину доски изображает картинка — в этом масштабе она ложится на столбы
 
-// Все детали одного материала — один InstancedMesh из единичного бруска или цилиндра.
-function parts(geometry, material, list) {
-  const mesh = new THREE.InstancedMesh(geometry, material, list.length);
-  list.forEach((m, i) => mesh.setMatrixAt(i, m));
-  mesh.castShadow = mesh.receiveShadow = true;
-  return mesh;
+// Краска меняется на ходу поверх картинки. Тон общий на весь забор: насыщенность и светлота.
+// Прокрас coat — сколько потёртостей закрыто вторым слоем: столбы красят гуще досок.
+// Густота тени shadow — сколько солнца отнимает тень на заборе: и падающая от досок и деревьев,
+// и на стороне, отвёрнутой от солнца. На освещённых местах ничего не меняется.
+const tone = { saturation: { value: 1 }, light: { value: 1 } };
+const shadow = { value: 1 };
+const coats = { board: { value: 0 }, post: { value: 0 } };
+export function setTone([saturation, light]) {
+  tone.saturation.value = saturation;
+  tone.light.value = light;
 }
-const cube = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
-const rod = new THREE.CylinderGeometry(0.5, 0.5, 1, 8).translate(0, 0.5, 0);
-// Деталь: основание в (x, y, z), размеры по своим осям, повороты — рысканье yaw, наклоны tilt вбок и lean вперёд.
-const at = (x, y, z, sx, sy, sz, yaw = 0, tilt = 0, lean = 0) => new THREE.Matrix4().compose(
-  new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(lean, yaw, tilt, 'YXZ')), new THREE.Vector3(sx, sy, sz));
+export function setShadow(density) { shadow.value = density; }
+export function setCoat(coat) { coats.post.value = coat; }
+// Средний цвет краски на картинках досок (линейный), им закрашиваем потёртости — где синего мало.
+const PAINT = 'vec3(0.067, 0.24, 0.63)';
+function painted(map, coat) {
+  const material = new THREE.MeshLambertMaterial({ map });
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, {
+      fenceSaturation: tone.saturation, fenceLight: tone.light, fenceCoat: coat, fenceShadow: shadow,
+    });
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform float fenceSaturation, fenceLight, fenceCoat, fenceShadow;`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        float fenceWorn = 1.0 - smoothstep(0.1, 0.35, diffuseColor.b - diffuseColor.r);
+        diffuseColor.rgb = mix(diffuseColor.rgb, ${PAINT}, fenceCoat * mix(0.3, 1.0, fenceWorn));
+        float fenceLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+        diffuseColor.rgb = mix(vec3(fenceLuma), diffuseColor.rgb, fenceSaturation) * fenceLight;`)
+      // Солнце — первый направленный свет. Без тени доска получала бы его под тем же углом с любой стороны:
+      // тонкая доска с двух сторон одинаково повёрнута к солнцу. Тень возвращает часть этого света.
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        #if NUM_DIR_LIGHTS > 0
+          vec3 fenceSun = directionalLights[0].color * abs(dot(normal, directionalLights[0].direction)) * BRDF_Lambert(diffuseColor.rgb);
+          reflectedLight.directDiffuse = mix(fenceSun, reflectedLight.directDiffuse, fenceShadow);
+        #endif`);
+  };
+  material.customProgramCacheKey = () => 'fence';
+  return material;
+}
+// Столбы красят теми же картинками, что и доски, но своим прокрасом.
+const maps = (name) => tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures/fence-${name}-${i + 1}.jpg`));
+const boardMaps = maps('board');
+const materials = {
+  board: boardMaps.map((map) => painted(map, coats.board)),
+  post: boardMaps.map((map) => painted(map, coats.post)),
+  rail: maps('rail').map((map) => painted(map, coats.board)),
+};
 
-// Сторона забора — отрезок от a до b по земле; вдоль него ставим детали в локальной координате s.
+// Доска с верхом углом: пятиугольник шириной w и высотой h, толщиной t. Картинка лежит по ширине доски
+// и повторяется вверх, начиная с места shift: соседние доски одной картинки не совпадают.
+function board(w, h, t, shift) {
+  const outline = [[-w / 2, 0], [w / 2, 0], [w / 2, h - w / 2], [0, h], [-w / 2, h - w / 2]];
+  const geometry = new THREE.ExtrudeGeometry(new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y))),
+    { depth: t, bevelEnabled: false }).translate(0, 0, -t / 2);
+  const p = geometry.attributes.position, uv = geometry.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / w + 0.5, p.getY(i) / BOARD_SPAN + shift);
+  return geometry;
+}
+// Брусок с основанием в нуле; картинка на гранях повторяется [вдоль, вверх] раз.
+function block(sx, sy, sz, [along, up]) {
+  const geometry = new THREE.BoxGeometry(sx, sy, sz).translate(0, sy / 2, 0);
+  const uv = geometry.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * along, uv.getY(i) * up);
+  return geometry;
+}
+// Столб — брусок со стороной w; картинка доски ложится на грань в том же масштабе, что на доску.
+const post = (w, h) => block(w, h, w, [w / BOARD, h / BOARD_SPAN]);
+
+// Детали одной картинки сливаем в одну геометрию: тысяча досок — один вызов отрисовки.
+function merge(parts) {
+  parts = parts.map((g) => (g.index ? g.toNonIndexed() : g));
+  const merged = new THREE.BufferGeometry();
+  for (const name of ['position', 'normal', 'uv']) {
+    const arrays = parts.map((g) => g.attributes[name].array);
+    const data = new Float32Array(arrays.reduce((n, a) => n + a.length, 0));
+    arrays.reduce((at, a) => (data.set(a, at), at + a.length), 0);
+    merged.setAttribute(name, new THREE.BufferAttribute(data, parts[0].attributes[name].itemSize));
+  }
+  return merged;
+}
+
+// Сторона забора — отрезок от a до b по земле; деталь ставим по координате s вдоль него,
+// со сдвигом off наружу участка и наклоном tilt вдоль стороны.
 function side(a, b) {
   const dir = new THREE.Vector2(b.x - a.x, b.z - a.z), length = dir.length();
   dir.normalize();
   const yaw = Math.atan2(-dir.y, dir.x);
-  const point = (s, off = 0) => ({ x: a.x + dir.x * s - dir.y * off, z: a.z + dir.y * s + dir.x * off });
-  return { length, yaw, point };
+  // tilt — наклон вдоль стороны, lean — поперёк неё, наружу (+) или во двор (−).
+  const place = (s, off, y, tilt = 0, lean = 0) => new THREE.Matrix4().compose(
+    new THREE.Vector3(a.x + dir.x * s - dir.y * off, y, a.z + dir.y * s + dir.x * off),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(lean, yaw, tilt, 'YXZ')), new THREE.Vector3(1, 1, 1));
+  return { length, place };
 }
 
-// Штакетник: столбы через 2,5 м, две прожилины, доски 9–14 см с щелями 2–8 см, неровные по высоте и наклону.
-// Изредка доски нет. Калитка — проём с толстыми столбами и своими досками на раме с укосиной.
-function picket(edge, gate, boards, beams, posts) {
-  const { length, yaw, point } = edge;
-  for (let s = 0; s <= length + 0.01; s += 2.5) {
-    const p = point(s);
-    posts.push(at(p.x, 0, p.z, 0.12, 1.6, 0.12));
-  }
-  for (const y of [0.35, 1.1]) {
-    const p = point(length / 2, 0.06);
-    beams.push(at(p.x, y, p.z, length, 0.08, 0.05, yaw));
-  }
-  for (let s = 0.05; s < length - 0.05;) {
-    const w = between(0.09, 0.14);
-    const inGate = Math.abs(s + w / 2 - gate) < 0.55;
-    if (Math.random() > 0.03) {
-      const p = point(s + w / 2, 0.1);
-      const h = inGate ? between(1.25, 1.3) : between(1.35, 1.5);
-      boards.push(at(p.x, inGate ? 0.12 : 0.05, p.z, w, h, 0.022, yaw, between(-0.025, 0.025)));
+// Штакетник: столбы через 2,5 м, на них в каждом пролёте две прожилины, к ним прибиты доски ровным рядом.
+// Прожилины прибиты к столбам снаружи, доски — к прожилинам: чем толще столб, тем дальше они от его оси.
+// В каждом пролёте доски делят его поровну, и каждый столб приходится на середину щели: доски заходят
+// на него с обеих сторон одинаково. Столб срезан вровень с плечами досок — там, где начинается их угол.
+//
+// Забор стоит не первый год. Столбы просели в землю или их выперло морозом и они накренились —
+// прожилины легли между ними под уклон, а доски на прожилинах повторяют этот уклон и крен. Сами доски
+// прибиты не по линейке: чуть вкось, чуть выше-ниже, чуть разной длины. Угловые столбы держат две стороны
+// и стоят ровно. Всё это — доли градуса и сантиметры, умноженные на возраст age: при нуле забор как новый.
+// Случайные отклонения тянем всегда, даже при нуле, поэтому возраст меняет кривизну, не перетасовывая забор.
+const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до земли, у калитки — выше
+const DEG = Math.PI / 180;
+function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, rnd, put, gate) {
+  const wobble = (size) => (rnd() + rnd() - 1) * size * age; // чаще около нуля, изредка до ±size
+  const posts = [];
+  for (let s = 0; s <= length + 0.01; s += 2.5) if (gate === undefined || Math.abs(s - gate) >= 0.8) posts.push(s);
+  if (gate !== undefined) posts.push(gate - 0.6, gate + 0.6);
+  posts.sort((a, b) => a - b);
+  const corner = (s) => s < 0.01 || s > length - 0.01;
+  const sag = posts.map((s) => (corner(s) ? 0 : wobble(0.04)));       // м: просел (−) или выперло (+)
+  const lean = posts.map((s) => (corner(s) ? 0 : wobble(2.5 * DEG)));  // крен поперёк забора
+  const r = postWidth / 2, rails = r + 0.026, front = rails + 0.037;
+  const shoulder = LIFT + height - boardWidth / 2;
+  posts.forEach((s, i) => {
+    const atGate = gate !== undefined && Math.abs(s - gate) < 0.7;
+    const geometry = atGate ? post(postWidth * 1.2, shoulder + 0.25) : post(postWidth, shoulder);
+    put('post', geometry.applyMatrix4(place(s, 0, sag[i], wobble(1.5 * DEG), lean[i])));
+  });
+  for (let i = 1; i < posts.length; i++) {
+    const a = posts[i - 1], span = posts[i] - a, inGate = gate !== undefined && a < gate && gate < posts[i];
+    const slope = (sag[i] - sag[i - 1]) / span, tilt = Math.atan(slope);
+    const height0 = (s) => sag[i - 1] + slope * (s - a); // насколько сдвинулся пролёт у места s
+    const lean0 = (s) => lean[i - 1] + (lean[i] - lean[i - 1]) * (s - a) / span;
+    // Прожилину крепят к столбу на высоте y — с креном столба она уходит наружу на y·крен.
+    for (const y of [0.3, height - 0.45]) {
+      const mid = a + span / 2, tip = lean0(mid);
+      put('rail', block(span, 0.08, 0.05, [span / RAIL_SPAN, 1]).applyMatrix4(place(mid, rails + y * tip, y + height0(mid), tilt, tip)));
     }
-    s += w + between(0.02, 0.08);
-  }
-  for (const s of [gate - 0.6, gate + 0.6]) {
-    const p = point(s);
-    posts.push(at(p.x, 0, p.z, 0.16, 1.75, 0.16));
-  }
-  const brace = point(gate, 0.07);
-  beams.push(at(brace.x, 0.32, brace.z, 0.05, 1.15, 0.08, yaw, -0.72));
-}
-
-// Жердевой: колья через 2,5–3 м, наклонённые как придётся, на них три жерди, концы заходят друг за друга.
-function rails(edge, poles, stakes) {
-  const { length, yaw, point } = edge;
-  const marks = [0];
-  while (marks.at(-1) < length - 3) marks.push(marks.at(-1) + between(2.5, 3));
-  marks.push(length);
-  for (const s of marks) {
-    const p = point(s);
-    stakes.push(at(p.x, 0, p.z, 0.1, between(1.2, 1.35), 0.1, 0, between(-0.06, 0.06), between(-0.06, 0.06)));
-  }
-  for (let i = 1; i < marks.length; i++) {
-    // Цилиндр, положенный набок, растёт от основания назад по стороне: основание ставим на дальний конец.
-    const s0 = marks[i - 1] - 0.15, s1 = marks[i] + 0.15, end = point(s1, 0.08);
-    for (const y of [0.4, 0.78, 1.12]) {
-      const drop = between(-0.05, 0.05), r = between(0.07, 0.1);
-      poles.push(at(end.x, y + drop, end.z, r, s1 - s0, r, yaw, Math.PI / 2 + between(-0.03, 0.03)));
+    const n = Math.max(1, Math.round(span / (boardWidth + gap))), step = span / n;
+    for (let k = 0; k < n; k++) {
+      const s = a + (k + 0.5) * step + wobble(0.006);
+      const h = (inGate ? height - 0.17 : height) + wobble(0.012);
+      const y = (inGate ? GATE_LIFT : LIFT) + height0(s) + wobble(0.012);
+      put('board', board(boardWidth, h, 0.022, rnd())
+        .applyMatrix4(place(s, front, y, tilt + wobble(1.2 * DEG), lean0(s) + wobble(0.6 * DEG))));
     }
   }
+  if (gate === undefined) return;
+  // Доски калитки держит укосина из угла в угол.
+  const across = 0.9, up = height - 0.8;
+  put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, rails, 0.34, -Math.atan2(across, up))));
 }
 
-// Рабица: трубы через 2,5 м и сетка ромбами на всю сторону. Сетка пока рисуется кодом — до картинки от ChatGPT.
-const mesh = (() => {
-  const c = document.createElement('canvas');
-  c.width = c.height = 64;
-  const g = c.getContext('2d');
-  g.strokeStyle = '#fff';
-  g.lineWidth = 5;
-  for (const [x0, x1] of [[0, 64], [64, 0]]) {
-    for (const shift of [-64, 0, 64]) { g.beginPath(); g.moveTo(x0 + shift, 0); g.lineTo(x1 + shift, 64); g.stroke(); }
-  }
-  const texture = new THREE.CanvasTexture(c);
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-})();
-const CELL = 0.06; // м: ромб сетки
-
-function chain(edge, root, pipes) {
-  const { length, yaw, point } = edge;
-  for (let s = 0; s <= length + 0.01; s += 2.5) {
-    const p = point(s);
-    pipes.push(at(p.x, 0, p.z, 0.06, 1.6, 0.06));
-  }
-  const map = mesh.clone();
-  map.needsUpdate = true; // копия текстуры — своя загрузка в видеокарту
-  map.repeat.set(length / CELL, 1.5 / CELL);
-  const net = new THREE.Mesh(new THREE.PlaneGeometry(length, 1.5),
-    // Проволока тоньше точки уже в паре метров: срез по прозрачности оставил бы от неё одни узлы.
-    // Поэтому сетка полупрозрачная — вдали она сливается в лёгкую серую вуаль, как в жизни.
-    new THREE.MeshLambertMaterial({ color: 0x9a9c9e, map, alphaMap: map, transparent: true, depthWrite: false, alphaTest: 0.02, side: THREE.DoubleSide }));
-  const mid = point(length / 2, 0.04);
-  net.position.set(mid.x, 0.1 + 0.75, mid.z);
-  net.rotation.y = yaw;
-  net.castShadow = net.receiveShadow = true;
-  root.add(net);
-}
-
-export function makeFence() {
+export function makeFence(look) {
   const root = new THREE.Group();
+  const rnd = generator(7);
+  const parts = { board: [], post: [], rail: [] };
+  for (const name in parts) parts[name] = Array.from({ length: KINDS }, () => []);
+  const put = (name, geometry) => parts[name][Math.floor(rnd() * KINDS)].push(geometry);
+  const options = { ...look, gap: GAPS[look.gap], age: AGES[look.age] };
   const x = YARD.w / 2, z = YARD.d / 2;
-  const boards = [], beams = [], posts = [], poles = [], stakes = [], pipes = [];
-  picket(side({ x: -x, z }, { x, z }), x + 8, boards, beams, posts);
-  rails(side({ x, z: -z }, { x: -x, z: -z }), poles, stakes);
-  chain(side({ x: -x, z: -z }, { x: -x, z }), root, pipes);
-  chain(side({ x, z }, { x, z: -z }), root, pipes);
-  root.add(parts(cube, wood, [...boards, ...beams, ...posts]), parts(rod, wood, [...poles, ...stakes]), parts(rod, metal, pipes));
+  // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
+  picket(side({ x: -x, z }, { x, z }), options, rnd, put, x + 8);
+  picket(side({ x, z }, { x, z: -z }), options, rnd, put);
+  picket(side({ x, z: -z }, { x: -x, z: -z }), options, rnd, put);
+  picket(side({ x: -x, z: -z }, { x: -x, z }), options, rnd, put);
+  for (const name in parts) {
+    parts[name].forEach((list, i) => {
+      if (!list.length) return;
+      const mesh = new THREE.Mesh(merge(list), materials[name][i]);
+      mesh.castShadow = mesh.receiveShadow = true;
+      root.add(mesh);
+    });
+  }
   return root;
 }

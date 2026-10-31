@@ -4,7 +4,9 @@ import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeFence, YARD } from './fence.js';
+import { makeFence, YARD, HEIGHTS, GAPS, TONES, BOARD_WIDTHS, AGES, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
+import { makePanorama } from './panorama.js';
+import { tiles } from './surface.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
@@ -76,19 +78,18 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scene = new THREE.Scene();
-// Свет: тёплое низкое солнце и холодная тень от неба, у горизонта — дымка. Даль тонет в ней,
-// и глазу проще: что далеко, то бледнее.
-const HAZE = 0xcfdbe3, ZENITH = 0x5d8fcf;
-scene.fog = new THREE.Fog(HAZE, 25, 110);
+// Свет: тёплое низкое солнце и холодная тень от неба.
+// Тумана в сцене нет: край земли закрывают панорамы, а воздух нарисован на них самих.
 // Угол обзора по вертикали. Широкий угол у ствола растягивает картинку и укачивает,
 // поэтому по умолчанию он умеренный, а клавиши − и = его меняют.
 const FOV_MIN = 40, FOV_MAX = 75;
 let fov = 55;
 try { fov = THREE.MathUtils.clamp(Number(localStorage.getItem('fov')) || fov, FOV_MIN, FOV_MAX); } catch {}
 // Выбор пилы, шины и ракурса тоже запоминаем: что было в list под key, а нет — первое.
-const recall = (key, list) => {
-  try { return list.find((v) => String(v) === localStorage.getItem(key)) ?? list[0]; } catch { return list[0]; }
+const recall = (key, list, fallback = list[0]) => {
+  try { return list.find((v) => String(v) === localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 };
+const cycle = (list, value) => list[(list.indexOf(value) + 1) % list.length];
 const keep = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
 const camera = new THREE.PerspectiveCamera(fov, 1, NEAR, 200);
 camera.rotation.order = 'YXZ';
@@ -101,11 +102,15 @@ const VIEW_EL_MIN = THREE.MathUtils.degToRad(-10), VIEW_EL_MAX = THREE.MathUtils
 const view = { base: 0, az: 0, el: 0, dist: VIEW_FAR };
 let inspecting = false;
 
-scene.add(new THREE.HemisphereLight(0xb4ccec, 0x5a4a32, 1.1));
+// Снизу в тень светит залитый солнцем луг: без этого стороны досок и стволов в тени уходят в черноту.
+scene.add(new THREE.HemisphereLight(0xb4ccec, 0x8f8a66, 1.1));
 const sun = new THREE.DirectionalLight(0xffe2b8, 2.4);
 // Тень накрывает весь участок с забором: солнце стоит, поэтому тени не дрожат. Карта 4096 — около 1,7 см
 // на точку, мельче щелей штакетника: полосы света сквозь забор читаются.
-sun.position.set(40, 36, 20);
+// Солнце низкое и сбоку — справа от взгляда со старта, чуть впереди: стволы освещены наполовину,
+// длинные тени деревьев ложатся поперёк луга, а сквозь щели правого забора по траве тянутся полосы света.
+const SUN = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 22), THREE.MathUtils.degToRad(180 - 80));
+sun.position.copy(SUN).multiplyScalar(60);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);
 sun.shadow.camera.left = sun.shadow.camera.bottom = -36;
@@ -114,16 +119,34 @@ sun.shadow.camera.far = 120;
 sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
-// Небо — сфера изнутри: от дымки у горизонта к синеве в зените.
-const skyGeo = new THREE.SphereGeometry(150, 32, 16);
-const skyColors = [];
-for (let i = 0; i < skyGeo.attributes.position.count; i++) {
-  const up = Math.max(0, skyGeo.attributes.position.getY(i) / 150);
-  const c = new THREE.Color(HAZE).lerp(new THREE.Color(ZENITH), Math.sqrt(up));
-  skyColors.push(c.r, c.g, c.b);
+// Небо — акварельная растяжка на сфере изнутри: нижний край картинки на горизонте, верхний в зените,
+// по кругу она повторяется дважды (сама бесшовная). Ниже горизонта — её нижний край.
+// Краски неба, солнца и луны — как нарисованы: тональная кривая сцены их не трогает.
+const skyGeo = new THREE.SphereGeometry(150, 64, 32);
+{
+  const p = skyGeo.attributes.position, uv = skyGeo.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setY(i, Math.max(0, Math.asin(p.getY(i) / 150) / (Math.PI / 2)));
 }
-skyGeo.setAttribute('color', new THREE.Float32BufferAttribute(skyColors, 3));
-scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
+const [skyMap, sunMap, moonMap] = tiles(['sky', 'sun', 'moon'].map((n) => `assets/textures/${n}.${n === 'sky' ? 'jpg' : 'png'}`));
+skyMap.repeat.x = 2;
+skyMap.wrapT = THREE.ClampToEdgeWrapping;
+scene.add(new THREE.Mesh(skyGeo, new THREE.MeshBasicMaterial({ map: skyMap, side: THREE.BackSide, toneMapped: false })));
+// Солнце и дневная луна — картинки, всегда лицом к игроку, на небе в 145 м. Луна в первой четверти:
+// стоит на 90° восточнее солнца, левее его, и освещённым правым боком смотрит на него.
+function disc(map, direction, degrees) {
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, toneMapped: false, depthWrite: false }));
+  sprite.position.copy(direction).multiplyScalar(145);
+  sprite.scale.setScalar(145 * THREE.MathUtils.degToRad(degrees));
+  return sprite;
+}
+scene.add(disc(sunMap, SUN, 5), disc(moonMap, SUN.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2).setY(0.4).normalize(), 4));
+// Окружение локации — два кольца внутри неба: средний план (луг, стога, сараи) сразу за полосой травы
+// за забором и горы за ним. Самое красивое место гор — перед игроком на старте.
+for (const [name, radius] of [['tushna-mid', 45], ['tushna', 140]]) {
+  const ring = await makePanorama(name, { radius, eye: EYE });
+  ring.rotation.y = Math.PI / 2;
+  scene.add(ring);
+}
 
 // Трава густая во всём дворе и редеет за забором на 8 м.
 const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - YARD.w / 2, Math.abs(z) - YARD.d / 2), 0, 8);
@@ -139,7 +162,38 @@ const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r:
 // Растения сажаем в квадрате FIELD метров: весь двор и полоса за забором. Число пучков — на 1000 м².
 const FIELD = 76;
 const plant = (atlas, perThousand, density) => makeTufts(atlas, Math.round(perThousand * FIELD * FIELD / 1000), FIELD, clear, density);
-scene.add(makeGround(200), makeFence(), plant(grassTufts, 11000, meadow),
+// Забор подбираем на глаз клавишами: H — высота, G — щели, M — ширина досок, O — возраст,
+// T — тон краски, N — тень;
+// у столбов I — толщина, J — прокрас.
+const cm = (v) => Math.round(v * 1000) / 10;
+const FENCE_KEYS = {
+  KeyH: ['height', HEIGHTS, 1.8, (v) => `Забор ${v} м`],
+  KeyG: ['gap', Object.keys(GAPS), 'средние', (v) => `Щели ${v}`],
+  KeyT: ['tone', Object.keys(TONES), 'выгоревший', (v) => `Краска: ${v}`],
+  KeyI: ['postWidth', POST_WIDTHS, 0.1, (v) => `Столбы ${cm(v)} × ${cm(v)} см`],
+  KeyJ: ['postCoat', Object.keys(COATS), 'как доски', (v) => `Прокрас столбов: ${v}`],
+  KeyM: ['boardWidth', BOARD_WIDTHS, 0.1, (v) => `Доски ${cm(v)} см`],
+  KeyO: ['age', Object.keys(AGES), 'ветхий', (v) => `Забор ${v}`],
+  KeyN: ['shadow', Object.keys(SHADOWS), 'лёгкая', (v) => `Тень на заборе: ${v}`],
+};
+const fenceKey = (key) => `fence${key[0].toUpperCase()}${key.slice(1)}`;
+const fenceLook = Object.fromEntries(Object.values(FENCE_KEYS).map(([key, list, fallback]) => [key, recall(fenceKey(key), list, fallback)]));
+// Краску меняем на ходу, а размеры — пересобирая забор.
+const PAINTS = ['tone', 'postCoat', 'shadow'];
+function repaint() {
+  setTone(TONES[fenceLook.tone]);
+  setCoat(COATS[fenceLook.postCoat]);
+  setShadow(SHADOWS[fenceLook.shadow]);
+}
+repaint();
+let fence = makeFence(fenceLook);
+function refence() {
+  scene.remove(fence);
+  fence.traverse((part) => part.geometry?.dispose());
+  fence = makeFence(fenceLook);
+  scene.add(fence);
+}
+scene.add(makeGround(200), fence, plant(grassTufts, 11000, meadow),
   plant(mugwortTufts, 1700, colonies(40)), plant(nettleTufts, 1700, colonies(90)),
   plant(tansyTufts, 1100, colonies(140)), plant(dandelionTufts, 1700, lawn), plant(cloverTufts, 5500, clover),
   plant(yarrowTufts, 1200, yarrow));
@@ -1135,6 +1189,15 @@ addEventListener('keydown', (e) => {
     say('fov', `Угол обзора ${fov}°`);
   }
   if (e.code === 'KeyF') setFlying(!fly);
+  if (FENCE_KEYS[e.code]) {
+    const [key, list, , label] = FENCE_KEYS[e.code];
+    fenceLook[key] = cycle(list, fenceLook[key]);
+    keep(fenceKey(key), fenceLook[key]);
+    if (PAINTS.includes(key)) repaint();
+    else refence();
+    unsay('fence');
+    say('fence', label(fenceLook[key]));
+  }
   if (fly) return;
   if (e.code === 'KeyC') player.crouch = !player.crouch;
   if (e.code === 'KeyL') hudEl.classList.toggle('details');
