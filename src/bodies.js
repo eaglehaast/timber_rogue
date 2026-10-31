@@ -5,7 +5,10 @@ import * as THREE from 'three';
 // Тела падают и бьются о землю, о кубики пня и упавшего ствола и друг о друга. Где капсулы сошлись —
 // касание: толчок (импульс) гасит сближение, даёт отскок, а трение — гасит скольжение.
 // Касание ищем и чуть заранее, на путь тела за шаг: так быстрое тело не проскочит сквозь тонкое.
+// Капсула может быть податливой (soft, м/Н — у ветки, что гнётся): такое касание — пружина с гашением,
+// оно уступает тем глубже, чем сильнее давят, и не отскакивает.
 // Улёгшееся тело засыпает и не считается, пока его не толкнут или не тронут то, на чём оно лежит.
+// Чем касания давят на каждую капсулу, тело помнит: по этому видно, на что оно опирается и что гнёт.
 const G = 9.8;
 const STEP = 1 / 120;      // с — шаг расчёта
 const PASSES = 10;         // столько раз за шаг проходим по касаниям: иначе стопка тел проседает
@@ -16,7 +19,8 @@ const SLOP = 0.002;        // м — на столько тела могут з�
 const PUSH = 0.25;         // какую долю глубины касания выправляем за шаг
 const MAX_PUSH = 0.6;      // м/с — глубоко зашедшие тела расходятся не быстрее
 const ROLL = 5;            // 1/с — как быстро трение качения (трава, земля) гасит вращение лежащего тела
-const SLEEP_V = 0.05, SLEEP_W = 0.2, SLEEP_T = 0.6; // медленнее этого дольше SLEEP_T — уснуло
+const SLEEP_V = 0.05, SLEEP_T = 0.6; // м/с: все точки тела медленнее этого дольше SLEEP_T — уснуло
+const LOAD_T = 0.1;        // с — за столько нагрузка на капсулу догоняет толчки касаний: они скачут от шага к шагу
 const CELL = 0.5;          // м — клетка сетки, по которой ищем капсулы веток рядом с телом
 const NEAR = 0.05;         // м — так близко к тому, что сдвинулось, спящее тело просыпается
 
@@ -30,7 +34,8 @@ const _m = new THREE.Matrix4(), _r = new THREE.Matrix3();
 export class Body {
   // object — что двигаем: его начало — центр тяжести тела. mass — кг, inertia — момент инерции вокруг
   // центра тяжести в осях тела, position и quaternion — где центр тяжести и как тело повёрнуто
-  // в осях мира, capsules — форма в осях тела: [{ a, b, r }].
+  // в осях мира, capsules — форма в осях тела: [{ a, b, r, soft, src }]: soft — податливость у концов a и b
+  // (нет — капсула твёрдая), src — откуда капсула (тело его не трогает).
   constructor(object, { mass, inertia, position, quaternion, capsules }) {
     this.object = object;
     this.invMass = 1 / mass;
@@ -42,8 +47,10 @@ export class Body {
     this.spin = new THREE.Vector3();
     // Толчок, которым расталкиваем зашедшие друг в друга тела: сдвигает их, но скорости им не даёт.
     this.shove = { velocity: new THREE.Vector3(), spin: new THREE.Vector3() };
-    this.capsules = capsules.map(({ a, b, r }) => ({
-      a, b, r, ball: a.equals(b), A: new THREE.Vector3(), B: new THREE.Vector3(), low: new THREE.Vector3(), high: new THREE.Vector3(),
+    // force, torque — чем на капсулу давят касания: сила и её момент вокруг центра тяжести, в осях тела.
+    this.capsules = capsules.map(({ a, b, r, soft = null, src }) => ({
+      a, b, r, soft, src, ball: a.equals(b), A: new THREE.Vector3(), B: new THREE.Vector3(), low: new THREE.Vector3(), high: new THREE.Vector3(),
+      force: new THREE.Vector3(), torque: new THREE.Vector3(), stepForce: new THREE.Vector3(), stepTorque: new THREE.Vector3(),
     }));
     this.reach = Math.max(...capsules.map((c) => Math.max(c.a.length(), c.b.length()) + c.r));
     this.low = new THREE.Vector3(); // рамка всех капсул
@@ -87,6 +94,12 @@ export class World {
 
   add(body) {
     this.bodies.push(body);
+  }
+
+  // Набора больше нет: то, что на нём лежало, просыпается.
+  unfix(set) {
+    this.sets.splice(this.sets.indexOf(set), 1);
+    this.rouse(set);
   }
 
   remove(body) {
@@ -179,8 +192,8 @@ export class World {
     const contacts = [];
     awake.forEach((b, i) => {
       for (const c of b.capsules) {
-        ground(b, c.A, c.r, contacts);
-        if (!c.ball) ground(b, c.B, c.r, contacts);
+        ground(b, c, c.A, contacts);
+        if (!c.ball) ground(b, c, c.B, contacts);
       }
       for (const set of this.sets) if (overlap(b.low, b.high, set.span)) for (const c of b.capsules) against(b, c, set, contacts);
       for (let k = i + 1; k < awake.length; k++) pair(b, awake[k], contacts);
@@ -189,7 +202,17 @@ export class World {
     for (const c of contacts) prepare(c, h);
     for (let pass = 0; pass < PASSES; pass++) for (const c of contacts) solve(c);
     for (let pass = 0; pass < PASSES; pass++) for (const c of contacts) shove(c);
-    for (const b of awake) settle(b, h);
+    for (const c of contacts) bear(c, h);
+    const k = 1 - Math.exp(-h / LOAD_T);
+    for (const b of awake) {
+      for (const c of b.capsules) {
+        c.force.lerp(c.stepForce, k);
+        c.torque.lerp(c.stepTorque, k);
+        c.stepForce.set(0, 0, 0);
+        c.stepTorque.set(0, 0, 0);
+      }
+      settle(b, h);
+    }
   }
 }
 
@@ -256,24 +279,33 @@ function near(set, b) {
   return close;
 }
 
-// Касание тела a с телом b (или с неподвижным, если b — null) в точке p; нормаль n — от b к a, depth —
-// на сколько зашли друг в друга (меньше нуля — сколько ещё до касания). surface — скорость того, обо что бьёмся.
-function contact(a, b, p, n, depth, surface, contacts) {
+// Касание капсулы ca тела a с капсулой cb тела b (или с неподвижным, если b — null) в точке p; нормаль n —
+// от b к a, depth — на сколько зашли друг в друга (меньше нуля — сколько ещё до касания). surface — скорость
+// того, обо что бьёмся.
+function contact(a, b, p, n, depth, surface, contacts, ca, cb = null) {
   if (depth > -SLOP) {
     a.touching = true;
     if (b) b.touching = true;
   }
   contacts.push({
-    a, b, p: p.clone(), n: n.clone(), depth, surface, ra: new THREE.Vector3(), rb: new THREE.Vector3(),
+    a, b, ca, cb, p: p.clone(), n: n.clone(), depth, surface, soft: give(ca, p) + give(cb, p), ra: new THREE.Vector3(), rb: new THREE.Vector3(),
     t1: new THREE.Vector3(), t2: new THREE.Vector3(),
   });
 }
 
-// Конец капсулы у земли.
-function ground(b, end, r, contacts) {
-  const depth = r - end.y;
+// Податливость капсулы c у точки p — между податливостью её концов.
+function give(c, p) {
+  if (!c?.soft) return 0;
+  const ab = _w.copy(c.B).sub(c.A), len2 = ab.lengthSq();
+  const k = len2 > 0 ? THREE.MathUtils.clamp(_v.copy(p).sub(c.A).dot(ab) / len2, 0, 1) : 0;
+  return THREE.MathUtils.lerp(c.soft[0], c.soft[1], k);
+}
+
+// Конец end капсулы c у земли.
+function ground(b, c, end, contacts) {
+  const depth = c.r - end.y;
   if (depth < -b.sweep) return;
-  contact(b, null, _p.copy(end).addScaledVector(UP, depth / 2 - r), UP, depth, null, contacts);
+  contact(b, null, _p.copy(end).addScaledVector(UP, depth / 2 - c.r), UP, depth, null, contacts, c);
 }
 
 // Тела a и o: каждая пара их капсул, чьи рамки пересеклись. Сначала у каждого — капсулы в рамке другого:
@@ -289,7 +321,7 @@ function pair(a, o, contacts) {
       if (!overlap(c.low, c.high, d)) continue;
       const depth = meet(c.A, c.B, c.r, d.A, d.B, d.r, a.sweep + o.sweep);
       if (depth === null) continue;
-      contact(a, b, _p, _n, depth, null, contacts);
+      contact(a, b, _p, _n, depth, null, contacts, c, b && d);
       if (o.asleep && a.velocity.length() > 2 * SLEEP_V) o.wake();
     }
   }
@@ -319,7 +351,7 @@ function against(b, c, set, contacts) {
     _p.applyMatrix4(set.matrix);
     _n.applyMatrix3(set.turn).normalize();
     const surface = set.moved ? _p.clone().sub(_s.copy(_p).applyMatrix4(set.back)).divideScalar(set.dt) : null;
-    contact(b, null, _p, _n, depth, surface, contacts);
+    contact(b, null, _p, _n, depth, surface, contacts, c);
   };
   for (const solid of set.solids) {
     if (!overlap(low, high, solid.box)) continue;
@@ -368,7 +400,7 @@ function closest(p1, q1, p2, q2, c1, c2) {
 }
 
 // Насколько единичный толчок вдоль d в точке r тела меняет скорость этой точки вдоль d: 1/m + d·((I⁻¹(r×d))×r).
-function give(body, r, d) {
+function response(body, r, d) {
   if (!body) return 0;
   _u.copy(r).cross(d).applyMatrix3(body.world).cross(r);
   return body.invMass + _u.dot(d);
@@ -405,22 +437,33 @@ function prepare(c, h) {
   if (c.b) c.rb.copy(c.p).sub(c.b.position);
   c.t1.copy(Math.abs(c.n.x) < 0.9 ? _v.set(1, 0, 0) : _v.set(0, 0, 1)).cross(c.n).normalize();
   c.t2.copy(c.n).cross(c.t1);
-  c.kn = 1 / (give(c.a, c.ra, c.n) + give(c.b, c.rb, c.n));
-  c.k1 = 1 / (give(c.a, c.ra, c.t1) + give(c.b, c.rb, c.t1));
-  c.k2 = 1 / (give(c.a, c.ra, c.t2) + give(c.b, c.rb, c.t2));
+  c.kn = 1 / (response(c.a, c.ra, c.n) + response(c.b, c.rb, c.n));
+  c.k1 = 1 / (response(c.a, c.ra, c.t1) + response(c.b, c.rb, c.t1));
+  c.k2 = 1 / (response(c.a, c.ra, c.t2) + response(c.b, c.rb, c.t2));
+  c.jn = c.j1 = c.j2 = c.jp = 0;
+  c.gamma = 0;
+  c.ks = c.kn;
+  if (c.soft && c.depth > 0) {
+    // Пружина k = 1/soft с критическим гашением: в покое толкает с силой k·depth (Катто, «Мягкие связи»).
+    const k = 1 / c.soft, d = 2 * Math.sqrt(k * c.kn) + h * k;
+    c.gamma = 1 / (h * d);
+    c.ks = 1 / (1 / c.kn + c.gamma);
+    c.target = (k * c.depth) / d;
+    c.goal = 0;
+    return;
+  }
   const vn = relative(c, _v).dot(c.n);
   const bounce = vn < -BOUNCE_FROM ? -BOUNCE * vn : 0;
   const reaches = c.depth >= 0 || vn * h < c.depth;
   c.target = (reaches && bounce) || Math.min(c.depth, 0) / h;
   c.goal = Math.min(MAX_PUSH, (PUSH * Math.max(0, c.depth - SLOP)) / h);
-  c.jn = c.j1 = c.j2 = c.jp = 0;
 }
 
 // Касание гасит сближение сверх target, трение — скольжение, не сильнее FRICTION от прижатия
 // в какую сторону ни скользи: толчок трения по обеим осям вместе — не длиннее этого.
 function solve(c) {
   const vn = relative(c, _v).dot(c.n);
-  const jn = Math.max(0, c.jn + (c.target - vn) * c.kn);
+  const jn = Math.max(0, c.jn + (c.target - vn - c.gamma * c.jn) * c.ks);
   apply(c, _j.copy(c.n).multiplyScalar(jn - c.jn));
   c.jn = jn;
   relative(c, _v);
@@ -444,6 +487,21 @@ function shove(c) {
   c.jp = jp;
 }
 
+// Касание за шаг h толкнуло тело a: сила — толчок за шаг, ложится на его капсулу (в осях тела), а на
+// капсулу тела b — та же сила обратно.
+function bear(c, h) {
+  _j.copy(c.n).multiplyScalar(c.jn).addScaledVector(c.t1, c.j1).addScaledVector(c.t2, c.j2).divideScalar(h);
+  load(c.a, c.ca, c.ra, _j);
+  if (c.b) load(c.b, c.cb, c.rb, _j.negate());
+}
+
+function load(body, capsule, r, f) {
+  _q.copy(body.quaternion).invert();
+  _u.copy(f).applyQuaternion(_q);
+  capsule.stepForce.add(_u);
+  capsule.stepTorque.add(_v.copy(r).applyQuaternion(_q).cross(_u));
+}
+
 // Сдвинуть и повернуть тело на шаг h; лежащее катится всё медленнее; долго почти неподвижное засыпает.
 function settle(b, h) {
   b.position.addScaledVector(b.velocity, h).addScaledVector(b.shove.velocity, h);
@@ -457,7 +515,7 @@ function settle(b, h) {
   b.shove.spin.set(0, 0, 0);
   if (b.touching) b.spin.multiplyScalar(Math.exp(-ROLL * h));
   b.place();
-  b.still = b.velocity.length() < SLEEP_V && b.spin.length() < SLEEP_W ? b.still + h : 0;
+  b.still = b.velocity.length() + b.spin.length() * b.reach < SLEEP_V ? b.still + h : 0;
   if (b.still > SLEEP_T) {
     b.asleep = true;
     b.velocity.set(0, 0, 0);

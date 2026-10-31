@@ -220,7 +220,8 @@ export function growSkeleton(shape, zone, height) {
 }
 
 // Древесина оси part.axis от part.from до part.to кусками по STEP: each(масса, середина, длина, радиус,
-// касательная). То, что сидит внутри родителя, и ствол ниже зоны (его считают кубики) не в счёт.
+// касательная, номер точки оси, с которой кусок начинается). То, что сидит внутри родителя, и ствол ниже зоны
+// (его считают кубики) не в счёт.
 export function segments({ axis: a, from = 0, to = a.len }, zone, each) {
   const inside = a.parent ? section(a.parent, a.attach).r : 0;
   for (let i = 0; i < a.points.length - 1; i++) {
@@ -229,7 +230,7 @@ export function segments({ axis: a, from = 0, to = a.len }, zone, each) {
     if (s1 <= s0 || (a.stem !== undefined && q.p.y < zone)) continue;
     const k0 = (s0 - q.s) / (next.s - q.s), k1 = (s1 - q.s) / (next.s - q.s);
     const mid = q.p.clone().lerp(next.p, (k0 + k1) / 2);
-    each(DENSITY * Math.PI * q.r * q.r * (s1 - s0), mid, s1 - s0, q.r, q.t);
+    each(DENSITY * Math.PI * q.r * q.r * (s1 - s0), mid, s1 - s0, q.r, q.t, i);
   }
 }
 
@@ -252,47 +253,64 @@ export function girth(a, q, az) {
 // дуги, поэтому у отпиленного куска кора та же, что была на дереве. Толстый конец оси (сломанная вершина,
 // сухой пенёк) закрыт крышкой из коры, а где ось перепилили (cutFrom, cutTo) — торцом с кольцами:
 // это вторая группа граней, со своим материалом. Кольца по торцу — как на срезе кубиков: по кругу
-// доля оборота, от коры (0) к сердцевине (1).
+// доля оборота, от коры (0) к сердцевине (1). Трубка каждого куска строится раз: кусок не меняется, а когда
+// ось перепиливают, на её месте появляются новые куски, — так перепиленная крона одевается быстро.
+const tubes = new WeakMap();
 export function barkGeometry(parts) {
-  const pos = [], normal = [], uv = [], index = [], grain = [];
-  for (const { axis: a, from = 0, to = a.len, cutFrom, cutTo } of parts) {
-    const r0 = a.points[0].r;
-    const sides = THREE.MathUtils.clamp(Math.ceil((2 * Math.PI * r0) / 0.03), 5, 32);
-    const every = r0 < 0.02 ? 2 : 1;
-    const step = (q, i) => i % every === 0 || i === a.points.length - 1;
-    a.mean ??= a.points.filter(step).reduce((m, q) => m + q.r, 0) / a.points.filter(step).length;
-    const rings = [pointAt(a, from), ...a.points.filter((q, i) => q.s > from + 1e-6 && q.s < to - 1e-6 && step(q, i)), pointAt(a, to)];
-    const start = pos.length / 3;
-    rings.forEach((q, k) => {
-      const world = (az) => Math.atan2(q.n.z * Math.cos(az) + q.b.z * Math.sin(az), q.n.x * Math.cos(az) + q.b.x * Math.sin(az));
-      const turn = Math.sign(Math.sin(world(0.1) - world(0)));
-      for (let j = 0; j <= sides; j++) {
-        const az = (j / sides) * 2 * Math.PI;
-        const out = q.n.clone().multiplyScalar(Math.cos(az)).addScaledVector(q.b, Math.sin(az));
-        pos.push(...q.p.clone().addScaledVector(out, girth(a, q, az)).toArray());
-        normal.push(...out.toArray());
-        if (a.bark) uv.push(((world(0) + turn * az) * a.bark.radius) / BARK_TILE, (q.s - a.bark.s + a.bark.y) / BARK_TILE);
-        else uv.push((az * a.mean) / BARK_TILE, q.s / BARK_TILE);
-        if (k && j < sides) {
-          const c = start + k * (sides + 1) + j, p = c - (sides + 1);
-          index.push(p, p + 1, c, p + 1, c + 1, c);
-        }
-      }
-    });
-    const end = rings[rings.length - 1];
-    if (cutTo) cap(a, end, 1, sides);
-    else if (end.r > 0.012) {
-      const c = pos.length / 3, last = c - (sides + 1);
-      pos.push(...end.p.toArray());
-      normal.push(...end.t.toArray());
-      uv.push(0, 0);
-      for (let j = 0; j < sides; j++) index.push(last + j, last + j + 1, c);
-    }
-    if (cutFrom) cap(a, rings[0], -1, sides);
+  const list = parts.map((part) => {
+    if (!tubes.has(part)) tubes.set(part, tube(part));
+    return tubes.get(part);
+  });
+  const size = (key) => list.reduce((n, t) => n + t[key].length, 0);
+  const pos = new Float32Array(size('pos')), normal = new Float32Array(size('pos')), uv = new Float32Array(size('uv'));
+  const bark = size('index'), index = new Uint32Array(bark + size('grain'));
+  let v = 0, i = 0, g = bark;
+  for (const t of list) {
+    pos.set(t.pos, v * 3);
+    normal.set(t.normal, v * 3);
+    uv.set(t.uv, v * 2);
+    for (const k of t.index) index[i++] = k + v;
+    for (const k of t.grain) index[g++] = k + v;
+    v += t.pos.length / 3;
   }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geometry.setIndex(new THREE.BufferAttribute(index, 1));
+  geometry.addGroup(0, bark, 0);
+  geometry.addGroup(bark, index.length - bark, 1);
+  return geometry;
+}
+
+// Трубка одного куска оси: точки, нормали, uv и треугольники коры (index) и торцов (grain) — номера свои.
+function tube({ axis: a, from = 0, to = a.len, cutFrom, cutTo }) {
+  const pos = [], normal = [], uv = [], index = [], grain = [];
+  const r0 = a.points[0].r;
+  const sides = THREE.MathUtils.clamp(Math.ceil((2 * Math.PI * r0) / 0.03), 5, 32);
+  const every = r0 < 0.02 ? 2 : 1;
+  const step = (q, i) => i % every === 0 || i === a.points.length - 1;
+  a.mean ??= a.points.filter(step).reduce((m, q) => m + q.r, 0) / a.points.filter(step).length;
+  const rings = [pointAt(a, from), ...a.points.filter((q, i) => q.s > from + 1e-6 && q.s < to - 1e-6 && step(q, i)), pointAt(a, to)];
+  rings.forEach((q, k) => {
+    const world = (az) => Math.atan2(q.n.z * Math.cos(az) + q.b.z * Math.sin(az), q.n.x * Math.cos(az) + q.b.x * Math.sin(az));
+    const turn = Math.sign(Math.sin(world(0.1) - world(0)));
+    for (let j = 0; j <= sides; j++) {
+      const az = (j / sides) * 2 * Math.PI;
+      const out = q.n.clone().multiplyScalar(Math.cos(az)).addScaledVector(q.b, Math.sin(az));
+      pos.push(...q.p.clone().addScaledVector(out, girth(a, q, az)).toArray());
+      normal.push(...out.toArray());
+      if (a.bark) uv.push(((world(0) + turn * az) * a.bark.radius) / BARK_TILE, (q.s - a.bark.s + a.bark.y) / BARK_TILE);
+      else uv.push((az * a.mean) / BARK_TILE, q.s / BARK_TILE);
+      if (k && j < sides) {
+        const c = k * (sides + 1) + j, p = c - (sides + 1);
+        index.push(p, p + 1, c, p + 1, c + 1, c);
+      }
+    }
+  });
   // Торец пропила смотрит вдоль оси наружу (out = +1 у конца, −1 у начала). У каждого треугольника своя
   // середина: в полярных координатах середина — целая строка картинки, и общая растянула бы её веером.
-  function cap(a, q, out, sides) {
+  const cap = (q, out) => {
     const n = q.t.clone().multiplyScalar(out).toArray();
     for (let j = 0; j < sides; j++) {
       const c = pos.length / 3;
@@ -308,15 +326,18 @@ export function barkGeometry(parts) {
       if (out > 0) grain.push(c + 1, c + 2, c);
       else grain.push(c + 2, c + 1, c);
     }
+  };
+  const end = rings[rings.length - 1];
+  if (cutTo) cap(end, 1);
+  else if (end.r > 0.012) {
+    const c = pos.length / 3, last = c - (sides + 1);
+    pos.push(...end.p.toArray());
+    normal.push(...end.t.toArray());
+    uv.push(0, 0);
+    for (let j = 0; j < sides; j++) index.push(last + j, last + j + 1, c);
   }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  geometry.setIndex([...index, ...grain]);
-  geometry.addGroup(0, index.length, 0);
-  geometry.addGroup(index.length, grain.length, 1);
-  return geometry;
+  if (cutFrom) cap(rings[0], -1);
+  return { pos: Float32Array.from(pos), normal: Float32Array.from(normal), uv: Float32Array.from(uv), index: Uint32Array.from(index), grain: Uint32Array.from(grain) };
 }
 
 // Листва — карточки из атласа maple-leaves.png (собирает tools/tufts.py): веточка с листьями, срез
