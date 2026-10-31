@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { tiles } from './surface.js';
 import { generator } from './random.js';
+import { wind } from './wind.js';
 
 // Небо — акварельная растяжка на сфере изнутри: нижний край картинки на горизонте, верхний в зените,
 // по кругу она повторяется дважды (сама бесшовная). Ниже горизонта — её нижний край.
@@ -8,8 +9,17 @@ import { generator } from './random.js';
 // и дальше колец панорамы: низкие уходят за горы. Краски неба — как нарисованы: тональная кривая
 // сцены их не трогает.
 const RADIUS = 150, DISCS = 149, CLOUDS = 146;
-const CLOUD_COUNT = 20;
 const deg = THREE.MathUtils.degToRad;
+
+// Облака — слой на высоте LAYER над двором, квадрат со стороной 2·SPREAD, их несёт ветер двора.
+// Каждое облако считаем там, где оно есть, а рисуем на небе в том же направлении от двора, в CLOUDS м,
+// размером во столько же раз меньше, во сколько ближе: перспектива сама делает облака над головой
+// крупными и быстрыми, а у горизонта мелкими, медленными и густыми. Ушедшее за край квадрата
+// возвращается с другого края, а к краю облака тают — там, где они уже за горами.
+const LAYER = 1500, SPREAD = 10000, FADE = 0.6; // м; таять начинают с FADE·SPREAD
+const CLOUD_COUNT = 160, CLOUD_SPEED = 12;       // штук на весь слой; м/с
+const CLOUD_WIDTH = [700, 2000];                // м
+const clouds = [];
 
 // Картинка на небе — плоскость лицом к середине двора. Не спрайт: спрайт развёрнут вдоль экрана, и край
 // большого облака сбоку экрана подходил бы ближе колец панорамы и вылезал перед горами.
@@ -36,27 +46,42 @@ export async function makeSky(sun) {
 
   // Луна в первой четверти: стоит на 90° восточнее солнца, левее его, и освещённым правым боком смотрит на него.
   const moon = sun.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2).setY(0.4).normalize();
-  sky.add(picture(sunMap, sun, DISCS, deg(5)), picture(moonMap, moon, DISCS, deg(4)));
+  for (const disc of [picture(sunMap, sun, DISCS, deg(5)), picture(moonMap, moon, DISCS, deg(4))]) {
+    disc.renderOrder = -2 * SPREAD; // дальше любого облака: облако набегает на солнце, а не наоборот
+    sky.add(disc);
+  }
 
-  // Облака вразброс по кругу, у горизонта гуще и мельче — там они дальше. Солнце и луну не закрывают:
-  // тень от солнца лежит на дворе всегда. Порядок облаков и картинок у неба свой, как у забора.
+  // Порядок картинок у облаков свой, как у забора: зерно деревьев не сбивается.
   const aspects = await (await fetch('assets/textures/clouds.json')).json();
   const maps = tiles(aspects.map((_, i) => `assets/textures/cloud-${i + 1}.webp`));
   maps.forEach((m) => { m.wrapS = m.wrapT = THREE.ClampToEdgeWrapping; });
   const rnd = generator(11);
-  const order = maps.map((_, i) => i);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(rnd() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
-  }
   for (let i = 0; i < CLOUD_COUNT; i++) {
-    const height = deg(4 + 30 * rnd() ** 1.6);
-    const around = ((i + 0.7 * rnd()) / CLOUD_COUNT) * 2 * Math.PI;
-    const direction = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - height, around);
-    const width = deg(THREE.MathUtils.lerp(16, 40, height / deg(34)) * (0.8 + 0.4 * rnd()));
-    if (direction.angleTo(sun) < width * 0.6 + deg(6) || direction.angleTo(moon) < width * 0.6 + deg(4)) continue;
-    const n = order[i % order.length];
-    sky.add(picture(maps[n], direction, CLOUDS, width, aspects[n]));
+    const n = i % maps.length;
+    const mesh = picture(maps[n], new THREE.Vector3(0, 1, 0), CLOUDS, 1, aspects[n]);
+    const width = THREE.MathUtils.lerp(...CLOUD_WIDTH, rnd());
+    clouds.push({ mesh, width, x: (rnd() * 2 - 1) * SPREAD, z: (rnd() * 2 - 1) * SPREAD });
+    sky.add(mesh);
   }
+  driftClouds(0);
   return sky;
+}
+
+const wrap = (v) => ((((v + SPREAD) % (2 * SPREAD)) + 2 * SPREAD) % (2 * SPREAD)) - SPREAD;
+const to = new THREE.Vector3();
+export function driftClouds(dt) {
+  for (const cloud of clouds) {
+    cloud.x = wrap(cloud.x + wind.dir.x * CLOUD_SPEED * dt);
+    cloud.z = wrap(cloud.z + wind.dir.z * CLOUD_SPEED * dt);
+    const far = Math.hypot(cloud.x, cloud.z), fade = 1 - THREE.MathUtils.smoothstep(far, FADE * SPREAD, SPREAD);
+    const { mesh } = cloud;
+    mesh.visible = fade > 0;
+    if (!mesh.visible) continue;
+    const distance = to.set(cloud.x, LAYER, cloud.z).length();
+    mesh.position.copy(to).multiplyScalar(CLOUDS / distance);
+    mesh.scale.setScalar(cloud.width / distance);
+    mesh.lookAt(0, 0, 0);
+    mesh.material.opacity = fade;
+    mesh.renderOrder = -distance; // ближнее облако заслоняет дальнее
+  }
 }

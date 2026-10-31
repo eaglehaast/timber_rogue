@@ -6,7 +6,7 @@ import {
 import { struck, wreck, pushOut } from './yard.js';
 import { makeFence, YARD, HEIGHTS, GAPS, TONES, BOARD_WIDTHS, AGES, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
 import { makePanorama } from './panorama.js';
-import { makeSky } from './sky.js';
+import { makeSky, driftClouds } from './sky.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
@@ -1014,6 +1014,7 @@ function update(dt) {
 let shot = SHOTS.findIndex((s) => s.name === recall('shot', SHOTS.map((s) => s.name)));
 const swap = { kind: '', t: 1, position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
 function frame(dt) {
+  driftClouds(dt);
   const { low, back } = SHOTS[shot];
   const kind = `${shot} ${!!saw}`;
   if (kind !== swap.kind) {
