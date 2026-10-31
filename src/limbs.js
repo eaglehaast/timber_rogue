@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { barkGeometry, leafMesh, segments, section, pointAt, girth } from './maple.js';
-import { TENSILE, COMPRESSIVE, E } from './physics.js';
+import { TENSILE, COMPRESSIVE, SHEAR, E, SPLIT_MIN } from './physics.js';
 
 // Ветка, которую можно отпилить: кусок скелета клёна (maple.js) — куски осей parts ({ axis, from, to,
 // cutFrom, cutTo }, родитель раньше детей) и листья cards на них. Крона ствола, нижняя ветвь, отпиленный
@@ -198,14 +198,17 @@ export class Limb {
   // Перепилить ось axis на длине дуги s: всё, что за пропилом, — новая ветка (её и отдаём), здесь остаётся
   // то, что до него. За пропилом — дальше по оси и всё, что растёт на ней дальше s. Пропилы и листья
   // уходят с тем куском, на котором сидят. Обе ветки надо одеть заново (dress).
-  split(axis, s) {
+  // chair — раскол вдоль (Kerf.tongue): его полоса уходит с этим куском языком (tongue), а в дальнем на её
+  // месте жёлоб (groove). Это малая доля куска: в весе и форме для столкновений их нет.
+  split(axis, s, chair = null) {
     const past = beyond(axis, s);
     const near = [], far = [];
     for (const part of this.parts) {
       if (part.axis !== axis) (past(part.axis) ? far : near).push(part);
       else {
-        if (s > part.from) near.push({ ...part, to: s, cutTo: true });
-        far.push({ ...part, from: Math.max(s, part.from), cutFrom: s > part.from || part.cutFrom });
+        const tear = chair && { ...chair, to: Math.min(chair.to, part.to) };
+        if (s > part.from) near.push({ ...part, to: s, cutTo: true, tongue: tear });
+        far.push({ ...part, from: Math.max(s, part.from), cutFrom: s > part.from || part.cutFrom, groove: tear ?? part.groove });
       }
     }
     const piece = new Limb(far, this.cards.filter((c) => past(c.axis, c.s)), this);
@@ -432,7 +435,11 @@ export class Kerf {
   // Линия — поперёк момента вокруг середины того, что держит; где она встанет, ищем по пределу в осях
   // (сила, момент): двигая линию через клетки, обходим его выпуклый многоугольник, и нагрузка на луче
   // из нуля выходит из него на доле 1/ratio. closing — клетки щели, что при этом на сжатой стороне:
-  // их сомкнёт; пусто — щель только раскрывается. squeezed — целое сечение сжато всё: зажмёт с любой стороны.
+  // их сомкнёт; пусто — щель только раскрывается. Смыкается щель, только если её устье — дальний
+  // от нейтральной линии край — на сжатой стороне. Если туда заходит лишь кончик пропила (пилили
+  // с растянутой стороны чуть наискось), он у самой линии: чтобы сомкнуться, сечению пришлось бы сильно
+  // повернуться, а растянутый недопил рвётся раньше. pulled — растянутые клетки недопила (их рвёт), d — куда
+  // смотрит линия (в осях пропила). squeezed — целое сечение сжато всё: зажмёт с любой стороны.
   strain(F, M) {
     const N = F.dot(this.normal), { n, b } = this.point, A = this.cell ** 2, C = COMPRESSIVE * A;
     const cx = (id) => this.x(id % this.N), cy = (id) => this.x(Math.floor(id / this.N));
@@ -449,7 +456,7 @@ export class Kerf {
     }
     const bend = Math.hypot(M.dot(n), M.dot(b));
     const squeezed = N / (Math.PI * this.r ** 2) + (4 * bend) / (Math.PI * this.r ** 3) < 0;
-    if (!bear.length || !(N || bend)) return { ratio: bear.length ? 0 : Infinity, closing: [], squeezed };
+    if (!bear.length || !(N || bend)) return { ratio: bear.length ? 0 : Infinity, closing: [], squeezed, pulled: [] };
     ox /= bear.length;
     oy /= bear.length;
     let dx = -M.dot(b) - N * ox, dy = M.dot(n) - N * oy;
@@ -478,8 +485,34 @@ export class Kerf {
       }
     }
     const { lambda, at, up } = best;
-    const closing = open.filter((id) => (up ? at - u[id] : u[id] - at) > this.cell / 2);
-    return { ratio: 1 / lambda, closing, squeezed };
+    const pressed = (id) => (up ? at - u[id] : u[id] - at); // насколько клетка за линией на сжатой стороне
+    const mouth = open.reduce((m, id) => (Math.abs(pressed(id)) > Math.abs(pressed(m)) ? id : m), open[0]);
+    const closing = open.length && pressed(mouth) > 0 ? open.filter((id) => pressed(id) > this.cell / 2) : [];
+    const pulled = bear.filter((id) => !this.cut[id] && (up ? u[id] > at : u[id] < at));
+    return { ratio: 1 / lambda, closing, squeezed, pulled, d: [dx, dy] };
+  }
+
+  // Раскол вдоль (barber chair). Растянутые волокна недопила pulled рвутся не поперёк: они тянут с силой
+  // T = TENSILE·площадь и вырывают свой пучок из дальнего куска, как отщеп из ствола (splitLength в physics.js).
+  // Пучок скалывается по граням, где граничит с остальной древесиной (кора снаружи ничего не держит),
+  // на длину T / (SHEAR·периметр) — пока площади хватит, чтобы передать силу. Полоса толщиной t уходит
+  // на ~3t, а тонкий недопил между встречными пропилами рвётся поперёк. Отдаёт, где раскол: полосу поперёк
+  // d (в осях пропила) от lo до hi от оси на длине оси от from до to — или null, если он короче SPLIT_MIN.
+  tongue(pulled, d) {
+    const mine = new Set(pulled), N = this.N;
+    let faces = 0, lo = Infinity, hi = -Infinity;
+    for (const id of pulled) {
+      const i = id % N, j = (id - i) / N;
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ii = i + di, jj = j + dj;
+        if (ii >= 0 && jj >= 0 && ii < N && jj < N && this.wood[jj * N + ii] && !mine.has(jj * N + ii)) faces++;
+      }
+      const u = this.x(i) * d[0] + this.x(j) * d[1];
+      lo = Math.min(lo, u);
+      hi = Math.max(hi, u);
+    }
+    const L = faces ? (TENSILE * this.cell * pulled.length) / (SHEAR * faces) : 0;
+    return L < SPLIT_MIN ? null : { d, lo: lo - this.cell / 2, hi: hi + this.cell / 2, from: this.s, to: this.s + L };
   }
 
   // Недопил смяло: щель там, где он сжат, сомкнулась.

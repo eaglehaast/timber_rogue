@@ -15,7 +15,7 @@ const SMOOTH = 3 * VOXEL; // м — с такой округи кубиков б
 // слои идут полосами во всю длину стенки, у коры — кромка камбия. Поверх них — рельеф рваных волокон:
 // яркость картинки-сплита, плитка SPLIT_W × SPLIT_H метров, вытянутая по высоте, как сами волокна.
 // Торец и стенка смешиваются по нормали: чем круче грань, тем больше рельефа волокон.
-const SPLIT_W = 0.3, SPLIT_H = 1.2;
+export const SPLIT_W = 0.3, SPLIT_H = 1.2;
 const FIBRE = 0.6; // насколько рельеф волокон темнит и светлит полосы колец
 const PITH = 0.5; // сторона квадрата сердцевины — доля радиуса ствола
 const loader = new THREE.TextureLoader();
@@ -77,6 +77,7 @@ export function dressWood() {
     Object.assign(shader.uniforms, uniforms);
     woodShader(shader);
   };
+  material.userData.fibres = uniforms.splitMap.value; // им же одеты стенки раскола у веток
   return material;
 }
 
