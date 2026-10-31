@@ -154,6 +154,7 @@ async function loadPack(name) {
       plate: new THREE.Mesh(plateGeometry(bar), plateMaterial),
       chain: new THREE.Mesh(chainGeometry(bar), chainMaterial),
     }])),
+    tile: CHAIN.tile,
     hands: BODY.hands.map(([px, py]) => new THREE.Vector3(bodyX(px), bodyY(py), 0)),
     lamp: new THREE.Vector3(bodyX(BODY.lamp[0]), bodyY(BODY.lamp[1]), 0),
     rim: body.rim,
@@ -188,12 +189,31 @@ export function dressSaw(saw, name, bar) {
     hand.name = 'hand';
     body.add(hand);
   }
-  saw.add(body, pack.bars[bar].plate.clone(), pack.bars[bar].chain.clone());
+  const chain = pack.bars[bar].chain.clone();
+  chain.name = 'chain';
+  saw.add(body, pack.bars[bar].plate.clone(), chain);
   saw.traverse((part) => { part.layers.mask = saw.layers.mask; });
   saw.userData.pack = name;
   saw.userData.bar = bar;
   saw.userData.rim = pack.rim.map((p) => p.clone().setX(p.x + bar / 2));
   return saw;
+}
+
+// Цепь бежит, пока жмёшь курок: по кромке, что идёт в древесину, — от носа к мотору, по обратной — к носу.
+// По ленте цепи это вперёд. Настоящая цепь мчится метров пятнадцать в секунду, и глаз видит её размытой;
+// экран же показывает кадры, и звено, сдвинутое за кадр больше чем на полшага, кажется стоящим или бегущим
+// назад, как колёса в кино. Поэтому за кадр цепь сдвигается на треть звена (на картинках они чаще 9 мм).
+const LINK = 0.009;
+export function runChain(saw) {
+  const { map } = saw.getObjectByName('chain').material;
+  map.offset.x = (map.offset.x - LINK / 3 / packs[saw.userData.pack].tile) % 1;
+}
+
+// Картинка цепи у пил одного комплекта общая. Брошенной пиле — своя: её цепь стоит, пока бежит цепь в руках.
+export function stopChain(saw) {
+  const chain = saw.getObjectByName('chain');
+  chain.material = chain.material.clone();
+  chain.material.map = chain.material.map.clone();
 }
 
 export const makeSaw = (name = PACKS[0], bar = BARS[0]) => dressSaw(new THREE.Group(), name, bar);

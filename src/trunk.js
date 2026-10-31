@@ -522,6 +522,7 @@ export class TrunkVoxels {
 
   // Вырезает щель пилы: кубики, чьи центры лежат в плоскости полотна (толщина — один кубик без дыр
   // при любом наклоне), от from до to по ходу пилы от origin и в пределах длины шины.
+  // Возвращает, сколько древесины выпилено (м³).
   carve({ origin, along, side, normal }, from, to, barLength) {
     const halfT = 0.5 * VOXEL * (Math.abs(normal.x) + Math.abs(normal.y) + Math.abs(normal.z));
     // Плоскость пологая (наклон не больше 60°): в каждой колонке её пересекают единицы кубиков —
@@ -532,6 +533,7 @@ export class TrunkVoxels {
     const nx = normal.x * up, ny = normal.y * up, nz = normal.z * up;
     const layers = (2 * halfT) / (ny * VOXEL);
     const { n, m } = this;
+    let cut = 0;
     for (let k = 0; k < m; k++) {
       for (let i = 0; i < n; i++) {
         const dx = this.x(i) - origin.x;
@@ -553,9 +555,11 @@ export class TrunkVoxels {
           this.cutHigh = Math.max(this.cutHigh, j);
           this.removed.push(id);
           this.carved = id;
+          cut++;
         }
       }
     }
+    return cut * VOXEL ** 3;
   }
 
   // Куски, которые пропилы отрезали от всего: ни с пнём снизу, ни со стволом сверху не связаны.
