@@ -11,6 +11,7 @@ export const HEIGHTS = [1.5, 1.8, 2.1, 2.4];
 export const GAPS = { узкие: 0.015, средние: 0.03, широкие: 0.055 };
 export const TONES = { 'как на картинке': [1, 1], выгоревший: [0.65, 1.1], 'старый серый': [0.4, 0.9] }; // насыщенность, светлота
 export const POST_RISES = [-0.3, -0.15, 0, 0.15]; // м: верх столба выше (+) или ниже (−) верха досок
+export const BOARD_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м
 export const POST_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м: сторона бруска
 export const COATS = { 'как доски': 0, 'второй слой': 0.45, густо: 0.75, сплошь: 1 };
 export const SHADOWS = { густая: 1, плотная: 0.85, средняя: 0.7, лёгкая: 0.55, прозрачная: 0.4 }; // доля солнца, которую тень отнимает
@@ -21,7 +22,7 @@ const KINDS = 10;
 // Метров на одно повторение картинки вдоль детали: по ширине картинка ложится на доску целиком,
 // а вверх растянута вдвое против своих пропорций, чтобы сучки не повторялись через каждые 30 см.
 const BOARD_SPAN = 0.7, RAIL_SPAN = 1.6;
-const BOARD = 0.1; // м: ширина доски
+const BOARD = 0.1; // м: такую ширину доски изображает картинка — в этом масштабе она ложится на столбы
 
 // Краска меняется на ходу поверх картинки. Тон общий на весь забор: насыщенность и светлота.
 // Прокрас coat — сколько потёртостей закрыто вторым слоем: столбы красят гуще досок.
@@ -120,14 +121,14 @@ function side(a, b) {
 // Штакетник: столбы через 2,5 м, две прожилины, доски по 10 см ровным рядом. Наугад только картинка доски
 // и с какого места она начинается, поэтому забор меняет высоту, не перетасовывая доски.
 // Прожилины прибиты к столбам снаружи, доски — к прожилинам: чем толще столб, тем дальше они от его оси.
-function picket({ length, place }, { height, gap, postRise, postWidth }, rnd, put, gate) {
+function picket({ length, place }, { height, gap, boardWidth, postRise, postWidth }, rnd, put, gate) {
   const nearGate = (s, half) => gate !== undefined && Math.abs(s - gate) < half;
   const r = postWidth / 2, rails = r + 0.026, front = rails + 0.037;
   for (let s = 0; s <= length + 0.01; s += 2.5) if (!nearGate(s, 0.8)) put('post', post(postWidth, height + postRise).applyMatrix4(place(s, 0, 0)));
   for (const y of [0.3, height - 0.45]) put('rail', block(length, 0.08, 0.05, [length / RAIL_SPAN, 1]).applyMatrix4(place(length / 2, rails, y)));
-  for (let s = 0.05; s + BOARD < length - 0.05; s += BOARD + gap) {
-    const mid = s + BOARD / 2, inGate = nearGate(mid, 0.55);
-    put('board', board(BOARD, inGate ? height - 0.17 : height, 0.022, rnd()).applyMatrix4(place(mid, front, inGate ? 0.12 : 0.05)));
+  for (let s = 0.05; s + boardWidth < length - 0.05; s += boardWidth + gap) {
+    const mid = s + boardWidth / 2, inGate = nearGate(mid, 0.55);
+    put('board', board(boardWidth, inGate ? height - 0.17 : height, 0.022, rnd()).applyMatrix4(place(mid, front, inGate ? 0.12 : 0.05)));
   }
   if (gate === undefined) return;
   // Калитка — проём между столбами потолще, её доски держит укосина из угла в угол.
