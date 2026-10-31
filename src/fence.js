@@ -90,17 +90,17 @@ function side(a, b) {
 const BOARD = 0.1;
 function picket({ length, place }, { height, gap }, rnd, put, gate) {
   const nearGate = (s, half) => gate !== undefined && Math.abs(s - gate) < half;
-  for (let s = 0; s <= length + 0.01; s += 2.5) if (!nearGate(s, 0.8)) put('post', pipe(0.038, height - 0.15).applyMatrix4(place(s, 0, 0)));
-  for (const y of [0.3, height - 0.45]) put('rail', block(length, 0.08, 0.05, [length / RAIL_SPAN, 1]).applyMatrix4(place(length / 2, 0.06, y)));
+  for (let s = 0; s <= length + 0.01; s += 2.5) if (!nearGate(s, 0.8)) put('post', pipe(0.054, height - 0.15).applyMatrix4(place(s, 0, 0)));
+  for (const y of [0.3, height - 0.45]) put('rail', block(length, 0.08, 0.05, [length / RAIL_SPAN, 1]).applyMatrix4(place(length / 2, 0.08, y)));
   for (let s = 0.05; s + BOARD < length - 0.05; s += BOARD + gap) {
     const mid = s + BOARD / 2, inGate = nearGate(mid, 0.55);
-    put('board', board(BOARD, inGate ? height - 0.17 : height, 0.022, rnd()).applyMatrix4(place(mid, 0.1, inGate ? 0.12 : 0.05)));
+    put('board', board(BOARD, inGate ? height - 0.17 : height, 0.022, rnd()).applyMatrix4(place(mid, 0.12, inGate ? 0.12 : 0.05)));
   }
   if (gate === undefined) return;
   // Калитка — проём между трубами потолще, её доски держит укосина из угла в угол.
-  for (const s of [gate - 0.6, gate + 0.6]) put('post', pipe(0.05, height + 0.1).applyMatrix4(place(s, 0, 0)));
+  for (const s of [gate - 0.6, gate + 0.6]) put('post', pipe(0.065, height + 0.1).applyMatrix4(place(s, 0, 0)));
   const across = 0.9, up = height - 0.8;
-  put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, 0.07, 0.34, -Math.atan2(across, up))));
+  put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, 0.08, 0.34, -Math.atan2(across, up))));
 }
 
 export function makeFence(look) {

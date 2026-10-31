@@ -102,7 +102,8 @@ const VIEW_EL_MIN = THREE.MathUtils.degToRad(-10), VIEW_EL_MAX = THREE.MathUtils
 const view = { base: 0, az: 0, el: 0, dist: VIEW_FAR };
 let inspecting = false;
 
-scene.add(new THREE.HemisphereLight(0xb4ccec, 0x5a4a32, 1.1));
+// Снизу в тень светит залитый солнцем луг: без этого стороны досок и стволов в тени уходят в черноту.
+scene.add(new THREE.HemisphereLight(0xb4ccec, 0x8f8a66, 1.1));
 const sun = new THREE.DirectionalLight(0xffe2b8, 2.4);
 // Тень накрывает весь участок с забором: солнце стоит, поэтому тени не дрожат. Карта 4096 — около 1,7 см
 // на точку, мельче щелей штакетника: полосы света сквозь забор читаются.
