@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BARK_TILE } from './bark.js';
+import { BARK_TILE, dressLimbs } from './bark.js';
 import { random } from './random.js';
 import { tiles } from './surface.js';
 import { windUniforms, GUST_GLSL } from './wind.js';
@@ -203,8 +203,12 @@ export function measure(axis, zone) {
 // трубка у основания раздута. Начало оси сидит на оси родителя, внутри него, — стык без щели.
 // Текстура в метрах: по кругу — по среднему радиусу оси, вдоль — по длине дуги. Толстый конец оси
 // (сломанная вершина, сухой пенёк) закрыт крышкой.
+// Доля гладкой коры молодых веток: до YOUNG[0] радиуса (с запястье) только она, от YOUNG[1] — только кора ствола.
+const YOUNG = [0.035, 0.08];
+const young = (r) => 1 - THREE.MathUtils.smoothstep(r, ...YOUNG);
+
 function barkGeometry(axes, from) {
-  const pos = [], normal = [], uv = [], index = [];
+  const pos = [], normal = [], uv = [], blend = [], index = [];
   for (const a of axes) {
     const r0 = a.points[0].r;
     const sides = THREE.MathUtils.clamp(Math.ceil((2 * Math.PI * r0) / 0.03), 5, 32);
@@ -224,6 +228,7 @@ function barkGeometry(axes, from) {
         const r = q.r * collar * (a.profile ? a.profile(az, q.s) : 1);
         pos.push(...q.p.clone().addScaledVector(out, r).toArray());
         normal.push(...out.toArray());
+        blend.push(young(q.r));
         if (a.bark) uv.push(((world(0) + turn * az) * a.bark.radius) / BARK_TILE, (q.s - a.bark.s + a.bark.y) / BARK_TILE);
         else uv.push((az * mean) / BARK_TILE, q.s / BARK_TILE);
         if (k && j < sides) {
@@ -237,6 +242,7 @@ function barkGeometry(axes, from) {
       const c = pos.length / 3, last = c - (sides + 1);
       pos.push(...end.p.toArray());
       normal.push(...end.t.toArray());
+      blend.push(young(end.r));
       uv.push(0, 0);
       for (let j = 0; j < sides; j++) index.push(last + j, last + j + 1, c);
     }
@@ -245,6 +251,7 @@ function barkGeometry(axes, from) {
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geometry.setAttribute('blend', new THREE.Float32BufferAttribute(blend, 1));
   geometry.setIndex(index);
   return geometry;
 }
@@ -345,7 +352,7 @@ export function growMaple(shape, zone, height, bark, from) {
   const skeleton = growSkeleton(shape, zone, height);
   const { axes, trunk } = skeleton;
   const tree = new THREE.Group();
-  tree.add(new THREE.Mesh(barkGeometry(axes, from), bark));
+  tree.add(new THREE.Mesh(barkGeometry(axes, from), dressLimbs(bark)));
   const cards = placeCards(axes, trunk);
   tree.add(leafMesh(cards, cards.reduce((c, k) => c.add(k.at), new THREE.Vector3()).divideScalar(cards.length)));
   const branches = axes.filter((a) => a.level > 0).reduce((m, a) => wood(a, zone).reduce((w, [dm]) => w + dm, m), 0);
