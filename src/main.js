@@ -149,7 +149,7 @@ const cm = (v) => Math.round(v * 1000) / 10;
 const FENCE_KEYS = {
   KeyH: ['height', HEIGHTS, 1.8, (v) => `Забор ${v} м`],
   KeyG: ['gap', Object.keys(GAPS), 'средние', (v) => `Щели ${v}`],
-  KeyT: ['tone', Object.keys(TONES), 'тёмно-коричневый', (v) => `Краска: ${v}`],
+  KeyT: ['tone', Object.keys(TONES), 'серо-коричневый', (v) => `Краска: ${v}`],
   KeyI: ['postWidth', POST_WIDTHS, 0.1, (v) => `Столбы ${cm(v)} × ${cm(v)} см`],
   KeyJ: ['postCoat', Object.keys(COATS), 'как доски', (v) => `Прокрас столбов: ${v}`],
   KeyM: ['boardWidth', BOARD_WIDTHS, 0.1, (v) => `Доски ${cm(v)} см`],
