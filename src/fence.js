@@ -37,7 +37,7 @@ function painted(map) {
       // тонкая доска с двух сторон одинаково повёрнута к солнцу. Тень возвращает часть этого света.
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
         #if NUM_DIR_LIGHTS > 0
-          vec3 fenceSun = directionalLights[0].color * abs(dot(normal, directionalLights[0].direction)) * BRDF_Lambert(diffuseColor.rgb);
+          vec3 fenceSun = directionalLights[0].color * cloudLight() * abs(dot(normal, directionalLights[0].direction)) * BRDF_Lambert(diffuseColor.rgb);
           reflectedLight.directDiffuse = mix(fenceSun, reflectedLight.directDiffuse, ${SHADOW});
         #endif`);
   };

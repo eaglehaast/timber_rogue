@@ -7,7 +7,8 @@ import { tiles } from './surface.js';
 // видно ровно то, что на картинке дальше места, где кольцо стоит.
 // Картинка шире, чем берёт видеокарта, поэтому кольцо из кусков: каждый — свой сектор и своя текстура.
 // Освещена она как земля двора (нормали вверх, как у пучков): иначе светилась бы сама и выбивалась из луга.
-export async function makePanorama(name, { radius, eye }) {
+// far — как далеко то, что на ней изображено: тени облаков ложатся на панораму там, а не у самого кольца (sky.js).
+export async function makePanorama(name, { radius, far, eye }) {
   const { horizon, aspect, tiles: widths } = await (await fetch(`assets/textures/${name}.json`)).json();
   const height = (2 * Math.PI * radius) / aspect;
   const total = widths.reduce((a, b) => a + b);
@@ -18,6 +19,7 @@ export async function makePanorama(name, { radius, eye }) {
     const map = maps[i];
     map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
     const material = new THREE.MeshLambertMaterial({ map, alphaTest: 0.5 });
+    material.defines = { CLOUD_FAR: (far / radius).toFixed(3) };
     const sector = Math.ceil((128 * width) / total);
     const geometry = new THREE.CylinderGeometry(radius, radius, height, sector, 1, true,
       (2 * Math.PI * start) / total, (2 * Math.PI * width) / total).scale(-1, 1, 1);
