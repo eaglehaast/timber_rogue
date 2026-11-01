@@ -6,7 +6,8 @@ import {
 import { struck, wreck, pushOut } from './yard.js';
 import { makeFence, YARD } from './fence.js';
 import { makePanorama } from './panorama.js';
-import { makeSky, driftClouds } from './sky.js';
+import { makeSky, driftClouds, sunlight, castShadows } from './sky.js';
+import { Rays } from './rays.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
@@ -101,9 +102,14 @@ const VIEW_EL_MIN = THREE.MathUtils.degToRad(-10), VIEW_EL_MAX = THREE.MathUtils
 const view = { base: 0, az: 0, el: 0, dist: VIEW_FAR };
 let inspecting = false;
 
-// Снизу в тень светит залитый солнцем луг: без этого стороны досок и стволов в тени уходят в черноту.
-scene.add(new THREE.HemisphereLight(0xb4ccec, 0x8f8a66, 1.1));
-const sun = new THREE.DirectionalLight(0xffe2b8, 2.4);
+// Небо светит в тень почти так же, как солнце на свету: тень на досках и стволах прозрачная, а не чёрная.
+// Снизу в тень светит залитый солнцем луг. Тень облака гасит солнце там, где лежит (sky.js), а отсвет
+// луга — там, где стоим: под облаком луг освещён только небом.
+const SUN_POWER = 2.2, MEADOW = new THREE.Color(0x8f8a66);
+const skyLight = new THREE.HemisphereLight(0xb4ccec, MEADOW, 1.7);
+scene.add(skyLight);
+const sun = new THREE.DirectionalLight(0xffe2b8, SUN_POWER);
+const shine = (light) => skyLight.groundColor.copy(MEADOW).multiplyScalar(0.5 + 0.5 * light);
 // Тень накрывает весь участок с забором: солнце стоит, поэтому тени не дрожат. Карта 4096 — около 1,7 см
 // на точку, мельче щелей штакетника: полосы света сквозь забор читаются.
 // Солнце низкое и сбоку — справа от взгляда со старта, чуть впереди: стволы освещены наполовину,
@@ -119,10 +125,12 @@ sun.shadow.normalBias = 0.03;
 scene.add(sun);
 
 scene.add(await makeSky(SUN));
+const rays = new Rays(renderer, scene, SUN);
 // Окружение локации — два кольца внутри неба: средний план (луг, стога, сараи) сразу за полосой травы
 // за забором и горы за ним. Самое красивое место гор — перед игроком на старте.
-for (const [name, radius] of [['tushna-mid', 45], ['tushna', 140]]) {
-  const ring = await makePanorama(name, { radius, eye: EYE });
+// far — как далеко изображённое: луг и сараи — в сотнях метров, горы — в километрах (по ним бегут тени облаков).
+for (const [name, radius, far] of [['tushna-mid', 45, 300], ['tushna', 140, 3000]]) {
+  const ring = await makePanorama(name, { radius, far, eye: EYE });
   ring.rotation.y = Math.PI / 2;
   scene.add(ring);
 }
@@ -1109,6 +1117,8 @@ function hint() {
 
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
+  const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+  rays.setSize(size.x, size.y);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -1245,9 +1255,14 @@ watch(() => ({
 
 renderer.setAnimationLoop((now) => {
   if (startEl.hidden) beat(now);
-  update(Math.min(clock.getDelta(), 0.05));
+  const dt = Math.min(clock.getDelta(), 0.05);
+  update(dt);
+  const light = sunlight(camera.position);
+  shine(light);
+  castShadows(renderer);
   renderer.setViewport(0, 0, innerWidth, innerHeight);
   renderer.render(scene, camera);
+  rays.render(camera, light, dt);
   // Вид сбоку рисуем в рамку #side поверх основного, тем же рендером.
   const r = sideEl.getBoundingClientRect();
   renderer.setScissorTest(true);
