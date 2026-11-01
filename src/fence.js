@@ -9,13 +9,15 @@ import { generator } from './random.js';
 export const YARD = { w: 60, d: 40 };
 export const HEIGHTS = [1.5, 1.8, 2.1, 2.4];
 export const GAPS = { узкие: 0.015, средние: 0.03, широкие: 0.055 };
-// Краска забора: [цвет или null — синий с картинки, насыщенность, светлота]. Цвета — средние линейные:
-// серый — некрашеное старое дерево, коричневые — суриком и морилкой.
+// Краска забора — средний линейный цвет некрашеного старого дерева. Серо-коричневый Никита выбрал,
+// остальные — вокруг него: бледнее и выгоревшие коричневые, серые — волчья шерсть, серебристое бревно, сырое тёмное.
 export const TONES = {
-  синий: [null, 0.65, 1.1],
-  серый: [[0.26, 0.25, 0.22], 1, 1],
-  коричневый: [[0.2, 0.09, 0.04], 1, 1],
-  'тёмно-коричневый': [[0.09, 0.045, 0.025], 1, 1],
+  'серо-коричневый': [0.26, 0.25, 0.22],
+  'бледно-коричневый': [0.34, 0.29, 0.23],
+  'выгоревший коричневый': [0.42, 0.38, 0.32],
+  'серый, как волк': [0.3, 0.3, 0.29],
+  'старое бревно': [0.4, 0.4, 0.39],
+  'тёмно-серый': [0.16, 0.16, 0.155],
 };
 export const AGES = { 'как новый': 0, обжитой: 0.5, старый: 1, ветхий: 1.8 }; // во сколько раз сильнее кривизна
 export const BOARD_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м
@@ -31,21 +33,16 @@ const KINDS = 10;
 const BOARD_SPAN = 0.7, RAIL_SPAN = 1.6;
 const BOARD = 0.1; // м: такую ширину доски изображает картинка — в этом масштабе она ложится на столбы
 
-// Краска меняется на ходу поверх картинки. Тон общий на весь забор: цвет, насыщенность и светлота.
-// Другой цвет кладём по яркости картинки: доска синяя той же яркости, что средняя краска, получает
+// Краска меняется на ходу поверх картинки. Цвет общий на весь забор.
+// Цвет кладём по яркости синей картинки: доска той же яркости, что средняя краска, получает
 // ровно этот цвет, а сучки, прожилки и потёртости остаются — темнее или светлее его.
 // Прокрас coat — сколько потёртостей закрыто вторым слоем: столбы красят гуще досок.
 // Густота тени shadow — сколько солнца отнимает тень на заборе: и падающая от досок и деревьев,
 // и на стороне, отвёрнутой от солнца. На освещённых местах ничего не меняется.
-const tone = { color: { value: new THREE.Color() }, dye: { value: 0 }, saturation: { value: 1 }, light: { value: 1 } };
+const tone = { value: new THREE.Color() };
 const shadow = { value: 1 };
 const coats = { board: { value: 0 }, post: { value: 0 } };
-export function setTone([color, saturation, light]) {
-  tone.dye.value = color ? 1 : 0;
-  if (color) tone.color.value.setRGB(...color);
-  tone.saturation.value = saturation;
-  tone.light.value = light;
-}
+export function setTone(color) { tone.value.setRGB(...color); }
 export function setShadow(density) { shadow.value = density; }
 export function setCoat(coat) { coats.post.value = coat; }
 // Средний цвет краски на картинках досок (линейный), им закрашиваем потёртости — где синего мало.
@@ -54,19 +51,17 @@ function painted(map, coat) {
   const material = new THREE.MeshLambertMaterial({ map });
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, {
-      fenceColor: tone.color, fenceDye: tone.dye, fenceSaturation: tone.saturation, fenceLight: tone.light, fenceCoat: coat, fenceShadow: shadow,
+      fenceColor: tone, fenceCoat: coat, fenceShadow: shadow,
     });
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform vec3 fenceColor;
-        uniform float fenceDye, fenceSaturation, fenceLight, fenceCoat, fenceShadow;`)
+        uniform float fenceCoat, fenceShadow;`)
       .replace('#include <map_fragment>', `#include <map_fragment>
         float fenceWorn = 1.0 - smoothstep(0.1, 0.35, diffuseColor.b - diffuseColor.r);
         diffuseColor.rgb = mix(diffuseColor.rgb, ${PAINT}, fenceCoat * mix(0.3, 1.0, fenceWorn));
         float fenceLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-        diffuseColor.rgb = mix(diffuseColor.rgb, fenceColor * fenceLuma / dot(${PAINT}, vec3(0.299, 0.587, 0.114)), fenceDye);
-        fenceLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-        diffuseColor.rgb = mix(vec3(fenceLuma), diffuseColor.rgb, fenceSaturation) * fenceLight;`)
+        diffuseColor.rgb = fenceColor * fenceLuma / dot(${PAINT}, vec3(0.299, 0.587, 0.114));`)
       // Солнце — первый направленный свет. Без тени доска получала бы его под тем же углом с любой стороны:
       // тонкая доска с двух сторон одинаково повёрнута к солнцу. Тень возвращает часть этого света.
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
