@@ -4,6 +4,9 @@
 2048 × 2048 на прозрачном фоне, черешок внизу. Силуэты лица и изнанки совпадают, поэтому у обоих атласов
 одна раскладка: игра берёт клетку лица или изнанки по тому, какой стороной лист повёрнут к глазу.
 
+Нарисованная изнанка слишком отличается от лица — крона пестрит, будто ветки от разных деревьев. Поэтому изнанка —
+это лицо с долей BACK нарисованной изнанки: тот же лист, но светлее и с её прожилками.
+
 Каждый лист ужимаем в клетку CELL (кадр целиком, чтобы масштаб листьев одного вида был общий) и раскладываем 5 × 4.
 Прозрачный фон закрашиваем цветом ближайшего листа: иначе при уменьшении (мипы) край темнеет к чёрному.
 
@@ -21,6 +24,7 @@ from scipy import ndimage
 
 CELL = 512
 COLS, ROWS = 5, 4
+BACK = 0.35
 OUT = Path(__file__).resolve().parent.parent / 'assets' / 'textures'
 
 
@@ -39,9 +43,13 @@ def main(folder):
     atlases = {side: np.zeros((ROWS * CELL, COLS * CELL, 4), np.uint8) for side in ('', '_back')}
     base, kind = [], []
     for n in range(count):
+        front = None
         for side, atlas in atlases.items():
             image = Image.open(folder / f'timber_maple_leaf_{n + 1:02d}{side}.png').convert('RGBA')
-            if side == '':
+            if side == '_back':
+                image = Image.blend(front, image, BACK)
+            else:
+                front = image
                 alpha = np.asarray(image)[:, :, 3] > 128
                 ys, xs = np.nonzero(alpha)
                 bottom = ys.max()
