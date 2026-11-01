@@ -97,15 +97,16 @@ html, body {
   text-shadow: 0 1px 3px #000;
 }
 
-/* Инвентарь: ячейки внизу экрана; в руках — ярче, брошенная пила — приглушена. */
+/* Инвентарь: столбик ячеек в левом нижнем углу (посередине снизу — пила в руках); в руках — ярче,
+   брошенная пила — приглушена. */
 #kit {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 14px;
+  left: 16px;
+  bottom: 16px;
   display: flex;
-  justify-content: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   font-size: 15px;
   text-shadow: 0 1px 3px #000;
 }
