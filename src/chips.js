@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { height } from './terrain.js';
 
 // Щепки из-под цепи. Цепь выносит их из пропила и бросает по своему ходу; в воздухе их быстро
 // тормозит, они падают и остаются лежать опилками. Настоящих щепок на рез — десятки тысяч, здесь
@@ -54,9 +55,10 @@ export class Chips extends THREE.InstancedMesh {
       c.v.y -= GRAVITY * dt;
       c.v.multiplyScalar(Math.exp(-DRAG * dt));
       c.p.addScaledVector(c.v, dt);
-      const landed = c.p.y <= 0.002;
+      const floor = height(c.p.x, c.p.z) + 0.002;
+      const landed = c.p.y <= floor;
       if (landed) {
-        c.p.y = 0.002;
+        c.p.y = floor;
         c.q.setFromEuler(new THREE.Euler(-Math.PI / 2 + (Math.random() - 0.5) * 0.3, Math.random() * Math.PI * 2, 0, 'YXZ'));
       } else c.q.multiply(turn.setFromAxisAngle(c.axis, SPIN * dt));
       this.setMatrixAt(c.i, m.compose(c.p, c.q, c.size));
