@@ -716,7 +716,7 @@ function grab() {
   const anchor = at.sub(body.position).applyQuaternion(body.quaternion.clone().invert());
   grasp = {
     tree, grip: tree.world.hold(new Grip(body, anchor, capsule, { force: HAND, torque: TWIST })),
-    turn: yaw.invert().multiply(body.quaternion), mass: 1 / body.invMass, load: 0, near: Infinity, stuck: 0, lifted: false,
+    turn: yaw.invert().multiply(body.quaternion), mass: 1 / body.invMass, load: 0, near: Infinity, stuck: 0, low: Infinity, lifted: false,
   };
 }
 
@@ -728,7 +728,8 @@ function letGo(why) {
 }
 
 // Рука там, куда смотришь, на HOLD от глаз (не ниже земли), а кусок повёрнут к взгляду, как его взял.
-// Тянешь, а кусок за LIFT не подошёл к руке ближе — не поднять. Оторвался, а потом отстал дальше SLIP — выскользнул.
+// Оторвал — подтянул к руке или поднял место хвата на 10 см от самого низкого, и оно ближе SLIP: несёшь или волочишь.
+// Не оторвал, и кусок за LIFT не подошёл к руке ближе — не поднять. Оторвал, а потом отстал дальше SLIP — выскользнул.
 function carry(dt) {
   const { tree, grip } = grasp;
   if (!tree.world.grips.includes(grip)) {
@@ -741,8 +742,9 @@ function carry(dt) {
   grip.target.copy(hand).sub(tree.root.position);
   grip.goal.setFromAxisAngle(UP, player.yaw).multiply(grasp.turn);
   grasp.load += (grip.pull - grasp.load) * (1 - Math.exp(-4 * dt));
-  const stretch = grip.point(new THREE.Vector3()).distanceTo(grip.target);
-  if (stretch < 0.25) grasp.lifted = true;
+  const at = grip.point(new THREE.Vector3()), stretch = at.distanceTo(grip.target);
+  grasp.low = Math.min(grasp.low, at.y);
+  if (stretch < 0.25 || (at.y > grasp.low + 0.1 && stretch < SLIP)) grasp.lifted = true;
   if (stretch < grasp.near - 0.02) { grasp.near = stretch; grasp.stuck = 0; } else grasp.stuck += dt;
   const heavy = 'Тяжело — надо бы ещё раскромсать';
   if (!grasp.lifted && grasp.stuck > LIFT) letGo(heavy);
