@@ -5,7 +5,7 @@ import {
   SPLIT_MIN,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeSaw, dressSaw, lamp, runChain, PACKS, BARS, BAR_W } from './saw.js';
+import { makeSaw, dressSaw, lamp, runChain, PACKS, BAR_W } from './saw.js';
 import { Chips } from './chips.js';
 import { growMaple, DENSITY } from './maple.js';
 import { Limb, Kerf, combine, THIN } from './limbs.js';
@@ -77,6 +77,7 @@ const logEl = document.getElementById('log');
 const startEl = document.getElementById('start');
 const gapEl = document.getElementById('gap');
 const sideEl = document.getElementById('side');
+const kitEl = document.getElementById('kit');
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -149,7 +150,18 @@ const aimPlane = new THREE.Mesh(
     color: 0xff9a2e, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false,
   }),
 );
-const sawModel = makeSaw(recall('pack', PACKS), recall('bar', BARS));
+// Инвентарь: две пилы — длинная и короткая — и руки. Пила — вещь: она в руках, на поясе или осталась
+// в дереве (left — её копия там, tree — у какого дерева). Зажатая в пропиле (stuck) не вынимается;
+// свободная — в пне упавшего дерева или на земле, куда выпала из разошедшейся ветки, — её забираешь,
+// подойдя (TAKE) и нажав её цифру. Вид у пил разный (комплекты картинок), чтобы их не путать.
+const kit = [
+  { name: 'Длинная пила', bar: 0.7, pack: recall('pack-long', PACKS) },
+  { name: 'Короткая пила', bar: 0.3, pack: recall('pack-short', [...PACKS].reverse()) },
+  { name: 'Руки' },
+];
+const TAKE = 2; // м — с такого расстояния от глаз дотягиваешься до брошенной пилы
+let held = 0;   // что в руках: номер в kit
+const sawModel = makeSaw(kit[0].pack, kit[0].bar);
 const chips = new Chips();
 scene.add(aimPlane, sawModel, chips);
 // Пила и прицел — на своём слое: их видит только взгляд игрока, а вид сбоку показывает
@@ -183,7 +195,7 @@ let round = null;
 const local = (p) => p.clone().sub(round.base);
 // Глаза игрока в мире: player.pos — где он стоит на земле, player.eye — высота глаз над ней.
 const eyeOf = () => new THREE.Vector3(player.pos.x, player.pos.y + player.eye, player.pos.z);
-// Длина шины в руках: переключается клавишей B.
+// Длина шины той пилы, что в руках.
 const barL = () => sawModel.userData.bar;
 
 // Выше зоны пиления — клён (maple.js): скелет из осей, стволы ниже зоны идут по форме кубиков (trunkShape)
@@ -266,7 +278,7 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
     seed: treeSeed,
     time: 0,
     stumps: [], // на какой высоте спилен ствол (по номеру ствола)
-    cuts: [], left: [], // зажатые пилы, брошенные в стволе
+    cuts: [],
   };
   standUp((1 << tree.stems.length) - 1);
   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
@@ -274,6 +286,8 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
     mode = 'free';
     saw = null;
   }
+  // Пилы, оставшиеся в старом дереве, снова с тобой: делянку вырастили заново.
+  for (const item of kit) if (old && item.tree === old) Object.assign(item, { left: null, tree: null, kerf: null, body: null, stuck: false });
   resultEl.hidden = true;
   logEl.replaceChildren();
 }
@@ -592,9 +606,9 @@ function spray(cut, volume) {
   chips.spray(at, w.side.multiplyScalar(run), volume);
 }
 
-// Зажатую пилу бросаем в стволе: там остаётся её копия без рук, а в руках — запасная. Пробуем — пил сколько угодно.
-// Когда дерево легло, пропил разжимается, и брошенные пилы забираешь обратно (land). В ветке пила остаётся
-// в её пропиле и уходит с ним, куда бы ветку ни унесло, а забираешь её, когда ветка по нему разойдётся (part).
+// Зажатую пилу бросаем в стволе: там остаётся её копия без рук, а руки свободны. Когда дерево легло,
+// пропил разжимается, и пила в пне свободна (land). В ветке пила остаётся в её пропиле и уходит с ним,
+// куда бы ветку ни унесло; ветка разошлась по пропилу — пила выпадает на землю (part).
 function leaveSaw() {
   const left = sawModel.clone();
   const hands = [];
@@ -607,12 +621,107 @@ function leaveSaw() {
   left.position.copy(at.position);
   left.quaternion.copy(at.quaternion);
   if (saw.kerf) saw.kerf.mark.add(left);
-  else {
-    round.root.add(left);
-    round.left.push(left);
-  }
+  else round.root.add(left);
+  Object.assign(kit[held], { left, tree: round, kerf: saw.kerf ?? null, cut: saw, stuck: true });
+  arm(kit.length - 1);
   unsay('pinch');
   unsay('narrow');
+}
+
+// Взять в руки вещь i из инвентаря.
+function arm(i) {
+  held = i;
+  const { bar, pack } = kit[i];
+  sawModel.visible = Boolean(bar);
+  if (bar) dressSaw(sawModel, pack, bar);
+  showKit();
+}
+
+// Достать вещь i: брошенную пилу — если она свободна и до неё дотягиваешься. Пилу, что приставлена
+// к стволу, при этом убираешь, а зажатую оставляешь в пропиле.
+function take(i) {
+  const item = kit[i];
+  if (!item || i === held) return;
+  if (item.left) {
+    if (item.stuck) return notice(`${item.name} зажата в пропиле — её не вынуть`);
+    const far = item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf());
+    if (far > TAKE) return notice(`${item.name} лежит в ${Math.round(far)} м — подойди`);
+    if (item.body) {
+      item.tree.world.remove(item.body);
+      item.body.object.removeFromParent();
+    } else item.left.removeFromParent();
+    Object.assign(item, { left: null, tree: null, kerf: null, cut: null, body: null });
+  }
+  if (mode !== 'free') {
+    if (saw.pinched) leaveSaw();
+    mode = 'free';
+    saw = null;
+  }
+  arm(i);
+}
+
+// Подсказка на пару секунд: почему не вышло то, что нажал.
+let noted = { text: '', until: 0 };
+const notice = (text) => { noted = { text, until: performance.now() + 2500 }; };
+
+// Ячейки инвентаря внизу экрана: что в руках, где брошенные пилы.
+const kitCells = kit.map(() => kitEl.appendChild(document.createElement('div')));
+function showKit() {
+  kit.forEach((item, i) => {
+    const where = !item.left ? '' : item.stuck ? 'зажата'
+      : `лежит, ${Math.round(item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()))} м`;
+    const text = `${i + 1} · ${item.name}${item.bar ? ` ${item.bar * 100} см` : ''}${where ? ` — ${where}` : ''}`;
+    if (kitCells[i].textContent !== text) kitCells[i].textContent = text;
+    kitCells[i].className = [i === held && 'held', item.left && 'away'].filter(Boolean).join(' ');
+  });
+}
+
+// Пила выпала из разошедшегося пропила ветки: она — твёрдое тело, как отпил, падает и ложится на землю.
+// Корпус с мотором — шар по обводу корпуса, шина — капсула; вес: корпус с аккумулятором 3,5 кг, шина с цепью
+// 1,4 кг на метр. Центр тяжести — между ними по весу, момент инерции — от шара и стержня.
+const MOTOR = 3.5, BAR_KG = 1.4;
+function fallSaw(item) {
+  const { left, bar } = item;
+  const rim = left.userData.rim; // в копии пилы точки обвода — простые { x, y }
+  const xs = rim.map((p) => p.x), ys = rim.map((p) => p.y);
+  const motor = new THREE.Vector3((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, 0);
+  const r = (Math.max(...ys) - Math.min(...ys)) / 2;
+  const mBar = BAR_KG * bar, mass = MOTOR + mBar;
+  const com = motor.clone().multiplyScalar(MOTOR / mass);
+  const d = motor.clone().sub(com);
+  // Шина — стержень вдоль x с серединой в начале осей пилы, корпус — шар в motor.
+  const sphere = 0.4 * MOTOR * r * r, rod = (mBar * bar * bar) / 12;
+  const xy = -(MOTOR * d.x * d.y + mBar * com.x * com.y);
+  const inertia = new THREE.Matrix3().set(
+    sphere + MOTOR * d.y ** 2 + mBar * com.y ** 2, xy, 0,
+    xy, sphere + MOTOR * d.x ** 2 + rod + mBar * com.x ** 2, 0,
+    0, 0, sphere + MOTOR * d.lengthSq() + rod + mBar * com.lengthSq());
+  const tree = item.tree;
+  tree.root.updateMatrixWorld();
+  const inTree = left.matrixWorld.clone().premultiply(tree.root.matrixWorld.clone().invert());
+  const at = new THREE.Vector3(), q = new THREE.Quaternion();
+  inTree.decompose(at, q, new THREE.Vector3());
+  const object = new THREE.Group();
+  tree.root.add(object);
+  object.add(left);
+  left.position.copy(com).negate();
+  left.quaternion.identity();
+  item.body = new Body(object, {
+    mass, inertia, position: at.add(com.clone().applyQuaternion(q)), quaternion: q,
+    capsules: [
+      { a: new THREE.Vector3(-bar / 2, 0, 0).sub(com), b: new THREE.Vector3(bar / 2, 0, 0).sub(com), r: 0.02 },
+      { a: d, b: d.clone(), r },
+    ],
+  });
+  tree.world.add(item.body);
+  Object.assign(item, { kerf: null, stuck: false });
+}
+
+// В каком стволе пропил cut (у двойного дерева их два): ближайший к нему на его высоте.
+function stemOf(cut) {
+  const { stems } = round.voxels.shape;
+  const off = (stem) => stem.center(cut.origin.y).setY(0).distanceTo(cut.origin.clone().setY(0));
+  return stems.indexOf(stems.reduce((a, b) => (off(b) < off(a) ? b : a)));
 }
 
 // Пилу держат горизонтально перед собой, шиной поперёк взгляда. У ствола она встаёт туда,
@@ -1036,13 +1145,15 @@ function dropPiece(part) {
 // Ветка разошлась по пропилу kerf — его допилили или недопил не выдержал (и его, может быть, раскололо
 // вдоль: chair): что за ним — отдельное тело. Пила из него свободна, а ту, что в нём зажало и бросили, забираешь.
 function part(limb, kerf, chair = null) {
+  for (const item of kit) {
+    if (item.kerf !== kerf) continue;
+    fallSaw(item);
+    unsay('freed');
+    say('freed', `Ветка разошлась по пропилу — ${item.name.toLowerCase()} выпала`);
+  }
   limb.kerfs.splice(limb.kerfs.indexOf(kerf), 1);
   kerf.mark.removeFromParent();
   kerf.mark.geometry.dispose();
-  if (kerf.mark.children.length) {
-    unsay('freed');
-    say('freed', 'Ветка разошлась по пропилу — зажатую пилу вынул');
-  }
   sever(limb, kerf.axis, kerf.s, chair);
   if (saw?.kerf === kerf) {
     mode = 'free';
@@ -1270,9 +1381,9 @@ function land() {
   round.upper.traverse((o) => { if (o.userData.limb) lying.push(o.userData.limb); });
   lying.forEach(crush);
   lay();
-  const back = round.left.length;
-  round.left.forEach((left) => left.removeFromParent());
-  round.left = [];
+  // Ствол лёг — его пропилы в пне разжались: брошенные в них пилы свободны.
+  const freed = kit.filter((item) => item.tree === round && item.stuck && !item.kerf && fallen(round, stemOf(item.cut)));
+  freed.forEach((item) => { item.stuck = false; });
   // Пришибло, если стоял там, куда лёг ствол: впереди оси по линии падения и не дальше метра вбок.
   const { u: f, pivot, len } = round.fall;
   const at = local(player.pos);
@@ -1283,7 +1394,7 @@ function land() {
   const hit = struck(round.yard, pivot.position, f, len);
   hit.forEach(wreck);
 
-  const saws = back ? [back > 1 ? `Зажатые пилы вынул из пня: ${back}` : 'Зажатую пилу вынул из пня'] : [];
+  const saws = freed.length ? [`Пропил разжался — ${freed.length > 1 ? 'пилы в пне свободны' : 'пила в пне свободна'}, забери`] : [];
   // У двойного дерева мог упасть один ствол: второй стоит на пне, его валят заново.
   const rest = round.standing & ~round.body;
   const notes = [...saws, ...(rest ? ['Второй ствол ещё стоит'] : [])];
@@ -1340,7 +1451,7 @@ function update(dt) {
   const rise = STEP_RISE * player.gait;
   player.step.copy(right).multiplyScalar(Math.sin(player.bob) * rise / 2).setY(-rise * Math.sin(player.bob) ** 2);
   player.eye += ((player.crouch ? EYE_CROUCH : EYE) - player.eye) * (1 - Math.exp(-8 * dt));
-  // Шаг назад от приставленной пилы — уходишь от пропила. Зажатая пила остаётся в стволе, в руках — запасная.
+  // Шаг назад от приставленной пилы — уходишь от пропила. Зажатая пила остаётся в стволе, руки свободны.
   if (mode !== 'free' && !fly && keys.has('KeyS')) {
     if (saw.pinched) leaveSaw();
     mode = 'free';
@@ -1362,7 +1473,8 @@ function update(dt) {
   pushOut(round.yard, player.pos, 0.35);
   player.pos.y = height(player.pos.x, player.pos.z);
 
-  const candidate = mode === 'free' ? sawAt(forward) : null;
+  const candidate = mode === 'free' && kit[held].bar ? sawAt(forward) : null;
+  showKit();
 
   if (mode === 'cut') {
     const { kerf, limb } = saw;
@@ -1443,8 +1555,8 @@ function update(dt) {
     shake.copy(right).multiplyScalar(Math.sin(player.bob - 0.8) * player.gait * 0.012).setY(-(Math.cos(player.bob) ** 2) * player.gait * 0.012);
   }
   const [out, down, aside] = SHOTS[shot].hold;
-  const held = eyeOf().addScaledVector(forward, out).addScaledVector(right, -aside).addScaledVector(UP, -down).add(player.step);
-  moveSaw(shown ?? { edge: local(held), q: facing(player.yaw) }, shake, dt);
+  const grip = eyeOf().addScaledVector(forward, out).addScaledVector(right, -aside).addScaledVector(UP, -down).add(player.step);
+  moveSaw(shown ?? { edge: local(grip), q: facing(player.yaw) }, shake, dt);
   lamp(sawModel, !!saw && (saw.pinched || !!round.squeeze));
   runChain(sawModel, trigger, !!saw?.pinched, dt);
 
@@ -1580,7 +1692,11 @@ function hint() {
   if (round.fall && !round.done) return 'Падает! Беги!';
   if (fly) return 'Осмотр · F — вернуться';
   if (saw?.blocked) return 'Упёрлась корпусом · поверни пилу или вынь (S)';
+  if (performance.now() < noted.until) return noted.text;
   if (saw?.pinched && saw.kerf) return saw.kerf.squeezed ? 'Зажало: ветку сжимает со всех сторон · оставь пилу (S) и сначала разгрузи ветку' : 'Зажало · пили с другой стороны (U)';
+  if (saw?.pinched) return 'Зажало · оставь пилу в стволе (S)';
+  const near = kit.findIndex((item) => item.left && !item.stuck && item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()) <= TAKE);
+  if (near >= 0) return `${kit[near].name} рядом · ${near + 1} — взять`;
   return '';
 }
 
@@ -1618,28 +1734,31 @@ addEventListener('keydown', (e) => {
   if (fly) return;
   if (e.code === 'KeyC') player.crouch = !player.crouch;
   if (e.code === 'KeyL') hudEl.classList.toggle('details');
-  if (e.code === 'KeyV') {
-    const next = PACKS[(PACKS.indexOf(sawModel.userData.pack) + 1) % PACKS.length];
-    dressSaw(sawModel, next, barL());
-    keep('pack', next);
-    unsay('pack');
-    say('pack', `Пила: комплект ${next}`);
-  }
-  // Шину меняют, отойдя от ствола: в пропиле её не снять.
-  if (e.code === 'KeyB' && mode === 'free') {
-    const next = BARS[(BARS.indexOf(barL()) + 1) % BARS.length];
-    dressSaw(sawModel, sawModel.userData.pack, next);
-    keep('bar', next);
-    unsay('bar');
-    say('bar', `Шина ${next * 100} см`);
+  // Цифры — взять вещь из инвентаря.
+  const digit = /^Digit(\d)$/.exec(e.code);
+  if (digit) take(Number(digit[1]) - 1);
+  // V — другой вид у пилы в руках.
+  if (e.code === 'KeyV' && kit[held].bar) {
+    const item = kit[held];
+    item.pack = PACKS[(PACKS.indexOf(item.pack) + 1) % PACKS.length];
+    dressSaw(sawModel, item.pack, item.bar);
+    keep(held ? 'pack-short' : 'pack-long', item.pack);
   }
   // Ветку пилить сверху вниз или снизу вверх — с той стороны, где её не сжимает. Пилу, что стоит на ветке,
-  // ставишь в тот же пропил с другой стороны; зажатую не вынуть — она остаётся в ветке, а ставишь запасную.
+  // ставишь в тот же пропил с другой стороны; зажатую не вынуть — она остаётся в ветке, а ставишь вторую пилу.
   if (e.code === 'KeyU') {
     under = !under;
     if (saw?.kerf) {
-      if (saw.pinched) leaveSaw();
-      saw = mount(saw, eyeOf(), forwardOf(player.yaw));
+      if (saw.pinched) {
+        const other = kit.findIndex((item) => item.bar && !item.left && item !== kit[held]);
+        leaveSaw();
+        if (other < 0) {
+          notice('Вторая пила тоже в дереве');
+          mode = 'free';
+          saw = null;
+        } else arm(other);
+      }
+      if (saw) saw = mount(saw, eyeOf(), forwardOf(player.yaw));
     }
     unsay('under');
     say('under', under ? 'Ветку пилишь снизу, верхней кромкой шины' : 'Ветку пилишь сверху');
@@ -1674,7 +1793,7 @@ canvas.addEventListener('mousedown', (e) => {
     // В ствол входим по середине слоя кубиков: тогда щель лежит вокруг полотна поровну. У ветки кубиков нет.
     if (saw.depth === 0 && !saw.kerf) saw.edge.y = saw.origin.y = (Math.floor(saw.origin.y / VOXEL) + 0.5) * VOXEL;
     mode = 'cut';
-  } else if (mode === 'free') {
+  } else if (mode === 'free' && kit[held].bar) {
     saw = sawAt(forwardOf(player.yaw));
     if (saw) {
       round = saw.tree;

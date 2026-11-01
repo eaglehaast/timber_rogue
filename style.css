@@ -97,6 +97,37 @@ html, body {
   text-shadow: 0 1px 3px #000;
 }
 
+/* Инвентарь: ячейки внизу экрана; в руках — ярче, брошенная пила — приглушена. */
+#kit {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 14px;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  font-size: 15px;
+  text-shadow: 0 1px 3px #000;
+}
+
+#kit div {
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  opacity: 0.75;
+}
+
+#kit div.held {
+  border-color: #f2a33a;
+  opacity: 1;
+}
+
+#kit div.away {
+  font-style: italic;
+  opacity: 0.55;
+}
+
 #result {
   position: fixed;
   left: 0;
