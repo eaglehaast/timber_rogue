@@ -5,16 +5,12 @@ import { generator } from './random.js';
 // Забор по периметру участка W × D метров с центром в начале координат: штакетник со всех сторон,
 // к дороге (z = +D/2) — с калиткой. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
 // чуть видно улицу, а солнце кладёт полосы на траву. Столбы — бруски, крашеные так же.
-// Высоту, щели, ширину досок, возраст, тон краски и тени, а у столбов — толщину и прокрас подбираем клавишами.
+// Вид забора Никита подобрал на глаз клавишами (2026-11-01) и пока живёт с ним: высота 1,8 м, щели 3 см,
+// доски и столбы по 10 см, забор ветхий, краска серо-коричневая, тень лёгкая.
 export const YARD = { w: 60, d: 40 };
-export const HEIGHTS = [1.5, 1.8, 2.1, 2.4];
-export const GAPS = { узкие: 0.015, средние: 0.03, широкие: 0.055 };
-export const TONES = { 'как на картинке': [1, 1], выгоревший: [0.65, 1.1], 'старый серый': [0.4, 0.9] }; // насыщенность, светлота
-export const AGES = { 'как новый': 0, обжитой: 0.5, старый: 1, ветхий: 1.8 }; // во сколько раз сильнее кривизна
-export const BOARD_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м
-export const POST_WIDTHS = [0.08, 0.1, 0.12, 0.15]; // м: сторона бруска
-export const COATS = { 'как доски': 0, 'второй слой': 0.45, густо: 0.75, сплошь: 1 };
-export const SHADOWS = { густая: 1, плотная: 0.85, средняя: 0.7, лёгкая: 0.55, прозрачная: 0.4 }; // доля солнца, которую тень отнимает
+const LOOK = { height: 1.8, gap: 0.03, boardWidth: 0.1, postWidth: 0.1, age: 1.8 }; // age — во сколько раз сильнее кривизна
+const COLOR = 'vec3(0.11, 0.085, 0.06)'; // линейный цвет краски: серо-коричневое старое дерево
+const SHADOW = '0.55'; // доля солнца, которую тень на заборе отнимает
 
 // Картинки от ChatGPT: по 10 досок и прожилин; доски бесшовные по обеим осям, прожилины — по длине.
 // Каждая деталь берёт одну из них наугад; столбы красят теми же картинками, что и доски.
@@ -24,54 +20,34 @@ const KINDS = 10;
 const BOARD_SPAN = 0.7, RAIL_SPAN = 1.6;
 const BOARD = 0.1; // м: такую ширину доски изображает картинка — в этом масштабе она ложится на столбы
 
-// Краска меняется на ходу поверх картинки. Тон общий на весь забор: насыщенность и светлота.
-// Прокрас coat — сколько потёртостей закрыто вторым слоем: столбы красят гуще досок.
-// Густота тени shadow — сколько солнца отнимает тень на заборе: и падающая от досок и деревьев,
+// Краску кладём по яркости синей картинки: доска той же яркости, что средняя краска, получает
+// ровно цвет COLOR, а сучки, прожилки и потёртости остаются — темнее или светлее его.
+// Густота тени SHADOW — сколько солнца отнимает тень на заборе: и падающая от досок и деревьев,
 // и на стороне, отвёрнутой от солнца. На освещённых местах ничего не меняется.
-const tone = { saturation: { value: 1 }, light: { value: 1 } };
-const shadow = { value: 1 };
-const coats = { board: { value: 0 }, post: { value: 0 } };
-export function setTone([saturation, light]) {
-  tone.saturation.value = saturation;
-  tone.light.value = light;
-}
-export function setShadow(density) { shadow.value = density; }
-export function setCoat(coat) { coats.post.value = coat; }
-// Средний цвет краски на картинках досок (линейный), им закрашиваем потёртости — где синего мало.
+// Средний цвет краски на картинках досок (линейный).
 const PAINT = 'vec3(0.067, 0.24, 0.63)';
-function painted(map, coat) {
+function painted(map) {
   const material = new THREE.MeshLambertMaterial({ map });
   material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, {
-      fenceSaturation: tone.saturation, fenceLight: tone.light, fenceCoat: coat, fenceShadow: shadow,
-    });
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>
-        uniform float fenceSaturation, fenceLight, fenceCoat, fenceShadow;`)
       .replace('#include <map_fragment>', `#include <map_fragment>
-        float fenceWorn = 1.0 - smoothstep(0.1, 0.35, diffuseColor.b - diffuseColor.r);
-        diffuseColor.rgb = mix(diffuseColor.rgb, ${PAINT}, fenceCoat * mix(0.3, 1.0, fenceWorn));
         float fenceLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-        diffuseColor.rgb = mix(vec3(fenceLuma), diffuseColor.rgb, fenceSaturation) * fenceLight;`)
+        diffuseColor.rgb = ${COLOR} * fenceLuma / dot(${PAINT}, vec3(0.299, 0.587, 0.114));`)
       // Солнце — первый направленный свет. Без тени доска получала бы его под тем же углом с любой стороны:
       // тонкая доска с двух сторон одинаково повёрнута к солнцу. Тень возвращает часть этого света.
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
         #if NUM_DIR_LIGHTS > 0
           vec3 fenceSun = directionalLights[0].color * abs(dot(normal, directionalLights[0].direction)) * BRDF_Lambert(diffuseColor.rgb);
-          reflectedLight.directDiffuse = mix(fenceSun, reflectedLight.directDiffuse, fenceShadow);
+          reflectedLight.directDiffuse = mix(fenceSun, reflectedLight.directDiffuse, ${SHADOW});
         #endif`);
   };
   material.customProgramCacheKey = () => 'fence';
   return material;
 }
-// Столбы красят теми же картинками, что и доски, но своим прокрасом.
-const maps = (name) => tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures/fence-${name}-${i + 1}.jpg`));
-const boardMaps = maps('board');
-const materials = {
-  board: boardMaps.map((map) => painted(map, coats.board)),
-  post: boardMaps.map((map) => painted(map, coats.post)),
-  rail: maps('rail').map((map) => painted(map, coats.board)),
-};
+// Столбы красят теми же картинками, что и доски.
+const maps = (name) => tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures/fence-${name}-${i + 1}.jpg`)).map(painted);
+const boards = maps('board');
+const materials = { board: boards, post: boards, rail: maps('rail') };
 
 // Доска с верхом углом: пятиугольник шириной w и высотой h, толщиной t. Картинка лежит по ширине доски
 // и повторяется вверх, начиная с места shift: соседние доски одной картинки не совпадают.
@@ -130,7 +106,6 @@ function side(a, b, ground) {
 // прожилины легли между ними под уклон, а доски на прожилинах повторяют этот уклон и крен. Сами доски
 // прибиты не по линейке: чуть вкось, чуть выше-ниже, чуть разной длины. Угловые столбы держат две стороны
 // и стоят ровно. Всё это — доли градуса и сантиметры, умноженные на возраст age: при нуле забор как новый.
-// Случайные отклонения тянем всегда, даже при нуле, поэтому возраст меняет кривизну, не перетасовывая забор.
 const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до земли, у калитки — выше
 const DEG = Math.PI / 180;
 function picket({ length, place, floor }, { height, gap, boardWidth, postWidth, age }, rnd, put, gate) {
@@ -175,19 +150,18 @@ function picket({ length, place, floor }, { height, gap, boardWidth, postWidth, 
 }
 
 // ground(x, z) — высота земли: забор идёт по рельефу. Без неё земля ровная.
-export function makeFence(look, ground = () => 0) {
+export function makeFence(ground = () => 0) {
   const root = new THREE.Group();
   const rnd = generator(7);
   const parts = { board: [], post: [], rail: [] };
   for (const name in parts) parts[name] = Array.from({ length: KINDS }, () => []);
   const put = (name, geometry) => parts[name][Math.floor(rnd() * KINDS)].push(geometry);
-  const options = { ...look, gap: GAPS[look.gap], age: AGES[look.age] };
   const x = YARD.w / 2, z = YARD.d / 2;
   // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
-  picket(side({ x: -x, z }, { x, z }, ground), options, rnd, put, x + 8);
-  picket(side({ x, z }, { x, z: -z }, ground), options, rnd, put);
-  picket(side({ x, z: -z }, { x: -x, z: -z }, ground), options, rnd, put);
-  picket(side({ x: -x, z: -z }, { x: -x, z }, ground), options, rnd, put);
+  picket(side({ x: -x, z }, { x, z }, ground), LOOK, rnd, put, x + 8);
+  picket(side({ x, z }, { x, z: -z }, ground), LOOK, rnd, put);
+  picket(side({ x, z: -z }, { x: -x, z: -z }, ground), LOOK, rnd, put);
+  picket(side({ x: -x, z: -z }, { x: -x, z }, ground), LOOK, rnd, put);
   for (const name in parts) {
     parts[name].forEach((list, i) => {
       if (!list.length) return;
