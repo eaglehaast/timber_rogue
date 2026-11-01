@@ -249,53 +249,83 @@ function barkGeometry(axes, from) {
   return geometry;
 }
 
-// Листва — карточки из атласа maple-leaves.png (собирает tools/tufts.py): веточка с листьями, срез
-// веточки по центру нижнего края. Сидят на концевых веточках, крест-накрест, смотрят наружу и чуть вниз.
+// Листва — отдельные листья из атласов maple-leaf.webp (лицо) и maple-leaf-back.webp (изнанка), их собирает
+// tools/leaves.py. У клёна листья супротивные: в каждом узле веточки пара листьев друг против друга, а следующая
+// пара повёрнута к ней на четверть оборота. Черешок отходит от веточки вперёд и вбок, лист раскрыт лицом
+// к небу и чуть наружу кроны. Лист — одна плоскость с двумя сторонами: сверху видно лицо, снизу — изнанку.
 // Нормаль — от середины кроны наружу: крона освещена как одно облако, а не как горсть плоскостей.
-// Ветер треплет карточку сильнее к её верхнему краю (lift — от 0 у среза до 1 вверху).
-const [leafTexture] = tiles(['assets/textures/maple-leaves.png']);
+// Ветер треплет лист сильнее к кончику (lift — от 0 у черешка до 1 на кончике).
+const [leafTexture, leafBack] = tiles(['assets/textures/maple-leaf.webp', 'assets/textures/maple-leaf-back.webp']);
 const leafMaterial = new THREE.MeshLambertMaterial({ map: leafTexture, alphaTest: 0.5 });
 leafMaterial.onBeforeCompile = (shader) => {
-  Object.assign(shader.uniforms, windUniforms);
+  Object.assign(shader.uniforms, windUniforms, { leafBack: { value: leafBack } });
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', `#include <common>
-      attribute float lift;
+      attribute float lift, back;
+      varying float vBack;
       ${GUST_GLSL}`)
     .replace('#include <begin_vertex>', `#include <begin_vertex>
+      vBack = back;
       float flutter = (0.02 + windMax * 0.3 * gust(transformed.xz)) * sin(7.0 * windTime + dot(transformed, vec3(5.3, 3.7, 4.1)));
       transformed.xz += windDir * flutter * lift;`);
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>
+      uniform sampler2D leafBack;
+      varying float vBack;`)
+    .replace('#include <map_fragment>', THREE.ShaderChunk.map_fragment
+      .replace('texture2D( map, vMapUv )', 'vBack > 0.5 ? texture2D( leafBack, vMapUv ) : texture2D( map, vMapUv )'));
 };
-const LEAVES = await (await fetch('assets/textures/maple-leaves.json')).json();
+leafMaterial.customProgramCacheKey = () => 'maple-leaf';
+const LEAVES = await (await fetch('assets/textures/maple-leaf.json')).json();
+// Длина кадра листа (м) по виду: отдельный листочек, тройчатый, из пяти листочков. Сам лист — около 0,8 кадра.
+const LEAF_FRAME = [0.15, 0.26, 0.33];
+const NODE = [0.035, 0.06]; // м между парами листьев вдоль веточки
 
-function leafCards(axes, trunk) {
-  const { grid: [cols, rows], aspect, heights } = LEAVES;
+// Листья на концевых веточках осей axes: где сидит (ось и длина дуги s, точка at), куда идёт черешок (up),
+// куда смотрит лицо (face), какая клетка атласа и длина кадра h. Центр листа — center.
+function placeCards(axes, trunk) {
+  const { base, kind } = LEAVES;
   const cards = [];
   for (const a of axes) {
     if (a.dead || a.level < 2) continue;
-    for (let s = 0.3 * a.len; s <= a.len; s += rand(0.08, 0.16)) {
+    let turn = random() * Math.PI;
+    for (let s = 0.3 * a.len; s <= a.len; s += rand(...NODE), turn += Math.PI / 2) {
       const at = section(a, s);
       const outward = at.center.clone().sub(section(trunk, Math.min(trunk.len, at.center.y)).center).setY(0).normalize();
-      const up = at.tangent.clone().lerp(outward, 0.3).addScaledVector(UP, -0.2).normalize();
-      const cell = Math.floor(random() * heights.length), [low, high] = heights[cell];
-      cards.push({ axis: a, at: at.center, up, cell, h: rand(low, high), turn: random() * Math.PI });
+      const across = new THREE.Vector3().crossVectors(at.tangent, Math.abs(at.tangent.y) > 0.9 ? outward : UP).normalize();
+      for (const side of [0, Math.PI]) {
+        const out = across.clone().applyAxisAngle(at.tangent, turn + side + rand(-0.3, 0.3));
+        const up = at.tangent.clone().multiplyScalar(0.6).add(out).addScaledVector(UP, rand(0, 0.4)).normalize();
+        const face = UP.clone().addScaledVector(outward, 0.5).add(new THREE.Vector3(rand(-0.3, 0.3), 0, rand(-0.3, 0.3)));
+        face.addScaledVector(up, -face.dot(up)).normalize();
+        const cell = Math.floor(random() * base.length), h = LEAF_FRAME[kind[cell]] * rand(0.85, 1.15);
+        cards.push({ axis: a, s, at: at.center, up, face, cell, h, center: at.center.clone().addScaledVector(up, h * 0.45) });
+      }
     }
   }
-  const pos = [], normal = [], uv = [], lift = [], index = [];
-  const center = cards.reduce((c, k) => c.add(k.at), new THREE.Vector3()).divideScalar(cards.length);
-  for (const { at, up, cell, h, turn } of cards) {
-    const u0 = (cell % cols) / cols, v0 = 1 - (Math.floor(cell / cols) + 1) / rows, u1 = u0 + 1 / cols, v1 = v0 + 1 / rows;
-    const side0 = new THREE.Vector3().crossVectors(up, Math.abs(up.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : UP).normalize();
-    for (const a of [turn, turn + Math.PI / 2]) {
-      const side = side0.clone().applyAxisAngle(up, a).multiplyScalar((h * aspect) / 2);
+  return cards;
+}
+
+// Листья cards одним куском. cloud — середина кроны: от неё смотрят нормали. У листа две стороны —
+// два треугольника на каждую, со своим обходом: лицо видно со стороны face, изнанка — с обратной.
+export function leafMesh(cards, cloud) {
+  const { grid: [cols, rows], base } = LEAVES;
+  const pos = [], normal = [], uv = [], lift = [], back = [], index = [];
+  for (const { at, up, face, cell, h } of cards) {
+    const u0 = (cell % cols) / cols, v0 = 1 - (Math.floor(cell / cols) + 1) / rows, [bu, bv] = base[cell];
+    const width = new THREE.Vector3().crossVectors(up, face);
+    for (const side of [0, 1]) {
       const k = pos.length / 3;
-      const corners = [at.clone().sub(side), at.clone().add(side), at.clone().add(side).addScaledVector(up, h), at.clone().sub(side).addScaledVector(up, h)];
-      for (const c of corners) {
+      for (const [u, v] of [[0, 0], [1, 0], [1, 1], [0, 1]]) {
+        const c = at.clone().addScaledVector(width, (u - bu) * h).addScaledVector(up, (v - bv) * h);
         pos.push(...c.toArray());
-        normal.push(...c.clone().sub(center).normalize().addScaledVector(UP, 1).normalize().toArray());
+        normal.push(...c.clone().sub(cloud).normalize().addScaledVector(UP, 1).normalize().toArray());
+        uv.push(u0 + u / cols, v0 + v / rows);
+        lift.push(Math.max(0, v - bv));
+        back.push(side);
       }
-      uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
-      lift.push(0, 0, 1, 1);
-      index.push(k, k + 1, k + 2, k, k + 2, k + 3, k, k + 2, k + 1, k, k + 3, k + 2);
+      if (side) index.push(k, k + 2, k + 1, k, k + 3, k + 2);
+      else index.push(k, k + 1, k + 2, k, k + 2, k + 3);
     }
   }
   const geometry = new THREE.BufferGeometry();
@@ -303,24 +333,25 @@ function leafCards(axes, trunk) {
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geometry.setAttribute('lift', new THREE.Float32BufferAttribute(lift, 1));
+  geometry.setAttribute('back', new THREE.Float32BufferAttribute(back, 1));
   geometry.setIndex(index);
-  return { mesh: new THREE.Mesh(geometry, leafMaterial), cards };
+  return new THREE.Mesh(geometry, leafMaterial);
 }
 
 // Клён выше зоны пиления: кора от from (чуть ниже зоны, чтобы на стыке с кубиками не было щели) и листва.
-// Масса листьев — доля LEAF_SHARE от массы ветвей — поровну на карточки, к осям, на которых они сидят.
+// Масса листьев — доля LEAF_SHARE от массы ветвей — поровну на листья, к осям, на которых они сидят.
 // Узлы ствола (пустышки 'trunk' с радиусом) — по ним падающее дерево ложится на землю.
 export function growMaple(shape, zone, height, bark, from) {
   const skeleton = growSkeleton(shape, zone, height);
   const { axes, trunk } = skeleton;
   const tree = new THREE.Group();
   tree.add(new THREE.Mesh(barkGeometry(axes, from), bark));
-  const { mesh, cards } = leafCards(axes, trunk);
-  tree.add(mesh);
+  const cards = placeCards(axes, trunk);
+  tree.add(leafMesh(cards, cards.reduce((c, k) => c.add(k.at), new THREE.Vector3()).divideScalar(cards.length)));
   const branches = axes.filter((a) => a.level > 0).reduce((m, a) => wood(a, zone).reduce((w, [dm]) => w + dm, m), 0);
-  for (const { axis, at, up, h } of cards) {
+  for (const { axis, center } of cards) {
     axis.leaves.mass += (LEAF_SHARE * branches) / cards.length;
-    axis.leaves.center.addScaledVector(at.clone().addScaledVector(up, h / 2), 1);
+    axis.leaves.center.add(center);
     axis.leaves.count = (axis.leaves.count ?? 0) + 1;
   }
   for (const a of axes) if (a.leaves.count) a.leaves.center.divideScalar(a.leaves.count);
