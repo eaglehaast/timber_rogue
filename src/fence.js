@@ -84,7 +84,8 @@ function merge(parts) {
 
 // Сторона забора — отрезок от a до b по земле; деталь ставим по координате s вдоль него,
 // со сдвигом off наружу участка и наклоном tilt вдоль стороны.
-function side(a, b) {
+// ground — высота земли в точке (x, z): столбы стоят на ней, а пролёты тянутся от столба к столбу.
+function side(a, b, ground) {
   const dir = new THREE.Vector2(b.x - a.x, b.z - a.z), length = dir.length();
   dir.normalize();
   const yaw = Math.atan2(-dir.y, dir.x);
@@ -92,7 +93,8 @@ function side(a, b) {
   const place = (s, off, y, tilt = 0, lean = 0) => new THREE.Matrix4().compose(
     new THREE.Vector3(a.x + dir.x * s - dir.y * off, y, a.z + dir.y * s + dir.x * off),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(lean, yaw, tilt, 'YXZ')), new THREE.Vector3(1, 1, 1));
-  return { length, place };
+  const floor = (s) => ground(a.x + dir.x * s, a.z + dir.y * s);
+  return { length, place, floor };
 }
 
 // Штакетник: столбы через 2,5 м, на них в каждом пролёте две прожилины, к ним прибиты доски ровным рядом.
@@ -106,14 +108,14 @@ function side(a, b) {
 // и стоят ровно. Всё это — доли градуса и сантиметры, умноженные на возраст age: при нуле забор как новый.
 const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до земли, у калитки — выше
 const DEG = Math.PI / 180;
-function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, rnd, put, gate) {
+function picket({ length, place, floor }, { height, gap, boardWidth, postWidth, age }, rnd, put, gate) {
   const wobble = (size) => (rnd() + rnd() - 1) * size * age; // чаще около нуля, изредка до ±size
   const posts = [];
   for (let s = 0; s <= length + 0.01; s += 2.5) if (gate === undefined || Math.abs(s - gate) >= 0.8) posts.push(s);
   if (gate !== undefined) posts.push(gate - 0.6, gate + 0.6);
   posts.sort((a, b) => a - b);
   const corner = (s) => s < 0.01 || s > length - 0.01;
-  const sag = posts.map((s) => (corner(s) ? 0 : wobble(0.04)));       // м: просел (−) или выперло (+)
+  const sag = posts.map((s) => (corner(s) ? 0 : wobble(0.04)) + floor(s)); // м: земля под столбом; просел (−) или выперло (+)
   const lean = posts.map((s) => (corner(s) ? 0 : wobble(2.5 * DEG)));  // крен поперёк забора
   const r = postWidth / 2, rails = r + 0.026, front = rails + 0.037;
   const shoulder = LIFT + height - boardWidth / 2;
@@ -144,10 +146,11 @@ function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, 
   if (gate === undefined) return;
   // Доски калитки держит укосина из угла в угол.
   const across = 0.9, up = height - 0.8;
-  put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, rails, 0.34, -Math.atan2(across, up))));
+  put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, rails, 0.34 + floor(gate), -Math.atan2(across, up))));
 }
 
-export function makeFence() {
+// ground(x, z) — высота земли: забор идёт по рельефу. Без неё земля ровная.
+export function makeFence(ground = () => 0) {
   const root = new THREE.Group();
   const rnd = generator(7);
   const parts = { board: [], post: [], rail: [] };
@@ -155,10 +158,10 @@ export function makeFence() {
   const put = (name, geometry) => parts[name][Math.floor(rnd() * KINDS)].push(geometry);
   const x = YARD.w / 2, z = YARD.d / 2;
   // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
-  picket(side({ x: -x, z }, { x, z }), LOOK, rnd, put, x + 8);
-  picket(side({ x, z }, { x, z: -z }), LOOK, rnd, put);
-  picket(side({ x, z: -z }, { x: -x, z: -z }), LOOK, rnd, put);
-  picket(side({ x: -x, z: -z }, { x: -x, z }), LOOK, rnd, put);
+  picket(side({ x: -x, z }, { x, z }, ground), LOOK, rnd, put, x + 8);
+  picket(side({ x, z }, { x, z: -z }, ground), LOOK, rnd, put);
+  picket(side({ x, z: -z }, { x: -x, z: -z }, ground), LOOK, rnd, put);
+  picket(side({ x: -x, z: -z }, { x: -x, z }, ground), LOOK, rnd, put);
   for (const name in parts) {
     parts[name].forEach((list, i) => {
       if (!list.length) return;
