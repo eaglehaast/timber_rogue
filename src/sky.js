@@ -20,8 +20,8 @@ const deg = THREE.MathUtils.degToRad;
 // оно плавно сменяется тем же облаком снизу: картинкой, лежащей в слое плашмя, длинной стороной поперёк
 // ветра — так облако и проплывает над двором.
 const LAYER = 1500, SPREAD = 10000, FADE = 0.6; // м; таять начинают с FADE·SPREAD
-const CLOUD_COUNT = 160, CLOUD_SPEED = 12;       // штук на весь слой; м/с
-const CLOUD_WIDTH = [700, 2000];                // м
+const CLOUD_COUNT = 240, CLOUD_SPEED = 12;       // штук на весь слой; м/с
+const CLOUD_WIDTH = [900, 2400];                // м
 const OVERHEAD = [deg(45), deg(65)];            // высота над горизонтом: от вида сбоку к виду снизу
 const clouds = [];
 
