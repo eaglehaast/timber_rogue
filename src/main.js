@@ -161,11 +161,12 @@ const kit = [
 ];
 const TAKE = 2; // м — с такого расстояния от глаз дотягиваешься до брошенной пилы
 let held = 0;   // что в руках: номер в kit
-// Руки тянут с силой человека: HAND — сколько тянет, не надрываясь (Н), TWIST — сколько запястья держат
+// Руки тянут с силой человека: HAND — сколько тянет, не надрываясь (Н): чурку 27 кг (32 × 45 см) несёшь,
+// вдвое длиннее — волочишь за конец, втрое — уже не сдвинуть (Никита, 2026-11-01). TWIST — сколько запястья держат
 // поворотом (Н·м). GRAB — докуда дотягиваешься от ног вбок (до земли — нагнувшись), HOLD — на каком расстоянии
-// от глаз держишь по взгляду, SLIP — растянуло дальше — выскользнуло, LIFT — за столько секунд кусок отрывается
-// от земли, если вообще поднимается. grasp — что держишь: дерево, хват, поворот куска к взгляду, вес и нагрузка.
-const HAND = 300, TWIST = 40, GRAB = 1.2, HOLD = 0.6, SLIP = 0.8, LIFT = 0.8;
+// от глаз держишь по взгляду, SLIP — растянуло дальше — выскользнуло, LIFT — столько секунд рука тянет, а кусок
+// к ней не идёт: не поднять. grasp — что держишь: дерево, хват, поворот куска к взгляду, вес и нагрузка.
+const HAND = 400, TWIST = 40, GRAB = 1.2, HOLD = 0.6, SLIP = 0.8, LIFT = 0.8;
 let grasp = null;
 const sawModel = makeSaw(kit[0].pack, kit[0].bar);
 const chips = new Chips();
@@ -715,7 +716,7 @@ function grab() {
   const anchor = at.sub(body.position).applyQuaternion(body.quaternion.clone().invert());
   grasp = {
     tree, grip: tree.world.hold(new Grip(body, anchor, capsule, { force: HAND, torque: TWIST })),
-    turn: yaw.invert().multiply(body.quaternion), mass: 1 / body.invMass, load: 0, time: 0, lifted: false,
+    turn: yaw.invert().multiply(body.quaternion), mass: 1 / body.invMass, load: 0, near: Infinity, stuck: 0, lifted: false,
   };
 }
 
@@ -727,7 +728,7 @@ function letGo(why) {
 }
 
 // Рука там, куда смотришь, на HOLD от глаз (не ниже земли), а кусок повёрнут к взгляду, как его взял.
-// Не оторвался от земли за LIFT — не поднять. Оторвался, а потом отстал дальше SLIP — выскользнул.
+// Тянешь, а кусок за LIFT не подошёл к руке ближе — не поднять. Оторвался, а потом отстал дальше SLIP — выскользнул.
 function carry(dt) {
   const { tree, grip } = grasp;
   if (!tree.world.grips.includes(grip)) {
@@ -739,12 +740,12 @@ function carry(dt) {
   hand.y = Math.max(hand.y, height(hand.x, hand.z) + 0.05);
   grip.target.copy(hand).sub(tree.root.position);
   grip.goal.setFromAxisAngle(UP, player.yaw).multiply(grasp.turn);
-  grasp.time += dt;
   grasp.load += (grip.pull - grasp.load) * (1 - Math.exp(-4 * dt));
   const stretch = grip.point(new THREE.Vector3()).distanceTo(grip.target);
   if (stretch < 0.25) grasp.lifted = true;
+  if (stretch < grasp.near - 0.02) { grasp.near = stretch; grasp.stuck = 0; } else grasp.stuck += dt;
   const heavy = 'Тяжело — надо бы ещё раскромсать';
-  if (!grasp.lifted && grasp.time > LIFT) letGo(heavy);
+  if (!grasp.lifted && grasp.stuck > LIFT) letGo(heavy);
   else if (grasp.lifted && stretch > SLIP) letGo(grip.pull > 0.9 * HAND ? heavy : 'Выскользнуло');
 }
 
