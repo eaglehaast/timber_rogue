@@ -9,7 +9,7 @@ import { makeSaw, dressSaw, lamp, runChain, PACKS, BAR_W } from './saw.js';
 import { Chips } from './chips.js';
 import { growMaple, DENSITY } from './maple.js';
 import { Limb, Kerf, combine, THIN } from './limbs.js';
-import { Body, World } from './bodies.js';
+import { Body, World, Grip, rayHit } from './bodies.js';
 import { dressBark } from './bark.js';
 import { makeGround, makeTufts, grassTufts, mugwortTufts, nettleTufts, noise } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
@@ -161,6 +161,12 @@ const kit = [
 ];
 const TAKE = 2; // м — с такого расстояния от глаз дотягиваешься до брошенной пилы
 let held = 0;   // что в руках: номер в kit
+// Руки тянут с силой человека: HAND — сколько тянет, не надрываясь (Н), TWIST — сколько запястья держат
+// поворотом (Н·м). GRAB — докуда дотягиваешься от ног вбок (до земли — нагнувшись), HOLD — на каком расстоянии
+// от глаз держишь по взгляду, SLIP — растянуло дальше — выскользнуло, LIFT — за столько секунд кусок отрывается
+// от земли, если вообще поднимается. grasp — что держишь: дерево, хват, поворот куска к взгляду, вес и нагрузка.
+const HAND = 300, TWIST = 40, GRAB = 1.2, HOLD = 0.6, SLIP = 0.8, LIFT = 0.8;
+let grasp = null;
 const sawModel = makeSaw(kit[0].pack, kit[0].bar);
 const chips = new Chips();
 scene.add(aimPlane, sawModel, chips);
@@ -177,6 +183,8 @@ const dirOf = (az) => new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
 const azimuthOf = (v) => Math.atan2(-v.z, v.x);
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 const forwardOf = (yaw) => new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+// Куда смотришь — с наклоном взгляда.
+const lookOf = () => new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
 const yawOf = (v) => Math.atan2(-v.x, -v.z);
 
 const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0, gait: 0, step: new THREE.Vector3(), eye: EYE, crouch: false };
@@ -288,6 +296,7 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   }
   // Пилы, оставшиеся в старом дереве, снова с тобой: делянку вырастили заново.
   for (const item of kit) if (old && item.tree === old) Object.assign(item, { left: null, tree: null, kerf: null, body: null, stuck: false });
+  if (grasp?.tree === old) grasp = null;
   resultEl.hidden = true;
   logEl.replaceChildren();
 }
@@ -548,7 +557,7 @@ function mount({ tree, limb, kerf }, eye, forward) {
 function sawAt(forward) {
   const trunk = canSaw() ? sawCandidate(forward) : null;
   const eye = eyeOf();
-  const look = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
+  const look = lookOf();
   const limb = limbCandidate(eye, look, forward);
   if (!trunk || !limb) return trunk ?? limb;
   return eye.distanceTo(trunk.origin.clone().add(round.base)) <= eye.distanceTo(inWorld(limb).origin) ? trunk : limb;
@@ -636,6 +645,7 @@ const sawless = () => kit.every((item) => !item.bar || item.stuck);
 function arm(i) {
   held = i;
   const { bar, pack } = kit[i];
+  if (bar && grasp) letGo();
   sawModel.visible = Boolean(bar);
   if (bar) dressSaw(sawModel, pack, bar);
   showKit();
@@ -672,12 +682,70 @@ const notice = (text) => { noted = { text, until: performance.now() + 2500 }; };
 const kitCells = kit.map(() => kitEl.appendChild(document.createElement('div')));
 function showKit() {
   kit.forEach((item, i) => {
-    const where = !item.left ? '' : item.stuck ? 'зажата'
-      : `лежит, ${Math.round(item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()))} м`;
+    const where = item.left ? (item.stuck ? 'зажата' : `лежит, ${Math.round(item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()))} м`)
+      : !item.bar && grasp ? `${Math.round(grasp.mass)} кг` : '';
     const text = `${i + 1} · ${item.name}${item.bar ? ` ${item.bar * 100} см` : ''}${where ? ` — ${where}` : ''}`;
     if (kitCells[i].textContent !== text) kitCells[i].textContent = text;
     kitCells[i].className = [i === held && 'held', item.left && 'away'].filter(Boolean).join(' ');
   });
+}
+
+// Руками берёшь то, во что упирается взгляд, если оно не дальше GRAB от ног: отпил, кусок пня, лежащее дерево.
+// Пилы не в счёт: их берут цифрой. Рука держит точку на оси куска, как держат ветку в кулаке.
+function reachable(eye, look) {
+  let best = null;
+  for (const tree of trees) {
+    const from = eye.clone().sub(tree.root.position);
+    for (const body of tree.world.bodies) {
+      if (kit.some((item) => item.body === body)) continue;
+      const hit = rayHit(body, from, look, best?.t ?? LOOK);
+      if (hit) best = { tree, body, ...hit };
+    }
+  }
+  if (!best) return null;
+  const at = best.at.clone().add(best.tree.root.position);
+  return Math.hypot(at.x - player.pos.x, at.z - player.pos.z) <= GRAB ? best : null;
+}
+
+function grab() {
+  const got = reachable(eyeOf(), lookOf());
+  if (!got) return;
+  const { tree, body, at, capsule } = got;
+  const yaw = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw);
+  const anchor = at.sub(body.position).applyQuaternion(body.quaternion.clone().invert());
+  grasp = {
+    tree, grip: tree.world.hold(new Grip(body, anchor, capsule, { force: HAND, torque: TWIST })),
+    turn: yaw.invert().multiply(body.quaternion), mass: 1 / body.invMass, load: 0, time: 0, lifted: false,
+  };
+}
+
+// Отпустить: кусок падает, куда несло. why — почему (выскользнуло, не поднять).
+function letGo(why) {
+  grasp.tree.world.letGo(grasp.grip);
+  grasp = null;
+  if (why) notice(why);
+}
+
+// Рука там, куда смотришь, на HOLD от глаз (не ниже земли), а кусок повёрнут к взгляду, как его взял.
+// Не оторвался от земли за LIFT — не поднять. Оторвался, а потом отстал дальше SLIP — выскользнул.
+function carry(dt) {
+  const { tree, grip } = grasp;
+  if (!tree.world.grips.includes(grip)) {
+    grasp = null; // кусок разломился: вместо него теперь два тела
+    notice('Разломилось');
+    return;
+  }
+  const hand = eyeOf().addScaledVector(lookOf(), HOLD);
+  hand.y = Math.max(hand.y, height(hand.x, hand.z) + 0.05);
+  grip.target.copy(hand).sub(tree.root.position);
+  grip.goal.setFromAxisAngle(UP, player.yaw).multiply(grasp.turn);
+  grasp.time += dt;
+  grasp.load += (grip.pull - grasp.load) * (1 - Math.exp(-4 * dt));
+  const stretch = grip.point(new THREE.Vector3()).distanceTo(grip.target);
+  if (stretch < 0.25) grasp.lifted = true;
+  const heavy = 'Тяжело — надо бы ещё раскромсать';
+  if (!grasp.lifted && grasp.time > LIFT) letGo(heavy);
+  else if (grasp.lifted && stretch > SLIP) letGo(grip.pull > 0.9 * HAND ? heavy : 'Выскользнуло');
 }
 
 // Пила выпала из разошедшегося пропила ветки: она — твёрдое тело, как отпил, падает и ложится на землю.
@@ -1444,7 +1512,8 @@ function update(dt) {
     if (keys.has('KeyA')) move.sub(right);
   }
   const moving = move.lengthSq() > 0;
-  const speed = moving ? (player.crouch ? 1.5 : shift ? 6 : 3) : 0;
+  // С грузом идёшь медленнее: чем сильнее тянет рука, тем медленнее, при полной силе — вдвое.
+  const speed = moving ? (player.crouch ? 1.5 : shift ? 6 : 3) * (grasp ? 1 - Math.min(1, grasp.load / HAND) / 2 : 1) : 0;
   if (moving) player.pos.addScaledVector(move.normalize(), speed * dt);
   // Шаги: голова на каждом шаге чуть опускается и за два шага раз качается из стороны в сторону.
   // Фаза bob идёт по пройденному пути (шаг — полоборота), поэтому бегом шаги чаще, а встал — замерли.
@@ -1510,6 +1579,7 @@ function update(dt) {
   chips.step(dt);
   // Живут все деревья делянки: то, от которого отошёл, падает дальше.
   stepWind(dt);
+  if (grasp) carry(dt);
   const here = round;
   for (const tree of trees) {
     round = tree;
@@ -1702,7 +1772,10 @@ function hint() {
   if (sawless()) return 'Обе пилы застряли · R — новое дерево';
   const near = kit.findIndex((item) => item.left && !item.stuck && item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()) <= TAKE);
   if (near >= 0) return `${kit[near].name} рядом · ${near + 1} — взять`;
-  return '';
+  if (kit[held].bar) return '';
+  if (grasp) return 'ЛКМ — бросить';
+  const got = reachable(eyeOf(), lookOf());
+  return got ? `${Math.round(1 / got.body.invMass)} кг · ЛКМ — взять` : '';
 }
 
 function resize() {
@@ -1803,6 +1876,9 @@ canvas.addEventListener('mousedown', (e) => {
       round = saw.tree;
       mode = 'aim';
     }
+  } else if (mode === 'free') {
+    if (grasp) letGo();
+    else grab();
   }
 });
 addEventListener('mouseup', (e) => {
