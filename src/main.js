@@ -626,7 +626,11 @@ function leaveSaw() {
   arm(kit.length - 1);
   unsay('pinch');
   unsay('narrow');
+  // Обе пилы зажаты — пилить нечем: раунд проигран. Разожмёт их только само дерево, если упадёт.
+  if (sawless()) showResult('ПИЛЫ ЗАСТРЯЛИ', ['Обе пилы зажаты в пропилах — раунд проигран']);
 }
+
+const sawless = () => kit.every((item) => !item.bar || item.stuck);
 
 // Взять в руки вещь i из инвентаря.
 function arm(i) {
@@ -1695,6 +1699,7 @@ function hint() {
   if (performance.now() < noted.until) return noted.text;
   if (saw?.pinched && saw.kerf) return saw.kerf.squeezed ? 'Зажало: ветку сжимает со всех сторон · оставь пилу (S) и сначала разгрузи ветку' : 'Зажало · пили с другой стороны (U)';
   if (saw?.pinched) return 'Зажало · оставь пилу в стволе (S)';
+  if (sawless()) return 'Обе пилы застряли · R — новое дерево';
   const near = kit.findIndex((item) => item.left && !item.stuck && item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()) <= TAKE);
   if (near >= 0) return `${kit[near].name} рядом · ${near + 1} — взять`;
   return '';
@@ -1753,7 +1758,6 @@ addEventListener('keydown', (e) => {
         const other = kit.findIndex((item) => item.bar && !item.left && item !== kit[held]);
         leaveSaw();
         if (other < 0) {
-          notice('Вторая пила тоже в дереве');
           mode = 'free';
           saw = null;
         } else arm(other);
