@@ -716,7 +716,7 @@ function grab() {
   const anchor = at.sub(body.position).applyQuaternion(body.quaternion.clone().invert());
   grasp = {
     tree, grip: tree.world.hold(new Grip(body, anchor, capsule, { force: HAND, torque: TWIST })),
-    turn: yaw.invert().multiply(body.quaternion), mass: 1 / body.invMass, load: 0, near: Infinity, stuck: 0, low: Infinity, lifted: false,
+    turn: yaw.invert().multiply(body.quaternion), mass: 1 / body.invMass, load: 0, near: Infinity, stuck: 0, low: Infinity, stretch: 0, lifted: false,
   };
 }
 
@@ -742,7 +742,7 @@ function carry(dt) {
   grip.target.copy(hand).sub(tree.root.position);
   grip.goal.setFromAxisAngle(UP, player.yaw).multiply(grasp.turn);
   grasp.load += (grip.pull - grasp.load) * (1 - Math.exp(-4 * dt));
-  const at = grip.point(new THREE.Vector3()), stretch = at.distanceTo(grip.target);
+  const at = grip.point(new THREE.Vector3()), stretch = (grasp.stretch = at.distanceTo(grip.target));
   grasp.low = Math.min(grasp.low, at.y);
   if (stretch < 0.25 || (at.y > grasp.low + 0.1 && stretch < SLIP)) grasp.lifted = true;
   if (stretch < grasp.near - 0.02) { grasp.near = stretch; grasp.stuck = 0; } else grasp.stuck += dt;
@@ -1517,7 +1517,17 @@ function update(dt) {
   const moving = move.lengthSq() > 0;
   // С грузом идёшь медленнее: чем сильнее тянет рука, тем медленнее, при полной силе — вдвое.
   const speed = moving ? (player.crouch ? 1.5 : shift ? 6 : 3) * (grasp ? 1 - Math.min(1, grasp.load / HAND) / 2 : 1) : 0;
-  if (moving) player.pos.addScaledVector(move.normalize(), speed * dt);
+  if (moving) {
+    const step = move.normalize().multiplyScalar(speed * dt);
+    if (grasp) {
+      // Тяжёлое держит, как верёвка: чем сильнее рука растянута (к SLIP), тем меньше шагаешь прочь от куска —
+      // идёшь не быстрее, чем он волочится за тобой.
+      const away = player.pos.clone().sub(grasp.grip.point(new THREE.Vector3()).add(grasp.tree.root.position)).setY(0).normalize();
+      const out = step.dot(away);
+      if (out > 0) step.addScaledVector(away, -out * (1 - THREE.MathUtils.clamp((SLIP - grasp.stretch) / (SLIP - 0.25), 0, 1)));
+    }
+    player.pos.add(step);
+  }
   // Шаги: голова на каждом шаге чуть опускается и за два шага раз качается из стороны в сторону.
   // Фаза bob идёт по пройденному пути (шаг — полоборота), поэтому бегом шаги чаще, а встал — замерли.
   // Размах растёт со скоростью и плавно приходит и уходит. Головой не крутим: только сдвиг.
