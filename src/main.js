@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { TrunkVoxels, trunkShape, VOXEL, dressWood } from './trunk.js';
 import {
-  section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
+  section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, opening, splitLength, pulledFibres, FRICTION, SLIDING,
   SPLIT_MIN,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
@@ -439,9 +439,29 @@ function sawCandidate(forward) {
   const from = local(player.pos).setY(entryHeight(bark));
   const side = new THREE.Vector3(-forward.z, 0, forward.x);
   const q = facing(player.yaw);
+  // Корпус — сбоку, на конце шины. Ствол шире того, что шина перекрывает, — и корпус, стоящий против середины,
+  // упрётся в кору, едва кромка войдёт в древесину. Вальщик ставит пилу так, чтобы корпус прошёл мимо ствола:
+  // сдвигает её к мотору настолько, чтобы корпусу хватило места на весь путь кромки сквозь ствол, но не дальше
+  // полшины — точка под прицелом остаётся под кромкой.
+  const clear = (x) => {
+    const edge = from.clone().addScaledVector(side, x), through = acrossBar(edge, forward, side, 2 * REACH)?.exit ?? 0;
+    return bodyRoom({ edge, q }, through) >= through;
+  };
+  let lo = 0, hi = barL() / 2;
+  if (!clear(lo)) {
+    for (let k = 0; k < 6; k++) {
+      const mid = (lo + hi) / 2;
+      if (clear(mid)) hi = mid;
+      else lo = mid;
+    }
+    from.addScaledVector(side, hi);
+  }
   const touch = Math.min(acrossBar(from, forward, side, bark)?.enter ?? bark, bodyRoom({ edge: from, q }, bark));
   const origin = from.addScaledVector(forward, touch);
-  const fresh = { tree: round, origin, edge: origin.clone(), q, depth: 0 };
+  // Свежий рез идёт в ствол, который, может быть, уже осел на недопиле и стоит наклонённым: щель выпиливается
+  // в нём таким, и смыкает её только то, на сколько он осядет дальше. Запоминаем, насколько он осел (settled).
+  const settled = { tilt: round.give.tilt.clone(), at: round.give.at.clone() };
+  const fresh = { tree: round, origin, edge: origin.clone(), q, depth: 0, settled };
   const f = basis(fresh);
   return round.cuts.find((c) => {
     if (c.pinched) return false;
@@ -733,7 +753,7 @@ function stand(dt) {
   for (let w = -barL() / 2; w <= barL() / 2; w += VOXEL) {
     const p = b.origin.clone().addScaledVector(b.side, w);
     if (!round.voxels.shape.contains(p.x, p.y, p.z)) continue;
-    const g = kerfWidth(sec, round.bent, give, p);
+    const g = kerfWidth(sec, round.bent, give, p, VOXEL - sec.sink - opening(sec, new THREE.Vector3(), saw.settled, p));
     if (round.gap === null || g < round.gap) round.gap = g;
   }
   if (round.gap === null) return;
