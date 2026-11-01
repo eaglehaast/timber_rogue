@@ -4,7 +4,7 @@ import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, splitLength, pulledFibres, FRICTION, SLIDING,
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
-import { makeFence, YARD, HEIGHTS, GAPS, TONES, BOARD_WIDTHS, AGES, POST_WIDTHS, COATS, SHADOWS, setTone, setCoat, setShadow } from './fence.js';
+import { makeFence, YARD } from './fence.js';
 import { makePanorama } from './panorama.js';
 import { makeSky, driftClouds } from './sky.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
@@ -86,10 +86,9 @@ const FOV_MIN = 40, FOV_MAX = 75;
 let fov = 55;
 try { fov = THREE.MathUtils.clamp(Number(localStorage.getItem('fov')) || fov, FOV_MIN, FOV_MAX); } catch {}
 // Выбор пилы, шины и ракурса тоже запоминаем: что было в list под key, а нет — первое.
-const recall = (key, list, fallback = list[0]) => {
-  try { return list.find((v) => String(v) === localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+const recall = (key, list) => {
+  try { return list.find((v) => String(v) === localStorage.getItem(key)) ?? list[0]; } catch { return list[0]; }
 };
-const cycle = (list, value) => list[(list.indexOf(value) + 1) % list.length];
 const keep = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
 const camera = new THREE.PerspectiveCamera(fov, 1, NEAR, 200);
 camera.rotation.order = 'YXZ';
@@ -142,38 +141,7 @@ const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r:
 // Растения сажаем в квадрате FIELD метров: весь двор и полоса за забором. Число пучков — на 1000 м².
 const FIELD = 76;
 const plant = (atlas, perThousand, density) => makeTufts(atlas, Math.round(perThousand * FIELD * FIELD / 1000), FIELD, clear, density);
-// Забор подбираем на глаз клавишами: H — высота, G — щели, M — ширина досок, O — возраст,
-// T — тон краски, N — тень;
-// у столбов I — толщина, J — прокрас.
-const cm = (v) => Math.round(v * 1000) / 10;
-const FENCE_KEYS = {
-  KeyH: ['height', HEIGHTS, 1.8, (v) => `Забор ${v} м`],
-  KeyG: ['gap', Object.keys(GAPS), 'средние', (v) => `Щели ${v}`],
-  KeyT: ['tone', Object.keys(TONES), 'серо-коричневый', (v) => `Краска: ${v}`],
-  KeyI: ['postWidth', POST_WIDTHS, 0.1, (v) => `Столбы ${cm(v)} × ${cm(v)} см`],
-  KeyJ: ['postCoat', Object.keys(COATS), 'как доски', (v) => `Прокрас столбов: ${v}`],
-  KeyM: ['boardWidth', BOARD_WIDTHS, 0.1, (v) => `Доски ${cm(v)} см`],
-  KeyO: ['age', Object.keys(AGES), 'ветхий', (v) => `Забор ${v}`],
-  KeyN: ['shadow', Object.keys(SHADOWS), 'лёгкая', (v) => `Тень на заборе: ${v}`],
-};
-const fenceKey = (key) => `fence${key[0].toUpperCase()}${key.slice(1)}`;
-const fenceLook = Object.fromEntries(Object.values(FENCE_KEYS).map(([key, list, fallback]) => [key, recall(fenceKey(key), list, fallback)]));
-// Краску меняем на ходу, а размеры — пересобирая забор.
-const PAINTS = ['tone', 'postCoat', 'shadow'];
-function repaint() {
-  setTone(TONES[fenceLook.tone]);
-  setCoat(COATS[fenceLook.postCoat]);
-  setShadow(SHADOWS[fenceLook.shadow]);
-}
-repaint();
-let fence = makeFence(fenceLook);
-function refence() {
-  scene.remove(fence);
-  fence.traverse((part) => part.geometry?.dispose());
-  fence = makeFence(fenceLook);
-  scene.add(fence);
-}
-scene.add(makeGround(200), fence, plant(grassTufts, 11000, meadow),
+scene.add(makeGround(200), makeFence(), plant(grassTufts, 11000, meadow),
   plant(mugwortTufts, 1700, colonies(40)), plant(nettleTufts, 1700, colonies(90)),
   plant(tansyTufts, 1100, colonies(140)), plant(dandelionTufts, 1700, lawn), plant(cloverTufts, 5500, clover),
   plant(yarrowTufts, 1200, yarrow));
@@ -1170,15 +1138,6 @@ addEventListener('keydown', (e) => {
     say('fov', `Угол обзора ${fov}°`);
   }
   if (e.code === 'KeyF') setFlying(!fly);
-  if (FENCE_KEYS[e.code]) {
-    const [key, list, , label] = FENCE_KEYS[e.code];
-    fenceLook[key] = cycle(list, fenceLook[key]);
-    keep(fenceKey(key), fenceLook[key]);
-    if (PAINTS.includes(key)) repaint();
-    else refence();
-    unsay('fence');
-    say('fence', label(fenceLook[key]));
-  }
   if (fly) return;
   if (e.code === 'KeyC') player.crouch = !player.crouch;
   if (e.code === 'KeyL') hudEl.classList.toggle('details');
