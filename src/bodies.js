@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { height, normal } from './terrain.js';
 
 // Твёрдые тела: отпилы, куски пня. У тела свои вес, центр тяжести и момент инерции, а форма — капсулы:
 // отрезок с радиусом (у шара отрезок нулевой). Кусок из кубиков — шары, вписанные в его древесину.
@@ -27,7 +28,7 @@ const NEAR = 0.05;         // м — так близко к тому, что с�
 const UP = new THREE.Vector3(0, 1, 0);
 const _u = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _j = new THREE.Vector3();
 const _p = new THREE.Vector3(), _n = new THREE.Vector3(), _s = new THREE.Vector3(), _a = new THREE.Vector3(), _e = new THREE.Vector3();
-const _lo = new THREE.Vector3(), _hi = new THREE.Vector3();
+const _lo = new THREE.Vector3(), _hi = new THREE.Vector3(), _g = new THREE.Vector3();
 const _c1 = new THREE.Vector3(), _c2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4(), _r = new THREE.Matrix3();
 
@@ -80,7 +81,7 @@ export class Body {
   }
 }
 
-// Тела у одного дерева, в осях root. Земля — плоскость y = 0. Остальное, обо что бьются, — наборы (fix):
+// Тела у одного дерева, в осях root (root только сдвинут от начала мира). Земля — рельеф terrain.js. Остальное, обо что бьются, — наборы (fix):
 // кубики (пень, упавший комель) — solid с press(p, r, reach), рамкой box и номером version, который растёт,
 // когда кубики выпиливают, — и капсулы веток на дереве. Набор двигает вместе с object: пень стоит с делянкой,
 // крону качает ветер, упавший верх летит с деревом и толкает тела своей скоростью.
@@ -94,6 +95,20 @@ export class World {
 
   add(body) {
     this.bodies.push(body);
+  }
+
+  // Высота земли под точкой p в осях root; n — нормаль к земле там же.
+  floor(p, n) {
+    const o = this.root.position;
+    if (n) normal(p.x + o.x, p.z + o.z, n);
+    return height(p.x + o.x, p.z + o.z) - o.y;
+  }
+
+  // Конец end капсулы c у земли. Уклоны пологие: расстояние до земли по нормали — высота над ней, умноженная на n.y.
+  ground(b, c, end, contacts) {
+    const depth = c.r - (end.y - this.floor(end, _g)) * _g.y;
+    if (depth < -b.sweep) return;
+    contact(b, null, _p.copy(end).addScaledVector(_g, depth / 2 - c.r), _g, depth, null, contacts, c);
   }
 
   // Набора больше нет: то, что на нём лежало, просыпается.
@@ -192,8 +207,8 @@ export class World {
     const contacts = [];
     awake.forEach((b, i) => {
       for (const c of b.capsules) {
-        ground(b, c, c.A, contacts);
-        if (!c.ball) ground(b, c, c.B, contacts);
+        this.ground(b, c, c.A, contacts);
+        if (!c.ball) this.ground(b, c, c.B, contacts);
       }
       for (const set of this.sets) if (overlap(b.low, b.high, set.span)) for (const c of b.capsules) against(b, c, set, contacts);
       for (let k = i + 1; k < awake.length; k++) pair(b, awake[k], contacts);
@@ -301,12 +316,6 @@ function give(c, p) {
   return THREE.MathUtils.lerp(c.soft[0], c.soft[1], k);
 }
 
-// Конец end капсулы c у земли.
-function ground(b, c, end, contacts) {
-  const depth = c.r - end.y;
-  if (depth < -b.sweep) return;
-  contact(b, null, _p.copy(end).addScaledVector(UP, depth / 2 - c.r), UP, depth, null, contacts, c);
-}
 
 // Тела a и o: каждая пара их капсул, чьи рамки пересеклись. Сначала у каждого — капсулы в рамке другого:
 // у большого сука их сотни, а рядом с другим телом — единицы. Спящее o держит, как неподвижное,

@@ -15,6 +15,7 @@ import { makeGround, makeTufts, grassTufts, mugwortTufts, nettleTufts, noise } f
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, blow, gust, stepWind } from './wind.js';
+import { shapeGround, height } from './terrain.js';
 
 // Пробная делянка: три дерева в ряд, далеко друг от друга, — радиус ствола выше корневых наплывов и где растёт.
 const PLOT = [{ r: 0.1, x: -15 }, { r: 0.3, x: 0 }, { r: 0.2, x: 15 }];
@@ -134,6 +135,9 @@ const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs
 // Полынь и крапива растут колониями от корневищ: пятна в несколько метров, у каждой свои, между ними их нет.
 const colonies = (shift) => (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + shift, z / 9), 0.6, 0.85);
 const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 });
+// Рельеф участка 60 × 40 м (столько огорожено забором) — до травы: она растёт по нему. Зерно рельефа пишем в отчёт сторожа.
+const groundSeed = (Math.random() * 2 ** 32) >>> 0;
+shapeGround(groundSeed, PLOT.map(({ x }) => ({ x, z: 0 })), 60, 40);
 scene.add(makeGround(200), makeTufts(grassTufts, 40000, 60, clear, meadow),
   makeTufts(mugwortTufts, 6000, 60, clear, colonies(40)), makeTufts(nettleTufts, 6000, 60, clear, colonies(90)));
 
@@ -177,6 +181,8 @@ let trigger = false; // курок пилы — левая кнопка мыши
 const trees = [];
 let round = null;
 const local = (p) => p.clone().sub(round.base);
+// Глаза игрока в мире: player.pos — где он стоит на земле, player.eye — высота глаз над ней.
+const eyeOf = () => new THREE.Vector3(player.pos.x, player.pos.y + player.eye, player.pos.z);
 // Длина шины в руках: переключается клавишей B.
 const barL = () => sawModel.userData.bar;
 
@@ -244,7 +250,7 @@ function newRound(slot, treeSeed = (Math.random() * 2 ** 32) >>> 0) {
   const tree = growTree(voxels);
 
   const root = new THREE.Group();
-  root.position.set(x, 0, 0);
+  root.position.set(x, height(x, 0), 0);
   voxels.standing = true;
   // Кроны сначала стоят на месте, а над пропилом их потом переносят с сохранением положения (attach).
   root.add(voxels.group, ...tree.stems.flatMap((s) => [s.bend, ...s.lows.map((l) => l.limb.group)]));
@@ -420,7 +426,7 @@ function ahead(cut) {
 
 // Высота, на которой пила войдёт в кору, если кора по горизонтали в bark от игрока.
 function entryHeight(bark) {
-  return THREE.MathUtils.clamp(player.eye + Math.tan(player.pitch) * bark, 0.05, MAX_ENTRY);
+  return THREE.MathUtils.clamp(local(eyeOf()).y + Math.tan(player.pitch) * bark, 0.05, MAX_ENTRY);
 }
 
 // Расстояние по горизонтали до коры там, куда упирается взгляд.
@@ -489,7 +495,7 @@ function limbCandidate(eye, look, forward) {
   if (!best) return null;
   const { tree, limb, axis, s, t, r } = best;
   const at = eye.clone().addScaledVector(look, t);
-  if (Math.hypot(at.x - player.pos.x, at.z - player.pos.z) > REACH || at.y > MAX_ENTRY) return null;
+  if (Math.hypot(at.x - player.pos.x, at.z - player.pos.z) > REACH || at.y - player.pos.y > MAX_ENTRY) return null;
   if (r < THIN || (axis.level === 0 && limb.stem !== undefined && !fallen(tree, limb.stem))) return null;
   const kerf = limb.kerfs.find((k) => k.axis === axis && Math.abs(k.s - s) < SNAP_DIST) ?? new Kerf(axis, s);
   return mount({ tree, limb, kerf }, eye, forward);
@@ -527,7 +533,7 @@ function mount({ tree, limb, kerf }, eye, forward) {
 // Куда встанет пила, если приставить её сейчас: на ствол или на ветку — что ближе к глазам под прицелом.
 function sawAt(forward) {
   const trunk = canSaw() ? sawCandidate(forward) : null;
-  const eye = new THREE.Vector3(player.pos.x, player.eye, player.pos.z);
+  const eye = eyeOf();
   const look = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
   const limb = limbCandidate(eye, look, forward);
   if (!trunk || !limb) return trunk ?? limb;
@@ -935,7 +941,7 @@ function tip(f, angle) {
 function grounded(f) {
   round.upper.updateWorldMatrix(true, true);
   const at = new THREE.Vector3();
-  return f.knots.some((k) => k.getWorldPosition(at).y <= k.userData.r);
+  return f.knots.some((k) => k.getWorldPosition(at).y - height(at.x, at.z) <= k.userData.r);
 }
 
 // Недопила больше нет: дерево уже никто не держит в плоскости, и вбок его уводит
@@ -1252,7 +1258,7 @@ function crush(limb) {
   for (const { axis } of [...limb.parts]) {
     const part = limb.parts.find((p) => p.axis === axis);
     if (!part || axis.level === 0) continue;
-    const q = axis.points.find((p) => p.s >= part.from && p.s <= part.to && at.copy(p.p).applyMatrix4(frame).y < p.r);
+    const q = axis.points.find((p) => p.s >= part.from && p.s <= part.to && at.copy(p.p).applyMatrix4(frame).y - round.world.floor(at) < p.r);
     if (q) limb.split(axis, q.s).kerfs.forEach((k) => k.mark.geometry.dispose());
   }
   limb.dress();
@@ -1304,8 +1310,8 @@ function showResult(title, notes) {
 
 // Ближайшее к игроку дерево по горизонтали.
 function nearest() {
-  const at = player.pos.clone().setY(0);
-  return trees.reduce((a, b) => (a.base.distanceToSquared(at) <= b.base.distanceToSquared(at) ? a : b));
+  const away = (t) => Math.hypot(t.base.x - player.pos.x, t.base.z - player.pos.z);
+  return trees.reduce((a, b) => (away(a) <= away(b) ? a : b));
 }
 
 function update(dt) {
@@ -1342,9 +1348,10 @@ function update(dt) {
   }
   // Сквозь ствол не пройти: держимся от коры на всей высоте тела. Ствол клонится, поэтому над ногами
   // он бывает ближе, чем у земли. Когда дерево упало, остаётся только пень.
+  const feet = player.pos.y - round.base.y;
   round.voxels.shape.stems.forEach((stem, i) => {
-    const body = Math.min(player.eye, round.stumps[i] ?? Infinity);
-    for (let y = 0; y <= body; y += 0.1) {
+    const body = Math.min(feet + player.eye, round.stumps[i] ?? Infinity);
+    for (let y = Math.max(0, feet); y <= body; y += 0.1) {
       const c = stem.center(y).add(round.base);
       const dx = player.pos.x - c.x, dz = player.pos.z - c.z;
       const dist = Math.hypot(dx, dz);
@@ -1353,6 +1360,7 @@ function update(dt) {
     }
   });
   pushOut(round.yard, player.pos, 0.35);
+  player.pos.y = height(player.pos.x, player.pos.z);
 
   const candidate = mode === 'free' ? sawAt(forward) : null;
 
@@ -1416,8 +1424,8 @@ function update(dt) {
     const mm = round.gap;
     gapEl.textContent = `Щель ${mm.toFixed(0)} мм${mm < 9 ? ' — сужается' : mm > 11 ? ' — расширяется' : ''}`;
   }
-  const focus = saw ? inWorld(saw).origin.y : round.cuts.at(-1)?.origin.y ?? 1;
-  const target = round.base.clone().setY(THREE.MathUtils.mapLinear(view.dist, VIEW_NEAR, VIEW_FAR, focus, VIEW_Y));
+  const focus = saw ? local(inWorld(saw).origin).y : round.cuts.at(-1)?.origin.y ?? 1;
+  const target = round.base.clone().addScaledVector(UP, THREE.MathUtils.mapLinear(view.dist, VIEW_NEAR, VIEW_FAR, focus, VIEW_Y));
   // Вид сбоку стоит справа от линии «ты — ствол», а не от взгляда: крутишь головой — он
   // неподвижен, обходишь дерево — он плавно идёт следом.
   const bearing = local(player.pos).setY(0).normalize();
@@ -1435,7 +1443,7 @@ function update(dt) {
     shake.copy(right).multiplyScalar(Math.sin(player.bob - 0.8) * player.gait * 0.012).setY(-(Math.cos(player.bob) ** 2) * player.gait * 0.012);
   }
   const [out, down, aside] = SHOTS[shot].hold;
-  const held = player.pos.clone().addScaledVector(forward, out).addScaledVector(right, -aside).setY(player.eye - down).add(player.step);
+  const held = eyeOf().addScaledVector(forward, out).addScaledVector(right, -aside).addScaledVector(UP, -down).add(player.step);
   moveSaw(shown ?? { edge: local(held), q: facing(player.yaw) }, shake, dt);
   lamp(sawModel, !!saw && (saw.pinched || !!round.squeeze));
   runChain(sawModel, trigger, !!saw?.pinched, dt);
@@ -1457,14 +1465,14 @@ function frame(dt) {
     swap.position.copy(camera.position);
     swap.quaternion.copy(camera.quaternion);
   }
-  camera.position.set(player.pos.x, player.eye, player.pos.z).add(player.step);
+  camera.position.copy(eyeOf()).add(player.step);
   camera.rotation.set(player.pitch, player.yaw, 0);
   if (saw && (low || back)) {
     // Смотрим между лампой и пропилом: в кадре и шина в древесине, и корпус с лампой.
     const lit = sawModel.getObjectByName('lamp').getWorldPosition(new THREE.Vector3());
     const b = inWorld(saw);
     const focus = b.origin.add(lit).multiplyScalar(0.5);
-    if (low) camera.position.y = Math.min(player.eye, focus.y + low);
+    if (low) camera.position.y = Math.min(player.pos.y + player.eye, focus.y + low);
     else camera.position.copy(focus).addScaledVector(b.along, -back).addScaledVector(b.side, -back / 3).addScaledVector(UP, back / 2);
     camera.lookAt(focus);
   } else if (back) {
@@ -1492,7 +1500,7 @@ function flyCamera(dt, shift) {
   if (move.lengthSq()) fly.pos.addScaledVector(move.normalize(), FLY_SPEED * (shift ? FINE : 1) * dt);
   const off = local(fly.pos).setY(0);
   if (off.length() > FLY_R) fly.pos.sub(off).addScaledVector(off, FLY_R / off.length());
-  fly.pos.y = THREE.MathUtils.clamp(fly.pos.y, 0.02, ZONE_H + 1);
+  fly.pos.y = THREE.MathUtils.clamp(fly.pos.y, height(fly.pos.x, fly.pos.z) + 0.02, round.base.y + ZONE_H + 1);
   camera.position.copy(fly.pos);
   camera.rotation.set(fly.pitch, fly.yaw, 0);
 }
@@ -1631,7 +1639,7 @@ addEventListener('keydown', (e) => {
     under = !under;
     if (saw?.kerf) {
       if (saw.pinched) leaveSaw();
-      saw = mount(saw, new THREE.Vector3(player.pos.x, player.eye, player.pos.z), forwardOf(player.yaw));
+      saw = mount(saw, eyeOf(), forwardOf(player.yaw));
     }
     unsay('under');
     say('under', under ? 'Ветку пилишь снизу, верхней кромкой шины' : 'Ветку пилишь сверху');
@@ -1720,6 +1728,7 @@ const clock = new THREE.Clock();
 const r3 = (a) => a.map((v) => +v.toFixed(3));
 watch(() => ({
   mode,
+  ground: groundSeed,
   player: r3([player.pos.x, player.pos.z, player.yaw, player.pitch, player.eye]),
   wind: r3([wind.dir.x, wind.dir.z, wind.max, wind.phase, wind.time]),
   saw: saw && { limb: !!saw.limb, edge: r3(saw.edge.toArray()), q: r3(saw.q.toArray()), depth: +saw.depth.toFixed(3), pinched: !!saw.pinched },
