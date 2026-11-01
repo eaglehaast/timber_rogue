@@ -1279,7 +1279,7 @@ const bodyOf = (limb) => round.world.bodies.find((b) => b.limb === limb || b.lim
 // Что давит на ветку limb: касания тела, в котором она, и вес. Ветку стоящего дерева тянет только вес.
 function pressing(limb) {
   const body = bodyOf(limb);
-  return [body ? loadsOn(body, limb) : [], gravityIn(limb)];
+  return [body ? loadsOn(body, limb) : [], gravityIn(limb, body)];
 }
 
 // Ветку limb перепилило или сломало на оси axis в точке s (chair — раскол вдоль, Limb.split): всё, что дальше, —
@@ -1411,10 +1411,21 @@ function nearestOn(a, b, p, d) {
   return den > 1e-12 ? THREE.MathUtils.clamp((ud * dw - dd * uw) / den, 0, 1) : 0;
 }
 
-// Ускорение свободного падения в осях ветки.
-function gravityIn(limb) {
+// Ускорение свободного падения в осях ветки — в точке p (в осях ветки). Если ветка в теле body, из него вычитаем
+// ускорение тела в этой точке (принцип д'Аламбера): тело, которое дёргает рука или останавливает земля, давит
+// на свои сечения и силой инерции. Иначе рука, разгоняя лёгкий кусок, ломала бы его, как будто держит его стена.
+function gravityIn(limb, body) {
   limb.group.updateWorldMatrix(true, false);
-  return new THREE.Vector3(0, -1, 0).transformDirection(limb.group.matrixWorld.clone().invert()).multiplyScalar(G);
+  const toLimb = limb.group.matrixWorld.clone().invert(), turn = new THREE.Matrix3().setFromMatrix4(toLimb);
+  const g = new THREE.Vector3(0, -G, 0).applyMatrix3(turn);
+  if (!body) return () => g;
+  const a = body.accel.clone().applyMatrix3(turn), alpha = body.turnAccel.clone().applyMatrix3(turn);
+  const w = body.spin.clone().applyMatrix3(turn), com = body.object.getWorldPosition(new THREE.Vector3()).applyMatrix4(toLimb);
+  const r = new THREE.Vector3(), out = new THREE.Vector3();
+  return (p) => {
+    r.copy(p).sub(com);
+    return out.copy(g).sub(a).sub(r.clone().crossVectors(alpha, r)).sub(r.clone().crossVectors(w, r.clone().crossVectors(w, r)));
+  };
 }
 
 // Ветка не держит то, что на неё давит, — ломается в самом нагруженном сечении или по пропилу (bear). У лежащего
@@ -1424,7 +1435,7 @@ function snapLimbs() {
   for (const body of round.world.bodies) {
     if (body.asleep) continue;
     for (const limb of body.limbs ?? (body.limb ? [body.limb] : [])) {
-      const loads = loadsOn(body, limb), g = gravityIn(limb);
+      const loads = loadsOn(body, limb), g = gravityIn(limb, body);
       if (limb.kerfs.some((kerf) => bear(limb, kerf, loads, g))) return;
       const worst = loads.length ? limb.weakest(loads, g) : null;
       if (!worst || worst.ratio < 1) continue;

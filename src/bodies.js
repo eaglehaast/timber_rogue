@@ -46,6 +46,11 @@ export class Body {
     this.quaternion = quaternion.clone();
     this.velocity = new THREE.Vector3();
     this.spin = new THREE.Vector3();
+    // Ускорение тела (центра тяжести) и углового вращения, сглаженное, как нагрузки на капсулы: по нему
+    // сечения веток чувствуют силу инерции. was — скорости в начале шага.
+    this.accel = new THREE.Vector3();
+    this.turnAccel = new THREE.Vector3();
+    this.was = { velocity: new THREE.Vector3(), spin: new THREE.Vector3() };
     // Толчок, которым расталкиваем зашедшие друг в друга тела: сдвигает их, но скорости им не даёт.
     this.shove = { velocity: new THREE.Vector3(), spin: new THREE.Vector3() };
     // force, torque — чем на капсулу давят касания: сила и её момент вокруг центра тяжести, в осях тела.
@@ -214,6 +219,8 @@ export class World {
     const awake = this.bodies.filter((b) => !b.asleep);
     if (!awake.length) return;
     for (const b of awake) {
+      b.was.velocity.copy(b.velocity);
+      b.was.spin.copy(b.spin);
       b.velocity.y -= G * h;
       b.sweep = (b.velocity.length() + b.spin.length() * b.reach) * h;
       b.touching = false;
@@ -246,6 +253,8 @@ export class World {
         c.stepForce.set(0, 0, 0);
         c.stepTorque.set(0, 0, 0);
       }
+      b.accel.lerp(_a.copy(b.velocity).sub(b.was.velocity).divideScalar(h), k);
+      b.turnAccel.lerp(_a.copy(b.spin).sub(b.was.spin).divideScalar(h), k);
       settle(b, h);
     }
   }
