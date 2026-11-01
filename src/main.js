@@ -711,13 +711,30 @@ function reachable(eye, look) {
 function grab() {
   const got = reachable(eyeOf(), lookOf());
   if (!got) return;
-  const { tree, body, at, capsule } = got;
+  grasp = { tree: got.tree, load: 0, near: Infinity, stuck: 0, low: Infinity, stretch: 0, lifted: false };
+  seize(got.body, got.at, got.capsule);
+}
+
+// Рука берётся за тело body в точке at (в осях дерева), за капсулу capsule; кусок держит повёрнутым, как он сейчас.
+function seize(body, at, capsule) {
   const yaw = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw);
-  const anchor = at.sub(body.position).applyQuaternion(body.quaternion.clone().invert());
-  grasp = {
-    tree, grip: tree.world.hold(new Grip(body, anchor, capsule, { force: HAND, torque: TWIST })),
-    turn: yaw.invert().multiply(body.quaternion), mass: 1 / body.invMass, load: 0, near: Infinity, stuck: 0, low: Infinity, stretch: 0, lifted: false,
-  };
+  const anchor = at.clone().sub(body.position).applyQuaternion(body.quaternion.clone().invert());
+  grasp.grip = grasp.tree.world.hold(new Grip(body, anchor, capsule, { force: HAND, torque: TWIST }));
+  grasp.turn = yaw.invert().multiply(body.quaternion);
+  grasp.mass = 1 / body.invMass;
+}
+
+// Кусок в руке разделился (sever): рука держит ту часть, за которую взялась, — с капсулой ближе всех к хвату at.
+function regrip(at, bodies) {
+  const seg = new THREE.Line3(), on = new THREE.Vector3();
+  let best = null;
+  for (const body of bodies) {
+    for (const c of body.capsules) {
+      const d = seg.set(c.A, c.B).closestPointToPoint(at, true, on).distanceTo(at) - c.r;
+      if (!best || d < best.d) best = { body, c, d };
+    }
+  }
+  seize(best.body, at, best.c);
 }
 
 // Отпустить: кусок падает, куда несло. why — почему (выскользнуло, не поднять).
@@ -732,11 +749,6 @@ function letGo(why) {
 // Не оторвал, и кусок за LIFT не подошёл к руке ближе — не поднять. Оторвал, а потом отстал дальше SLIP — выскользнул.
 function carry(dt) {
   const { tree, grip } = grasp;
-  if (!tree.world.grips.includes(grip)) {
-    grasp = null; // кусок разломился: вместо него теперь два тела
-    notice('Разломилось');
-    return;
-  }
   const hand = eyeOf().addScaledVector(lookOf(), HOLD);
   hand.y = Math.max(hand.y, height(hand.x, hand.z) + 0.05);
   grip.target.copy(hand).sub(tree.root.position);
@@ -1290,18 +1302,21 @@ function sever(limb, axis, s, chair) {
   const piece = limb.split(axis, s, chair).dress();
   limb.dress();
   const body = bodyOf(limb);
-  if (body?.limbs) relay(body);
+  const held = body && grasp?.grip.body === body ? grasp.grip.point(new THREE.Vector3()) : null;
+  let kept = null;
+  if (body?.limbs) kept = relay(body);
   else if (body) {
     round.world.remove(body);
     body.object.removeFromParent();
-    limbBody(limb, frame);
+    kept = limbBody(limb, frame);
   } else {
     round.world.refit(limb.set, limb.shape);
     const stem = round.stems[limb.stem];
     Object.assign(stem, heft(stem));
     if (!round.top) weigh();
   }
-  limbBody(piece, frame);
+  const fell = limbBody(piece, frame);
+  if (held) regrip(held, [kept, fell]);
 }
 
 // Отпиленная ветка — твёрдое тело: вес и инерция — по её древесине и листьям, форма — её капсулы.
@@ -1319,6 +1334,7 @@ function limbBody(limb, frame) {
   });
   body.limb = limb;
   round.world.add(body);
+  return body;
 }
 
 // Дерево легло — дальше оно твёрдое тело, как отпил: ветки и комель упавшего верха (upper) ложатся на землю,
@@ -1384,6 +1400,7 @@ function relay(old) {
   const body = lyingBody(old.upper, old.limbs, old.logs);
   body.velocity.copy(old.velocity);
   body.spin.copy(old.spin);
+  return body;
 }
 
 // Нагрузки на ветку limb от касаний тела body — в осях ветки: { axis, s, f, p } — сила f, точка p на её линии
