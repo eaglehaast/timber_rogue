@@ -734,6 +734,20 @@ function regrip(at, bodies) {
   seize(best.body, at, best.c);
 }
 
+// Концы куска body по оси капсулы c, за которую держишь: докуда тянутся капсулы, лежащие на этой оси, — ствол
+// собран из цепочки капсул, а сучья, что торчат вбок, не в счёт.
+function endsOf(body, c) {
+  const u = c.B.clone().sub(c.A).normalize(), along = (p) => p.clone().sub(c.A).dot(u);
+  let low = 0, high = along(c.B);
+  for (const d of body.capsules) {
+    const s = [d.A, d.B].map(along);
+    if ([d.A, d.B].some((p, i) => p.clone().sub(c.A).addScaledVector(u, -s[i]).length() > c.r)) continue;
+    low = Math.min(low, ...s);
+    high = Math.max(high, ...s);
+  }
+  return [c.A.clone().addScaledVector(u, low), c.A.clone().addScaledVector(u, high)];
+}
+
 // Отпустить: кусок падает, куда несло. why — почему (выскользнуло, не поднять).
 function letGo(why) {
   grasp.tree.world.letGo(grasp.grip);
@@ -1679,10 +1693,10 @@ function update(dt) {
   // и с летающей камеры они висели бы в воздухе без тела — там пила висит сама.
   arms.group.visible = !fly && !SHOTS[shot].back;
   const eye = eyeOf().add(player.step);
-  if (sawModel.visible) arms.holdSaw(sawModel, trigger && mode === 'cut');
+  if (sawModel.visible) arms.holdSaw(sawModel, trigger && mode === 'cut', eye, player.yaw);
   else if (grasp) {
-    const { grip, tree } = grasp, o = tree.root.position, c = grip.capsule;
-    arms.holdPiece(grip.point(new THREE.Vector3()).add(o), c.A.clone().add(o), c.B.clone().add(o), c.r, eye, player.yaw);
+    const { grip, tree } = grasp, o = tree.root.position, [a, b] = endsOf(grip.body, grip.capsule);
+    arms.holdPiece(grip.point(new THREE.Vector3()).add(o), a.add(o), b.add(o), grip.capsule.r, eye, player.yaw);
   } else arms.rest(eye, new THREE.Quaternion().setFromEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ')));
   arms.update(eye, player.yaw, dt);
 }

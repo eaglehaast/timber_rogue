@@ -140,7 +140,7 @@ const FLEX = Object.fromEntries(DIGITS.map((name) => [name, across(JOINTS[name][
 const THUMB = JOINTS.thumb[1].clone().sub(JOINTS.thumb[0]).normalize();
 // Сгибы суставов (рад). Большой: к указательному, к ладони, разворот, основная, ногтевая фаланги.
 const LOOSE = { thumb: [0.15, 0.35, 0.5, 0.25, 0.25], index: [0.3, 0.45, 0.25], middle: [0.35, 0.5, 0.3], ring: [0.4, 0.55, 0.3], pinky: [0.45, 0.6, 0.35] };
-const CLASP = [0.35, 0.9, 0.8, 0.4, 0.5]; // большой палец обхватывает рукоять навстречу остальным
+const CLASP = [0.35, 1.25, 0.8, 0.8, 0.8]; // большой палец обхватывает рукоять навстречу остальным
 const LIMIT = [1.6, 1.9, 1.4];           // дальше суставы пальцев не гнутся
 
 // Пальцы обхватывают рукоять: каждая фаланга по очереди гнётся, пока её конец не ляжет на рукоять. Рукоять —
@@ -340,6 +340,15 @@ const UPPER = 0.3, FORE = 0.27, STRAIGHT = 0.95;
 const axesOf = (yaw) => [new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw)), new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw))];
 const shoulderOf = (eye, right, forward, side) =>
   eye.clone().addScaledVector(right, side * SHOULDER[0]).addScaledVector(UP, -SHOULDER[1]).addScaledVector(forward, -SHOULDER[2]);
+// Тыл кисти k (0 — правая, 1 — левая), обхватившей ось across (от большого пальца к мизинцу) у точки grip, при глазах
+// eye и осях тела right, forward. Пальцы продолжают предплечье — от локтя, опущенного под плечо, к хвату, чуть
+// внутрь — и ложатся поперёк оси. Тогда тыл кисти смотрит на глаза, а не прячется за манжетой.
+function backOf(k, grip, across, eye, right, forward) {
+  const side = k ? -1 : 1, elbow = shoulderOf(eye, right, forward, side).addScaledVector(UP, -UPPER);
+  const fingers = grip.clone().sub(elbow).normalize().addScaledVector(right, -0.3 * side);
+  fingers.addScaledVector(across, -fingers.dot(across)).normalize();
+  return k ? fingers.cross(across) : across.clone().cross(fingers);
+}
 // Локоть руки от плеча shoulder до запястья wrist: где сходятся плечо и предплечье, в сторону pole.
 function reach(shoulder, wrist, pole) {
   const d = Math.max(shoulder.distanceTo(wrist), 1e-3), k = Math.max(1, d / (STRAIGHT * (UPPER + FORE)));
@@ -351,55 +360,93 @@ function reach(shoulder, wrist, pole) {
 }
 
 // Пустые руки — у нижнего края взгляда (в осях глаз: вбок, вверх, вперёд), наготове: пальцы вперёд, чуть внутрь
-// и вверх, тыл кисти кверху, наружу и к глазам — чтобы его было видно. Запястье — у края кадра, кисть — в кадре.
-const REST = { at: [0.16, -0.2, -0.42], fingers: [-0.15, 0.4, -1], back: [0.4, 1, 0.45] };
-// Пилу держат обе руки: правая — заднюю рукоять, левая — верх передней дуги (saw.js, userData.grips),
-// тыл кисти — к лицевой стороне пилы и чуть к рукоятям. Указательный правой, пока не пилишь, приподнят над курком
-// (рукоять ему как бы толще на TRIGGER.free), нажал — прижал.
+// и вниз, тыл кисти наружу и кверху, большие пальцы — вверх. Запястье — у края кадра, кисть — в кадре.
+const REST = { at: [0.17, -0.22, -0.42], fingers: [-0.1, -0.15, -1], back: [1, 0.5, 0.1] };
+// Пилу держат обе руки (saw.js, userData.grips). Правая — заднюю рукоять, тыл кисти — к лицевой стороне пилы
+// и чуть к рукоятям (SAW_BACK). Левая — верх передней трубы, большим пальцем к лицевой стороне, а тыл кисти —
+// куда велит предплечье (backOf). Указательный правой, пока не пилишь, приподнят над курком (рукоять ему
+// как бы толще на TRIGGER.free), нажал — прижал.
 const SAW_BACK = new THREE.Vector3(0, -0.35, 1).normalize();
 const TRIGGER = { free: 0.03, pressed: 0.004 };
+// Кусок тоньше THIN обхватывают кулаки, толще — ладони ложатся плашмя. Толстый поперёк взгляда (ось к «вправо»
+// ближе, чем на 30°: cos — CROSS) короче SPAN держат за торцы, длиннее — снизу, ладони по обе стороны от хвата
+// на UNDER; наискось, вдоль взгляда и стоймя — с боков.
+const THIN = 0.045, CROSS = Math.cos(Math.PI / 6), SPAN = 0.65, UNDER = 0.25;
+// Выбор с запасом: «да», когда score > 0, но сделанный выбор (was) держится, пока score не уйдёт за margin
+// в другую сторону. Кусок в руках качается у границы выбора — а руки не перескакивают с места на место.
+const choose = (was, score, margin = 0.2) => (was === undefined ? score > 0 : score > (was ? -margin : margin));
 
 export class Arms {
   constructor() {
     this.hands = [new Glove(false), new Glove(true)];
     this.sleeves = [new Sleeve(false), new Sleeve(true)];
     this.group = new THREE.Group().add(...this.hands.map((h) => h.object), ...this.sleeves.map((s) => s.mesh));
+    this.choice = {}; // как держат кусок: что выбрано в прошлый раз (choose)
   }
 
-  holdSaw(saw, pressed) {
+  // Держать пилу saw (pressed — курок нажат), глядя из eye и стоя лицом по yaw.
+  holdSaw(saw, pressed, eye, yaw) {
+    this.choice = {};
     saw.updateMatrixWorld();
-    const q = saw.getWorldQuaternion(new THREE.Quaternion()), back = SAW_BACK.clone().applyQuaternion(q);
+    const [right, forward] = axesOf(yaw), q = saw.getWorldQuaternion(new THREE.Quaternion());
     saw.userData.grips.forEach(({ at, axis, r, finger }, k) => {
       const gaps = k ? {} : { index: pressed ? TRIGGER.pressed : TRIGGER.free };
-      this.hands[k].clasp('saw', at.clone().applyMatrix4(saw.matrixWorld), axis.clone().applyQuaternion(q), back, r, finger, gaps);
+      const grip = at.clone().applyMatrix4(saw.matrixWorld), across = axis.clone().applyQuaternion(q);
+      const back = k ? backOf(k, grip, across, eye, right, forward) : SAW_BACK.clone().applyQuaternion(q);
+      this.hands[k].clasp('saw', grip, across, back, r, finger, gaps);
     });
   }
 
-  // Держать кусок за точку at на капсуле a–b радиусом r, глядя из eye и стоя лицом по yaw. Кисти — по обе стороны
-  // точки вдоль оси, правая — ближе к правому, верхнему и ближнему концу; у толстого куска руки шире. Пальцы
-  // продолжают предплечье — от локтя, опущенного под плечо, к хвату, чуть внутрь — и ложатся поперёк куска.
-  // Тогда тыл кисти смотрит на глаза, а не прячется за манжетой. Большой палец — кверху, внутрь или к себе:
-  // так кисть поворачивается без вывиха, как бы ни лежал кусок — поперёк, вдоль взгляда или стоймя.
+  // Держать кусок за точку at на оси a–b (a, b — его концы) радиусом r, глядя из eye и стоя лицом по yaw.
+  // Тонкий — в кулаках по обе стороны точки вдоль оси, правая — ближе к правому, верхнему и ближнему концу;
+  // большой палец — кверху, внутрь или к себе: так кисть поворачивается без вывиха, как бы ни лежал кусок.
+  // Толстый — ладонями плашмя, пальцы вперёд: короткий поперёк взгляда — за торцы, длинный поперёк — снизу,
+  // а вдоль взгляда или стоймя — с боков. За торцы и с боков большие пальцы смотрят вверх.
   holdPiece(at, a, b, r, eye, yaw) {
     const [right, forward] = axesOf(yaw), axis = b.clone().sub(a).normalize();
     const centre = new THREE.Line3(a, b).closestPointToPoint(at, true, new THREE.Vector3());
-    if (axis.dot(right.clone().addScaledVector(UP, 0.3).addScaledVector(forward, -0.5)) < 0) axis.negate();
-    const spread = 0.06 + 0.8 * Math.min(r, 0.15);
+    const was = this.choice;
+    if (r < THIN) {
+      const toB = (was.toB = choose(was.toB, axis.dot(right.clone().addScaledVector(UP, 0.3).addScaledVector(forward, -0.5)))) ? 1 : -1;
+      const spread = 0.06 + 0.8 * r;
+      this.hands.forEach((hand, k) => {
+        const side = k ? -1 : 1, inward = right.clone().multiplyScalar(-side);
+        const grip = centre.clone().addScaledVector(axis, toB * side * spread);
+        const thumb = UP.clone().addScaledVector(inward, 0.5).addScaledVector(forward, -0.3);
+        const across = (was[k] = choose(was[k], axis.dot(thumb))) ? axis.clone().negate() : axis.clone();
+        hand.clasp('piece', grip, across, backOf(k, grip, across, eye, right, forward), r, 'middle');
+      });
+      return;
+    }
+    if (!(was.toB = choose(was.toB, axis.dot(right)))) {
+      [a, b] = [b, a];
+      axis.negate();
+    }
+    const crosswise = (was.cross = choose(was.cross, axis.dot(right) - CROSS, 0.1));
+    const kind = crosswise ? (a.distanceTo(b) < SPAN ? 'ends' : 'under') : 'sides';
     this.hands.forEach((hand, k) => {
-      const side = k ? -1 : 1, inward = right.clone().multiplyScalar(-side);
-      const grip = centre.clone().addScaledVector(axis, side * spread);
-      const elbow = shoulderOf(eye, right, forward, side).addScaledVector(UP, -UPPER);
-      const fingers = grip.clone().sub(elbow).normalize().addScaledVector(inward, 0.3);
-      fingers.addScaledVector(axis, -fingers.dot(axis)).normalize();
-      const thumb = UP.clone().addScaledVector(inward, 0.5).addScaledVector(forward, -0.3);
-      const across = axis.dot(thumb) > 0 ? axis.clone().negate() : axis.clone();
-      const back = k ? fingers.clone().cross(across) : across.clone().cross(fingers);
-      hand.clasp('piece', grip, across, back, r, 'middle');
+      // out — наружу из куска под ладонью, contact — где ладонь его касается.
+      const side = k ? -1 : 1, out = new THREE.Vector3(), contact = new THREE.Vector3();
+      if (kind === 'ends') {
+        out.copy(axis).multiplyScalar(side);
+        contact.copy(k ? a : b);
+      } else {
+        if (kind === 'under') out.copy(UP).addScaledVector(axis, -axis.dot(UP)).normalize().negate();
+        else out.copy(right).addScaledVector(axis, -axis.dot(right)).normalize().multiplyScalar(side);
+        contact.copy(centre).addScaledVector(axis, kind === 'under' ? side * UNDER : 0).addScaledVector(out, r);
+      }
+      // Пальцы — вперёд вдоль ладони; кривизна под ними — у торца никакой, у бока — по тому, как пальцы лежат
+      // к оси: поперёк — радиус куска, вдоль — прямая.
+      const fingers = forward.clone().addScaledVector(out, -forward.dot(out)).normalize();
+      const curve = kind === 'ends' ? 1 : Math.min(1, r / Math.max(1e-3, 1 - fingers.dot(axis) ** 2));
+      const across = k ? out.clone().cross(fingers) : fingers.clone().cross(out);
+      hand.clasp(kind, contact.addScaledVector(out, -curve), across, out, curve, 'middle');
     });
   }
 
   // Пустые руки при взгляде eye (точка) с поворотом look (кватернион глаз).
   rest(eye, look) {
+    this.choice = {};
     this.hands.forEach((hand, k) => {
       const side = k ? -1 : 1, v = ([x, y, z]) => new THREE.Vector3(x * side, y, z).applyQuaternion(look);
       const fingers = v(REST.fingers).normalize(), back = v(REST.back);

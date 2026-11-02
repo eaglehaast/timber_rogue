@@ -56,6 +56,25 @@ async function loadPack(name) {
   }
   const body = bodyGeometry();
 
+  // Передняя рукоять — труба радиусом r по оси path (x, y картинки и z). Цвет поперёк трубы (-handle.png) —
+  // как поперёк нарисованной дуги: от внутреннего её края (v = 0) к внешнему (1) по тому, куда смотрит
+  // поверхность в плоскости картинки, — и сбоку труба выглядит, как дуга на картинке. Обвод трубы, как
+  // и корпуса, — точки её края сбоку, не чаще RIM_STEP.
+  function handleGeometry() {
+    const { path, r } = BODY.handle, sides = 16;
+    const curve = new THREE.CatmullRomCurve3(path.map(([px, py, z]) => new THREE.Vector3(bodyX(px), bodyY(py), z)));
+    const steps = Math.ceil(curve.getLength() / RIM_STEP), geometry = new THREE.TubeGeometry(curve, steps, r, sides);
+    const normal = geometry.getAttribute('normal'), uv = geometry.getAttribute('uv'), n = new THREE.Vector3(), rim = [];
+    geometry.tangents.forEach((t, i) => {
+      const out = new THREE.Vector3(-t.y, t.x, 0).normalize(); // поперёк оси в плоскости картинки, наружу дуги
+      for (let j = 0; j <= sides; j++) uv.setY(i * (sides + 1) + j, 0.5 + 0.5 * n.fromBufferAttribute(normal, i * (sides + 1) + j).dot(out));
+      const at = curve.getPointAt(i / steps);
+      rim.push(at.clone().addScaledVector(out, r), at.addScaledVector(out, -r));
+    });
+    return { curve, geometry, rim };
+  }
+  const handle = handleGeometry();
+
   function plateGeometry(bar) {
     const [left, right, top, bottom] = BAR.px, [a, b] = BAR.stretch;
     const heel = (px) => slotX(bar) - (px - BAR.slot[0]) * BAR.m, nose = (px) => noseX(bar) + (BAR.tip - px) * BAR.m;
@@ -104,6 +123,7 @@ async function loadPack(name) {
   const blurMaterial = new THREE.MeshStandardMaterial({ map: blurMap, ...onPlate, side: THREE.DoubleSide, transparent: true });
   return {
     body: new THREE.Mesh(body.geometry, [frontMap, backMap].map((map) => new THREE.MeshStandardMaterial({ map, roughness: 0.6 }))),
+    handle: new THREE.Mesh(handle.geometry, new THREE.MeshStandardMaterial({ map: load('handle'), roughness: 0.6 })),
     bars: Object.fromEntries(BARS.map((bar) => {
       const chain = chainGeometry(bar);
       return [bar, {
@@ -113,13 +133,17 @@ async function loadPack(name) {
       }];
     })),
     // Рукояти: точка на оси, где лежит рука, ось от большого пальца к мизинцу и радиус (tools/saw.py).
-    grips: BODY.grips.map(({ at: [px, py], to: [tx, ty], r, finger }) => ({
-      at: new THREE.Vector3(bodyX(px), bodyY(py), 0),
-      axis: new THREE.Vector3(bodyX(tx) - bodyX(px), bodyY(ty) - bodyY(py), 0).normalize(),
-      r, finger,
-    })),
+    // На передней трубе большой палец — к лицевой стороне (+z), туда же идёт труба от задней ноги к передней.
+    grips: BODY.grips.map(({ at, to, r, finger, handle: k }) => {
+      if (k === undefined) {
+        const [[px, py], [tx, ty]] = [at, to];
+        return { at: new THREE.Vector3(bodyX(px), bodyY(py), 0), axis: new THREE.Vector3(bodyX(tx) - bodyX(px), bodyY(ty) - bodyY(py), 0).normalize(), r, finger };
+      }
+      const t = k / (BODY.handle.path.length - 1);
+      return { at: handle.curve.getPoint(t), axis: handle.curve.getTangent(t).negate(), r: BODY.handle.r, finger };
+    }),
     lamp: new THREE.Vector3(bodyX(BODY.lamp[0]), bodyY(BODY.lamp[1]), 0),
-    rim: body.rim,
+    rim: [...body.rim, ...handle.rim],
   };
 }
 
@@ -173,7 +197,7 @@ export function dressSaw(saw, name, bar) {
   const light = new THREE.Mesh(lampGeometry, LAMP_OFF);
   light.position.copy(pack.lamp);
   light.name = 'lamp';
-  body.add(pack.body.clone(), light);
+  body.add(pack.body.clone(), pack.handle.clone(), light);
   const { plate, chain, blur } = pack.bars[bar];
   const links = chain.clone(), streaks = blur.clone();
   links.name = 'chain';

@@ -37,8 +37,6 @@ PARTS = [
     (lambda x, y: rect(0, 720, 0, 640)(x, y) | rect(0, 800, 0, 380)(x, y), 0.038),  # задняя рукоять
     (rect(290, 610, 630, 1024), 0.068),                                 # аккумулятор
     (rect(720, 1230, 380, 490), 0.06),                                  # рёбра над мотором
-    (lambda x, y: rect(830, 1230, 0, 380)(x, y) | rect(800, 950, 380, 490)(x, y)
-     | rect(1120, 1220, 380, 420)(x, y), 0.03),                          # передняя дуга
     (rect(1180, 1440, 0, 520), 0.11),                                   # щиток
     # Обруч передней рукояти спускается по тыльной стороне: торчит на −z.
     (polygon([(920, 150), (1045, 165), (1050, 290), (1140, 500), (1148, 1005), (1012, 1005),
@@ -50,11 +48,22 @@ PARTS = [
 # (MOUNT), а её паз с пяткой спрятан внутри (SLOT).
 CUT, CUT_Y = (1352, 1388), 460
 MOUNT, SLOT = [CUT[1], 745], 1300
-# Где руки держат пилу: точка на оси рукояти (at), куда от неё ось идёт от большого пальца к мизинцу (to),
-# радиус рукояти (м) и какой палец над точкой. Правая рука — на задней рукояти, указательный над курком;
-# левая — на верху передней дуги, средний палец посередине.
-GRIPS = [dict(at=[520, 259], to=[132, 348], r=0.02, finger='index'),
-         dict(at=[1080, 146], to=[1180, 146], r=0.014, finger='middle')]
+# Передняя рукоять — труба. Сбоку её дуга нарисована плоской, а по виду сверху это петля поперёк пилы:
+# задняя нога — у тыльной стороны (ниже её продолжает обруч), верх идёт наискось через пилу, передняя
+# нога — у лицевой. HANDLE — ось трубы: x, y картинки и z (м); концы ног уходят в корпус. Толщина дуги
+# на картинках — около 115 пикселей, труба — 2,8 см.
+HANDLE = [(995, 440, -0.025), (975, 390, -0.04), (955, 320, -0.045), (965, 260, -0.045), (985, 215, -0.045),
+          (1020, 172, -0.035), (1076, 152, 0.0), (1130, 170, 0.035), (1158, 215, 0.045), (1167, 280, 0.045),
+          (1170, 360, 0.04), (1172, 440, 0.02)]
+HANDLE_R = 0.014
+# Нарисованную дугу над корпусом с картинок вырезаем — её место заняла труба. У тыльной картинки только
+# левее ARCH_BACK: правее над корпусом её щиток.
+ARCH = [(820, 0), (1236, 0), (1236, 406), (1120, 402), (1074, 380), (1000, 372), (845, 370), (820, 345)]
+ARCH_BACK = 1180
+# Где руки держат пилу. Правая — на задней рукояти: точка на её оси (at), куда от неё ось идёт от большого
+# пальца к мизинцу (to), радиус рукояти (м), указательный — над курком. Левая — на верху передней трубы,
+# в точке оси HANDLE[handle], средний палец посередине.
+GRIPS = [dict(at=[520, 259], to=[132, 348], r=0.02, finger='index'), dict(handle=6, finger='middle')]
 PACKS = {
     # Мягкая объёмная прорисовка со своей цепью.
     '1': dict(
@@ -105,13 +114,18 @@ def body(pack, src, out, name):
     for image, x in ((front, CUT[0]), (back, CUT[1])):
         image[CUT_Y:, x:, 3] = 0
     h, w = front.shape[:2]
+    handle(front, out, name)
+    y, x = np.mgrid[0:h, 0:w]
+    arch = polygon(ARCH, (w, h))(x, y)
+    front[arch, 3] = 0
+    if back is not front:
+        back[arch & (x < ARCH_BACK), 3] = 0
     m = 0.36 / pack['length']  # масштаб: от конца рукояти до шпильки на исходной картинке — 36 см
     for side, image in (('front', over(front, back)), ('back', over(back, front))):
         if side == 'back' and back is front:
             continue
         Image.fromarray(pad(image)).resize((1024, 683), Image.LANCZOS).save(out / f'{name}-{side}.png', optimize=True)
 
-    y, x = np.mgrid[0:h, 0:w]
     zf, zb = np.full((h, w), 0.085 / 2), np.full((h, w), -0.085 / 2)
     front_shown = front[..., 3] > 128
     for zone, width in pack['parts']:
@@ -141,7 +155,22 @@ def body(pack, src, out, name):
     shape = np.stack([128 + cf * 2000, 128 + 16 * signed, 128 + cb * 2000], -1)
     Image.fromarray(np.clip(np.round(shape), 0, 255).astype(np.uint8)).save(out / f'{name}-shape.png', optimize=True)
     return dict(size=[w, h], m=m, cell=CELL, mount=MOUNT, slot=SLOT, grips=pack['grips'], lamp=pack['lamp'],
-                back='back' in pack)
+                back='back' in pack, handle=dict(path=HANDLE, r=HANDLE_R))
+
+
+def handle(front, out, name):
+    """Цвет поперёк передней рукояти: столбцы верха нарисованной дуги от внешнего края к внутреннему, без обводки,
+    в среднем. В игре он ложится поперёк трубы так, что сбоку она выглядит, как дуга на картинке."""
+    rows = []
+    for x in range(1060, 1101, 2):
+        solid = front[:300, x, 3] > 128
+        top = np.argmax(solid)
+        end = top + np.argmin(solid[top:])
+        band = front[top + 10:end - 10, x, :3].astype(float)
+        at = np.linspace(0, len(band) - 1, 64)
+        rows.append([np.interp(at, np.arange(len(band)), band[:, c]) for c in range(3)])
+    profile = np.round(np.mean(rows, 0).T).astype(np.uint8)
+    Image.fromarray(np.repeat(profile[:, None], 4, 1)).save(out / f'{name}-handle.png', optimize=True)
 
 
 def bar(pack, src, out, name):

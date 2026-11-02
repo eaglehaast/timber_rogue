@@ -28,6 +28,7 @@ CELL = 6           # пикселей вида тыла в клетке карт
 CUT = 770          # ниже этой строки перчатка спрятана в рукаве: отрезаем
 WRIST = (428, 680) # середина запястья — начало осей кисти
 HAND = 0.195       # м — от запястья до кончика среднего пальца: отсюда масштаб
+BREADTH = 0.095    # м — ширина кисти в перчатке у пястных суставов (мужская ладонь около 9 см и кожа)
 # Суставы правой перчатки на виде тыла: пястно-фаланговый, два межфаланговых и кончик;
 # у большого — запястно-пястный, пястно-фаланговый, межфаланговый и кончик.
 JOINTS = {
@@ -116,10 +117,23 @@ def glove(src, out):
     labels, n = ndimage.label(mask)
     mask = labels == np.argmax(ndimage.sum(mask, labels, range(1, n + 1))) + 1
 
+    # Перчатка нарисована толще настоящей: кисть у пястных суставов на картинке в 0,64 её длины, а у руки
+    # в перчатке — около половины, и кулак выходил с пол-пилы. Масштаб берём по длине (HAND), а поперёк
+    # сжимаем картинки, чтобы кисть у пястных суставов стала шириной BREADTH.
+    m = HAND / (WRIST[1] - JOINTS['middle'][1][1])
+    (mx, my), row = JOINTS['middle'][0], mask[JOINTS['middle'][0][1]]
+    left, right = mx - np.argmin(row[mx::-1]) + 1, mx + np.argmin(row[mx:])
+    squeeze = BREADTH / m / (right - left)
+    h, w = mask.shape
+    narrow = lambda image: np.array(Image.fromarray(image).resize((round(w * squeeze), h), Image.LANCZOS))
+    back_view, palm = narrow(back_view), narrow(palm)
+    mask = narrow(mask.astype(np.uint8) * 255) > 127
+    joints = {k: [(x * squeeze, y) for x, y in v] for k, v in JOINTS.items()}
+    wrist = (WRIST[0] * squeeze, WRIST[1])
+
     ys, xs = np.where(mask)
     x0, y0 = xs.min() - 2 * CELL, ys.min() - 2 * CELL
     box = (x0, y0, x0 + (xs.max() + 2 * CELL - x0) // CELL * CELL, y0 + (CUT + 2 * CELL - y0) // CELL * CELL)
-    m = HAND / (WRIST[1] - JOINTS['middle'][1][1])
     for name, image in (('front', back_view), ('back', palm)):
         image = image.copy()
         image[..., 3] = np.where(mask, 255, 0)
@@ -144,8 +158,8 @@ def glove(src, out):
         at = lambda k: (round(bx + (ex - bx) * k, 1), round(by + (ey - by) * k, 1))
         return [points[0], at(PHALANGES[0]), at(sum(PHALANGES)), points[1]]
     shift = lambda p: [round(p[0] - box[0], 1), round(p[1] - box[1], 1)]
-    return dict(size=[box[2] - box[0], box[3] - box[1]], m=m, cell=CELL, wrist=shift(WRIST),
-                joints={k: [shift(p) for p in chain(v)] for k, v in JOINTS.items()},
+    return dict(size=[box[2] - box[0], box[3] - box[1]], m=m, cell=CELL, wrist=shift(wrist),
+                joints={k: [shift(p) for p in chain(v)] for k, v in joints.items()},
                 half=[[y - box[1] for y in HALF[0]], HALF[1]], radius=RADIUS)
 
 
