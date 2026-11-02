@@ -50,17 +50,22 @@ PARTS = [
 # (MOUNT), а её паз с пяткой спрятан внутри (SLOT).
 CUT, CUT_Y = (1352, 1388), 460
 MOUNT, SLOT = [CUT[1], 745], 1300
+# Где руки держат пилу: точка на оси рукояти (at), куда от неё ось идёт от большого пальца к мизинцу (to),
+# радиус рукояти (м) и какой палец над точкой. Правая рука — на задней рукояти, указательный над курком;
+# левая — на верху передней дуги, средний палец посередине.
+GRIPS = [dict(at=[520, 259], to=[132, 348], r=0.02, finger='index'),
+         dict(at=[1080, 146], to=[1180, 146], r=0.014, finger='middle')]
 PACKS = {
     # Мягкая объёмная прорисовка со своей цепью.
     '1': dict(
         side='timber_saw_painted_body_side_01_v02.png', back='timber_saw_painted_body_safety_side_01_v02.png',
         bar='timber_saw_painted_bar_01.png', chain='timber_saw_chain_strip_01.png', length=1445,
-        hands=[[350, 290], [1070, 110]], lamp=[790, 362], light=0.5, parts=PARTS),
+        grips=GRIPS, lamp=[790, 362], light=0.5, parts=PARTS),
     # Плоский цвет: цепь вырезается из картинки шины.
     '2': dict(
         side='timber_saw_body_side_01_v04.png', back='timber_saw_body_safety_side_01_v04.png',
         bar='timber_saw_bar_01_v02.png', length=1448,
-        hands=[[350, 290], [1070, 110]], lamp=[790, 362], light=0, parts=PARTS),
+        grips=GRIPS, lamp=[790, 362], light=0, parts=PARTS),
 }
 HOOP = (-0.03, -0.06)  # z лица и тыла обруча там, где он не лежит поверх корпуса
 
@@ -135,7 +140,7 @@ def body(pack, src, out, name):
     cf, cb = np.where(signed > 0, cf, cc[iy, ix]), np.where(signed > 0, cb, cc[iy, ix])
     shape = np.stack([128 + cf * 2000, 128 + 16 * signed, 128 + cb * 2000], -1)
     Image.fromarray(np.clip(np.round(shape), 0, 255).astype(np.uint8)).save(out / f'{name}-shape.png', optimize=True)
-    return dict(size=[w, h], m=m, cell=CELL, mount=MOUNT, slot=SLOT, hands=pack['hands'], lamp=pack['lamp'],
+    return dict(size=[w, h], m=m, cell=CELL, mount=MOUNT, slot=SLOT, grips=pack['grips'], lamp=pack['lamp'],
                 back='back' in pack)
 
 

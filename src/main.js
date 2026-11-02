@@ -6,6 +6,7 @@ import {
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
 import { makeSaw, dressSaw, lamp, runChain, PACKS, BAR_W } from './saw.js';
+import { Arms } from './arms.js';
 import { Chips } from './chips.js';
 import { growMaple, DENSITY } from './maple.js';
 import { Limb, Kerf, combine, THIN } from './limbs.js';
@@ -170,12 +171,13 @@ const HAND = 500, TWIST = 40, GRAB = 1.2, HOLD = 0.6, SLIP = 0.8, LIFT = 0.8;
 let grasp = null;
 const sawModel = makeSaw(kit[0].pack, kit[0].bar);
 const chips = new Chips();
-scene.add(aimPlane, sawModel, chips);
-// Пила и прицел — на своём слое: их видит только взгляд игрока, а вид сбоку показывает
+const arms = new Arms();
+scene.add(aimPlane, sawModel, chips, arms.group);
+// Пила, руки и прицел — на своём слое: их видит только взгляд игрока, а вид сбоку показывает
 // одно дерево, иначе мотор заслоняет пропил.
 const TOOLS = 1;
 aimPlane.layers.set(TOOLS);
-sawModel.traverse((part) => part.layers.set(TOOLS));
+for (const tool of [sawModel, arms.group]) tool.traverse((part) => part.layers.set(TOOLS));
 camera.layers.enable(TOOLS);
 
 // Направление на земле задаём азимутом: 0 — вдоль +x, против часовой стрелки при взгляде сверху
@@ -616,17 +618,12 @@ function spray(cut, volume) {
   chips.spray(at, w.side.multiplyScalar(run), volume);
 }
 
-// Зажатую пилу бросаем в стволе: там остаётся её копия без рук, а руки свободны. Когда дерево легло,
+// Зажатую пилу бросаем в стволе: там остаётся её копия, а руки свободны. Когда дерево легло,
 // пропил разжимается, и пила в пне свободна (land). В ветке пила остаётся в её пропиле и уходит с ним,
 // куда бы ветку ни унесло; ветка разошлась по пропилу — пила выпадает на землю (part).
 function leaveSaw() {
   const left = sawModel.clone();
-  const hands = [];
-  left.traverse((part) => {
-    part.layers.set(0);
-    if (part.name === 'hand') hands.push(part);
-  });
-  hands.forEach((hand) => hand.removeFromParent());
+  left.traverse((part) => part.layers.set(0));
   const at = pose(saw);
   left.position.copy(at.position);
   left.quaternion.copy(at.quaternion);
@@ -1677,6 +1674,17 @@ function update(dt) {
 
   if (fly) flyCamera(dt, shift);
   else frame(dt);
+
+  // Руки держат пилу или кусок, а пустые — внизу у края взгляда. Видно их только из глаз: из-за плеча
+  // и с летающей камеры они висели бы в воздухе без тела — там пила висит сама.
+  arms.group.visible = !fly && !SHOTS[shot].back;
+  const eye = eyeOf().add(player.step);
+  if (sawModel.visible) arms.holdSaw(sawModel, trigger && mode === 'cut');
+  else if (grasp) {
+    const { grip, tree } = grasp, o = tree.root.position, c = grip.capsule;
+    arms.holdPiece(grip.point(new THREE.Vector3()).add(o), c.A.clone().add(o), c.B.clone().add(o), c.r, eye, player.yaw);
+  } else arms.rest(eye, new THREE.Quaternion().setFromEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ')));
+  arms.update(eye, player.yaw, dt);
 }
 
 // Камера по ракурсу shot. Сменился ракурс, или пилу приставили, или отошли — камера не прыгает,
