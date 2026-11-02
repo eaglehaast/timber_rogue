@@ -17,23 +17,37 @@ export const tiles = (files) => files.map((file) => {
 // не повторяются и разбивают плитку.
 // cells = [столбцов, строк] — картинка не одна плитка, а набор плиток с общими краями: каждая клетка
 // поверхности берёт из набора свою плитку по хешу номера клетки, так что узор не повторяется.
-// blend = { map, scale } — вторая картинка той же раскладки; доля её в каждой вершине — атрибут blend
-// геометрии (0 — только map, 1 — только вторая), координаты второй — координаты map, умноженные на scale.
+// blend = { map, scale, groups } — вторая картинка той же раскладки, её плитки поделены на группы подряд
+// (groups — сколько плиток в каждой). Атрибут blend геометрии ведёт вершину по ступеням: 0 — плитки первой
+// группы, 1 — второй, …, groups.length — первая картинка map; между ступенями — смесь соседних.
+// Координаты второй картинки — координаты map, умноженные на scale.
 export function soften(material, { contrast, saturation, scales: [a, b], low, high, cells, blend }) {
   const vec3 = (c) => `vec3(${c.map((v) => v.toFixed(2)).join(', ')})`;
+  const count = cells ? cells[0] * cells[1] : 1;
   // Номер плитки скачет на краю клетки, поэтому мип-уровень берём по производным непрерывных координат.
+  // Плитку берём из [first, first + n) по хешу номера клетки.
   const tile = cells ? `
-    vec4 softTile(sampler2D image, vec2 uv) {
-      const vec2 N = vec2(${cells.map((n) => n.toFixed(1)).join(', ')});
-      float k = floor(softHash(floor(uv)) * N.x * N.y);
+    vec4 softTile(sampler2D image, vec2 uv, float first, float n) {
+      const vec2 N = vec2(${cells.map((v) => v.toFixed(1)).join(', ')});
+      float k = first + floor(softHash(floor(uv)) * n);
       vec2 at = (vec2(mod(k, N.x), floor(k / N.x)) + fract(uv)) / N;
       return textureGrad(image, at, dFdx(uv) / N, dFdy(uv) / N);
     }` : `
-    vec4 softTile(sampler2D image, vec2 uv) { return texture2D(image, uv); }`;
+    vec4 softTile(sampler2D image, vec2 uv, float first, float n) { return texture2D(image, uv); }`;
   const second = blend ? `vMapUv * vec2(${blend.scale.map((v) => v.toFixed(3)).join(', ')})` : '';
-  const pick = blend ? `mix(softTile(map, vMapUv), softTile(blendMap, ${second}), vBlend)` : 'softTile(map, vMapUv)';
-  const mean = blend ? `mix(textureLod(map, vMapUv, 12.0), textureLod(blendMap, ${second}, 12.0), vBlend)` : 'textureLod(map, vMapUv, 12.0)';
-  const sample = THREE.ShaderChunk.map_fragment.replace('texture2D( map, vMapUv )', pick);
+  const steps = blend ? blend.groups.map((n, i) => {
+    const first = blend.groups.slice(0, i).reduce((x, y) => x + y, 0);
+    const tex = `softTile(blendMap, ${second}, ${first.toFixed(1)}, ${n.toFixed(1)})`;
+    return i ? `c = mix(c, ${tex}, clamp(vBlend - ${(i - 1).toFixed(1)}, 0.0, 1.0));` : `vec4 c = ${tex};`;
+  }).join('\n      ') : '';
+  const pick = blend ? `
+    vec4 softPick() {
+      ${steps}
+      return mix(c, softTile(map, vMapUv, 0.0, ${count.toFixed(1)}), clamp(vBlend - ${(blend.groups.length - 1).toFixed(1)}, 0.0, 1.0));
+    }` : '';
+  const last = blend ? `clamp(vBlend - ${(blend.groups.length - 1).toFixed(1)}, 0.0, 1.0)` : '';
+  const mean = blend ? `mix(textureLod(blendMap, ${second}, 12.0), textureLod(map, vMapUv, 12.0), ${last})` : 'textureLod(map, vMapUv, 12.0)';
+  const sample = THREE.ShaderChunk.map_fragment.replace('texture2D( map, vMapUv )', blend ? 'softPick()' : `softTile(map, vMapUv, 0.0, ${count.toFixed(1)})`);
   material.onBeforeCompile = (shader) => {
     if (blend) {
       shader.uniforms.blendMap = { value: blend.map };
@@ -50,7 +64,7 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
           return mix(mix(softHash(i), softHash(i + vec2(1, 0)), f.x),
                      mix(softHash(i + vec2(0, 1)), softHash(i + vec2(1, 1)), f.x), f.y);
         }`)
-      .replace('#include <map_pars_fragment>', `#include <map_pars_fragment>${blend ? '\nuniform sampler2D blendMap;\nvarying float vBlend;' : ''}${tile}`)
+      .replace('#include <map_pars_fragment>', `#include <map_pars_fragment>${blend ? '\nuniform sampler2D blendMap;\nvarying float vBlend;' : ''}${tile}${pick}`)
       .replace('#include <map_fragment>', `${sample}
         #ifdef USE_MAP
           vec3 softMean = ${mean}.rgb * diffuse;
@@ -63,7 +77,7 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
   };
   // Three.js узнаёт готовую программу по тексту onBeforeCompile, а он у всех вызовов soften один:
   // без своего ключа два материала с разными настройками получили бы одну и ту же программу.
-  const key = JSON.stringify([contrast, saturation, a, b, low, high, cells, blend?.scale]);
+  const key = JSON.stringify([contrast, saturation, a, b, low, high, cells, blend?.scale, blend?.groups]);
   material.customProgramCacheKey = () => key;
   return material;
 }
