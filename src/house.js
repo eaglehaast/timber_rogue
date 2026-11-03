@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { generator, smoothNoise } from './random.js';
 import { buildBoards } from './attic.js';
-import { PANE, TRIM_ABOVE, PAINTS, PATTERNS, buildNalichniki } from './nalichnik.js';
+import { PANE, TRIM_ABOVE, PAINTS, PATTERNS, TULLES, buildWindows } from './window.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
 // фасадные сидят на полбревна ниже боковых. На углах брёвна врублены «в чашу с остатком»: каждое выходит за угол
@@ -70,8 +70,8 @@ export function planHouse(seed) {
     window(door, -d / 5),
     ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
   ];
-  const nalichnik = { pattern: Math.floor(rnd() * PATTERNS), paint: Math.floor(rnd() * PAINTS.length) };
-  return { seed, w, d, courses, pitch, openings, nalichnik };
+  const windows = { pattern: Math.floor(rnd() * PATTERNS), paint: Math.floor(rnd() * PAINTS.length), tulle: Math.floor(rnd() * TULLES) };
+  return { seed, w, d, courses, pitch, openings, windows };
 }
 
 // Дом по плану: сруб (бок и торцы брёвен — две группы граней со своими материалами), цоколь,
@@ -121,8 +121,8 @@ export function buildHouse(plan) {
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
   const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
   // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
-  const trims = buildNalichniki(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
-  return new THREE.Group().add(srub, plinth, boards, trims);
+  const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
+  return new THREE.Group().add(srub, plinth, boards, windows);
 }
 
 // Цоколь с полуразмерами hx, hz: стенка — сетка по обходу (s) и высоте, каждая точка сдвинута по нормали
