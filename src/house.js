@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
-import { generator } from './random.js';
+import { generator, smoothNoise } from './random.js';
 import { buildBoards } from './attic.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
@@ -27,6 +27,9 @@ const STEP = 0.25;       // м — шаг колец вдоль бревна
 // брызг. Поэтому плитки темним цветом PLINTH_COLOR, их рисунок усиливаем, а пятна тона кладём не в шаг
 // плиток (так у плиток, одинаковых у краёв, стык не повторяется каждые 2 м). DAMP — во сколько темнее у земли.
 const PLINTH_TILE = [2, 1];
+// Форма цоколя: обмазка руками по камню — стенка в буграх и вмятинах (две крупности), к низу оплыла наружу,
+// углы скруглены и обиты, низ ушёл в землю. Верх ровный: на нём лежат брёвна и над ним висит отлив.
+const PLINTH_SHAPE = { step: 0.04, corner: 0.07, sink: 0.08, splay: 0.035, bumps: [[0.6, 0.35, 0.04], [0.13, 0.11, 0.012]], chip: 0.025 };
 const PLINTH_COLOR = [0.5, 0.48, 0.49];
 const DAMP = 0.6;
 
@@ -107,25 +110,79 @@ export function buildHouse(plan) {
   const srub = new THREE.Mesh(geometry, materials);
   srub.castShadow = srub.receiveShadow = true;
 
-  // Цоколь — короб под срубом. Плитка ложится в метрах: по стене вдоль, по высоте вверх, со сдвигом по зерну;
-  // по высоте сдвиг держит полосу цоколя внутри одной плитки (её верх и низ между собой не сшиты).
-  const box = new THREE.BoxGeometry(w + 2 * R, PLINTH, d + 2 * R).translate(0, PLINTH / 2, 0);
-  const { position, normal, uv } = box.attributes;
-  const u0 = rnd() * 10, v0 = rnd() * (PLINTH_TILE[1] - PLINTH);
-  const damp = [];
-  for (let i = 0; i < uv.count; i++) {
-    const along = Math.abs(normal.getX(i)) > 0.5 ? position.getZ(i) : position.getX(i);
-    const up = Math.abs(normal.getY(i)) > 0.5 ? position.getZ(i) : position.getY(i);
-    uv.setXY(i, u0 + along / PLINTH_TILE[0], v0 + up / PLINTH_TILE[1]);
-    const k = THREE.MathUtils.lerp(DAMP, 1, position.getY(i) / PLINTH);
-    damp.push(k, k, k);
-  }
-  box.setAttribute('color', new THREE.Float32BufferAttribute(damp, 3));
-  const plinth = new THREE.Mesh(box, plinthMaterial);
+  const plinth = new THREE.Mesh(plinthGeometry(w / 2 + R, d / 2 + R, rnd), plinthMaterial);
   plinth.castShadow = plinth.receiveShadow = true;
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
   const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
   return new THREE.Group().add(srub, plinth, boards);
+}
+
+// Цоколь с полуразмерами hx, hz: стенка — сетка по обходу (s) и высоте, каждая точка сдвинута по нормали
+// обхода (PLINTH_SHAPE), сверху — крышка. Плитка ложится в метрах обхода, так что на углах узор не рвётся;
+// по высоте сдвиг держит полосу цоколя внутри одной плитки (её верх и низ между собой не сшиты).
+function plinthGeometry(hx, hz, rnd) {
+  const { step, corner: c, sink, splay, bumps, chip } = PLINTH_SHAPE;
+  const noise = smoothNoise(rnd);
+  // Обход скруглённого прямоугольника от середины зада: прямые стены и дуги углов. at(s) — точка и нормаль наружу.
+  const straight = [2 * (hx - c), 2 * (hz - c)], arc = (c * Math.PI) / 2;
+  const legs = [];
+  for (let k = 0; k < 4; k++) legs.push(straight[k % 2], arc);
+  const perimeter = legs.reduce((a, b) => a + b);
+  const at = (s) => {
+    s = ((s + straight[0] / 2) % perimeter + perimeter) % perimeter; // от середины зада
+    let k = 0;
+    while (s > legs[k]) s -= legs[k++];
+    const side = k >> 1, angle = -Math.PI / 2 + (side * Math.PI) / 2; // зад, право, фасад, лево — нормали по кругу
+    const [ex, ez] = [hx - c, hz - c];
+    const corners = [[-ex, -ez], [ex, -ez], [ex, ez], [-ex, ez]];
+    if (k % 2 === 0) { // прямая: от угла side вдоль к углу side + 1
+      const [ax, az] = corners[side], [bx, bz] = corners[(side + 1) % 4], t = s / legs[k];
+      const [nx, nz] = [Math.cos(angle), Math.sin(angle)];
+      return [ax + (bx - ax) * t + nx * c, az + (bz - az) * t + nz * c, nx, nz, 0];
+    }
+    const a = angle + (s / arc) * (Math.PI / 2), [ox, oz] = corners[(side + 1) % 4];
+    return [ox + Math.cos(a) * c, oz + Math.sin(a) * c, Math.cos(a), Math.sin(a), Math.sin((s / arc) * Math.PI)];
+  };
+  const pos = [], uv = [], color = [], index = [];
+  const u0 = rnd() * 10, v0 = rnd() * (PLINTH_TILE[1] - PLINTH);
+  const cols = Math.ceil(perimeter / step), rows = Math.ceil((PLINTH + sink) / step);
+  for (let i = 0; i <= cols; i++) {
+    const s = (perimeter * i) / cols, [x, z, nx, nz, round] = at(s);
+    for (let j = 0; j <= rows; j++) {
+      const y = -sink + ((PLINTH + sink) * j) / rows, rise = Math.max(0, y) / PLINTH;
+      // Шум по обходу зациклен: последний столбец совпадает с первым.
+      const wrap = (f) => THREE.MathUtils.lerp(f(s, y), f(s - perimeter, y), s / perimeter);
+      let out = splay * (1 - rise) ** 2;
+      for (const [cs, cy, a] of bumps) out += a * (2 * wrap((p, q) => noise(p / cs, q / cy)) - 1);
+      out -= chip * round * wrap((p, q) => noise(p / 0.2 + 40, q / 0.15));
+      out *= THREE.MathUtils.smoothstep(PLINTH - y, 0, 0.12); // у верха — вровень с брёвнами
+      pos.push(x + nx * out, y, z + nz * out);
+      uv.push(u0 + s / PLINTH_TILE[0], v0 + y / PLINTH_TILE[1]);
+      const k = THREE.MathUtils.lerp(DAMP, 1, rise);
+      color.push(k, k, k);
+      if (i && j) {
+        const a = i * (rows + 1) + j, b = a - (rows + 1);
+        index.push(b - 1, b, a, b - 1, a, a - 1);
+      }
+    }
+  }
+  // Крышка: веер от середины к верхнему кольцу.
+  const center = pos.length / 3;
+  pos.push(0, PLINTH, 0); uv.push(u0, v0); color.push(1, 1, 1);
+  for (let i = 0; i < cols; i++) index.push(center, (i + 2) * (rows + 1) - 1, (i + 1) * (rows + 1) - 1);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(color, 3));
+  geometry.setIndex(index);
+  geometry.computeVertexNormals();
+  // Первый и последний столбцы — одни и те же точки: нормали у них общие, иначе на заду виден шов.
+  const normal = geometry.attributes.normal, last = cols * (rows + 1);
+  for (let j = 0; j <= rows; j++) {
+    const n = new THREE.Vector3().fromBufferAttribute(normal, j).add(new THREE.Vector3().fromBufferAttribute(normal, last + j)).normalize();
+    normal.setXYZ(j, n.x, n.y, n.z); normal.setXYZ(last + j, n.x, n.y, n.z);
+  }
+  return geometry;
 }
 
 // Кусок бревна стены wall от from до to вдоль неё, ось на высоте y. look — общее у всех кусков одного бревна:

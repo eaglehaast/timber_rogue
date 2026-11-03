@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { windUniforms, GUST_GLSL } from './wind.js';
+import { smoothNoise } from './random.js';
 
 // Трава на земле — набор из 20 акварельных плиток по GRASS_TILE метров с общими краями (сетка 5 × 4
 // в одной картинке): каждая клетка земли берёт свою плитку, и узор не повторяется.
@@ -74,14 +75,7 @@ export const cloverTufts = await atlas('clover-tufts', true);
 export const yarrowTufts = await atlas('yarrow-tufts', true);
 
 // Плавный шум 0..1 с ячейкой в метр: по нему трава то выше и гуще, то ниже и реже.
-const salt = Math.random() * 1000;
-const hash = (i, j) => { const h = Math.sin(i * 127.1 + j * 311.7 + salt) * 43758.5453; return h - Math.floor(h); };
-export function noise(x, z) {
-  const i = Math.floor(x), j = Math.floor(z), fx = x - i, fz = z - j;
-  const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
-  const a = hash(i, j) + (hash(i + 1, j) - hash(i, j)) * sx, b = hash(i, j + 1) + (hash(i + 1, j + 1) - hash(i, j + 1)) * sx;
-  return a + (b - a) * sz;
-}
+export const noise = smoothNoise(Math.random);
 
 // Трава сплошным покровом: на каждый квадратный метр около density(x, z) × count / size² попыток.
 // Куртины: где шум «дикий», берём в основном высокие пучки и сажаем гуще, между ними — низкая трава.
