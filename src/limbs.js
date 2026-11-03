@@ -74,8 +74,8 @@ export class Limb {
     return { mass, center: mass ? new THREE.Vector3(...tail.moment.subarray(3 * i, 3 * i + 3)).divideScalar(mass) : null };
   }
 
-  // Что давит на то, что за сечением оси a в точке s: нагрузки loads и вес (g — ускорение свободного
-  // падения в осях ветки). Отдаёт сечение q, силу F и её момент M вокруг середины сечения: сечение держит
+  // Что давит на то, что за сечением оси a в точке s: нагрузки loads и вес (g(p) — ускорение свободного
+  // падения в точке p в осях ветки, за вычетом ускорения самой ветки там: сила инерции). Отдаёт сечение q, силу F и её момент M вокруг середины сечения: сечение держит
   // то же обратно. Вдоль оси (F·t) больше нуля — его растягивает, меньше — сжимает.
   forces(a, s, loads, g) {
     const q = pointAt(a, s), past = beyond(a, s), F = new THREE.Vector3(), M = new THREE.Vector3();
@@ -86,8 +86,9 @@ export class Limb {
     }
     const { mass, center } = this.heft(a, s);
     if (mass) {
-      F.addScaledVector(g, mass);
-      M.add(center.sub(q.p).cross(_e.copy(g).multiplyScalar(mass)));
+      _e.copy(g(center)).multiplyScalar(mass);
+      F.add(_e);
+      M.add(center.sub(q.p).cross(_e));
     }
     return { q, F, M };
   }

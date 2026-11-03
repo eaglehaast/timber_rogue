@@ -97,6 +97,38 @@ html, body {
   text-shadow: 0 1px 3px #000;
 }
 
+/* Инвентарь: столбик ячеек в левом нижнем углу (посередине снизу — пила в руках); в руках — ярче,
+   брошенная пила — приглушена. */
+#kit {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 15px;
+  text-shadow: 0 1px 3px #000;
+}
+
+#kit div {
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+#kit div.held {
+  border-color: #f2a33a;
+  color: #fff;
+}
+
+#kit div.away {
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.55);
+}
+
 #result {
   position: fixed;
   left: 0;
