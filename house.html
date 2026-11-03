@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Сруб</title>
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+  <style>
+    :root { --ink: #2b2620; --paper: rgba(250, 246, 236, 0.85); }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ink: #f1ebdf; --paper: rgba(32, 29, 25, 0.8); } }
+    :root[data-theme="dark"] { --ink: #f1ebdf; --paper: rgba(32, 29, 25, 0.8); }
+    html, body { margin: 0; height: 100%; background: #a9c4e0; overflow: hidden; }
+    #scene { display: block; width: 100%; height: 100%; touch-action: none; }
+    #help { position: fixed; left: 16px; bottom: 16px; right: 16px; max-width: 520px; padding: 8px 12px; border-radius: 8px;
+      font: 14px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--ink); background: var(--paper); }
+  </style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="help"><b id="seed"></b><br />Мышь — обойти дом · колесо — ближе · R — новый дом</div>
+  <script type="module" src="src/house-view.js"></script>
+</body>
+</html>
