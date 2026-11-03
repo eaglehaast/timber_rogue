@@ -124,11 +124,15 @@ function triangle(target, vertices, want) {
 }
 
 // Чердак, крыша и отлив дома plan. Высоты от сруба: front — верх фасадных стен, side — верх боковых
-// (на них лежит крыша), plinth — верх цоколя, r — радиус бревна (насколько стена выступает от оси).
-export function buildBoards({ seed, w, d, pitch, openings }, { front, side, plinth, r }) {
+// (на них лежит крыша), plinth — верх цоколя, r — радиус бревна (насколько стена выступает от оси),
+// reach — докуда от середины дома торчат остатки брёвен фасада за углом.
+export function buildBoards({ seed, w, d, pitch, openings }, { front, side, plinth, r, reach }) {
   const rnd = generator(seed + 2);
   const tan = Math.tan(pitch), hx = w / 2 + r;
-  const ridge = side + hx * tan;
+  // Скат проходит над верхним бревном боковой стены и над остатками верхних брёвен фасада за углом —
+  // они уходят под свес, а не сквозь него. Запас — на неровность брёвен (сбег, толщина, обвод).
+  const clear = 0.25 * r;
+  const ridge = Math.max(side + clear + (w / 2) * tan, front + clear + (reach + 0.05) * tan);
   const gable = new Planks('gable'), roof = new Planks('roof'), drip = new Planks('drip');
 
   // Фронтоны спереди и сзади: треугольник от верха фасадной стены до ската, доски ёлочкой.

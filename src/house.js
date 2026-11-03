@@ -100,7 +100,7 @@ export function buildHouse(plan) {
     new THREE.MeshLambertMaterial({ color: 0xb9b2a4 }));
   plinth.castShadow = plinth.receiveShadow = true;
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
-  const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R });
+  const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
   return new THREE.Group().add(srub, plinth, boards);
 }
 
