@@ -21,9 +21,14 @@ const PLINTH = 0.45;     // м — высота цоколя
 const SIDES = 20;        // граней по обводу бревна
 const STEP = 0.25;       // м — шаг колец вдоль бревна
 
-// Цоколь — побелённый бут: набор house-plinth.jpg, 10 плиток 2 × 5 с общими левым и правым краем,
+// Цоколь — старая обмазка по буту: набор house-plinth.jpg, 10 плиток 2 × 5 с общими левым и правым краем,
 // плитка — PLINTH_TILE[0] метров вдоль стены и PLINTH_TILE[1] в высоту (цоколь берёт полосу из её высоты).
+// Плитки почти белые и ровные, а на референсе обмазка серо-бурая, пятнами, и у земли темнее от сырости и
+// брызг. Поэтому плитки темним цветом PLINTH_COLOR, их рисунок усиливаем, а пятна тона кладём не в шаг
+// плиток (так у плиток, одинаковых у краёв, стык не повторяется каждые 2 м). DAMP — во сколько темнее у земли.
 const PLINTH_TILE = [2, 1];
+const PLINTH_COLOR = [0.5, 0.48, 0.49];
+const DAMP = 0.6;
 
 const [logMap, endMap, plinthMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-plinth.jpg']);
 const ENDS = await (await fetch('assets/textures/house-endgrain.json')).json();
@@ -32,8 +37,8 @@ const materials = [
   soften(new THREE.MeshLambertMaterial({ map: logMap }), { ...LOOK, cells: [5, 2] }),
   soften(new THREE.MeshLambertMaterial({ map: endMap }), LOOK),
 ];
-const plinthMaterial = soften(new THREE.MeshLambertMaterial({ map: plinthMap }), {
-  contrast: 1.0, saturation: 0.8, scales: [0.4, 1.3], low: [0.86, 0.86, 0.86], high: [1.0, 0.99, 0.97], cells: [2, 5],
+const plinthMaterial = soften(new THREE.MeshLambertMaterial({ map: plinthMap, color: new THREE.Color(...PLINTH_COLOR), vertexColors: true }), {
+  contrast: 1.5, saturation: 0.6, scales: [1.4, 3.7], low: [0.7, 0.67, 0.62], high: [1.06, 1.03, 0.98], cells: [2, 5],
 });
 
 // Дом по зерну: размер сруба, число венцов, уклон крыши, окна и дверь.
@@ -107,11 +112,15 @@ export function buildHouse(plan) {
   const box = new THREE.BoxGeometry(w + 2 * R, PLINTH, d + 2 * R).translate(0, PLINTH / 2, 0);
   const { position, normal, uv } = box.attributes;
   const u0 = rnd() * 10, v0 = rnd() * (PLINTH_TILE[1] - PLINTH);
+  const damp = [];
   for (let i = 0; i < uv.count; i++) {
     const along = Math.abs(normal.getX(i)) > 0.5 ? position.getZ(i) : position.getX(i);
     const up = Math.abs(normal.getY(i)) > 0.5 ? position.getZ(i) : position.getY(i);
     uv.setXY(i, u0 + along / PLINTH_TILE[0], v0 + up / PLINTH_TILE[1]);
+    const k = THREE.MathUtils.lerp(DAMP, 1, position.getY(i) / PLINTH);
+    damp.push(k, k, k);
   }
+  box.setAttribute('color', new THREE.Float32BufferAttribute(damp, 3));
   const plinth = new THREE.Mesh(box, plinthMaterial);
   plinth.castShadow = plinth.receiveShadow = true;
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
