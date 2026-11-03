@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { generator, smoothNoise } from './random.js';
 import { buildBoards } from './attic.js';
+import { PANE, TRIM_ABOVE, PAINTS, PATTERNS, buildNalichniki } from './nalichnik.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
 // фасадные сидят на полбревна ниже боковых. На углах брёвна врублены «в чашу с остатком»: каждое выходит за угол
@@ -46,14 +47,17 @@ const plinthMaterial = soften(new THREE.MeshLambertMaterial({ map: plinthMap, co
 
 // Дом по зерну: размер сруба, число венцов, уклон крыши, окна и дверь.
 // Стены: front и back идут вдоль x (z = ±d/2), left и right — вдоль z (x = ∓w/2).
-// Проём — { wall, at (середина вдоль стены от её центра), width, bottom, top } в метрах, низ и верх — от верха цоколя.
+// Проём — { kind (window или door), wall, at (середина вдоль стены от её центра), width, bottom, top } в метрах,
+// низ и верх — от верха цоколя. Окно — по проёму наличника (PANE); наличники на доме одного узора и цвета.
 export function planHouse(seed) {
   const rnd = generator(seed);
   const pick = (list) => list[Math.floor(rnd() * list.length)];
   const w = pick([5, 6, 6, 6.5]), d = pick([5, 6, 6]);
   const courses = 11 + Math.floor(rnd() * 3);
   const pitch = THREE.MathUtils.degToRad(38 + 8 * rnd());
-  const window = (wall, at) => ({ wall, at, width: 0.75, bottom: 0.95, top: 2.1 });
+  // Низ окна — 0,95 м над цоколем, а в низком срубе ниже: кокошник наличника не должен лезть выше стен.
+  const sill = Math.min(0.95, 2 * R + (courses - 1) * COURSE - COURSE / 2 - TRIM_ABOVE - PANE[1] - 0.03);
+  const window = (wall, at) => ({ kind: 'window', wall, at, width: PANE[0], bottom: sill, top: sill + PANE[1] });
   const row = (wall, length, n) => Array.from({ length: n }, (_, i) => window(wall, (i - (n - 1) / 2) * (length / n)));
   const front = w < 5.5 ? 2 : 3;
   const door = pick(['left', 'right']);
@@ -61,11 +65,13 @@ export function planHouse(seed) {
     ...row('front', w, front),
     ...row('back', w, 1 + Math.floor(rnd() * 2)),
     // У двери на боку — одно окно ближе к заду, дверь ближе к улице; на другом боку — одно-два окна.
-    { wall: door, at: d / 4, width: 0.9, bottom: 0.05, top: 1.95 },
+    // Нижнее бревно под дверью остаётся порогом.
+    { kind: 'door', wall: door, at: d / 4, width: 0.9, bottom: 2 * R, top: 2.0 },
     window(door, -d / 5),
     ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
   ];
-  return { seed, w, d, courses, pitch, openings };
+  const nalichnik = { pattern: Math.floor(rnd() * PATTERNS), paint: Math.floor(rnd() * PAINTS.length) };
+  return { seed, w, d, courses, pitch, openings, nalichnik };
 }
 
 // Дом по плану: сруб (бок и торцы брёвен — две группы граней со своими материалами), цоколь,
@@ -92,7 +98,7 @@ export function buildHouse(plan) {
       // Бревно перерезано проёмами, сквозь которые проходит его ось.
       let pieces = [[-reach - (rnd() - 0.5) * 0.06, reach]];
       for (const o of holes) {
-        if (y < o.bottom || y > o.top) continue;
+        if (y + r <= o.bottom || y - r >= o.top) continue; // проём пропилен по всем брёвнам, которые задевает
         const a = o.at - o.width / 2, b = o.at + o.width / 2;
         pieces = pieces.flatMap(([p, q]) => [[p, Math.min(q, a)], [Math.max(p, b), q]].filter(([u, v]) => v - u > 0.05));
       }
@@ -114,7 +120,9 @@ export function buildHouse(plan) {
   plinth.castShadow = plinth.receiveShadow = true;
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
   const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
-  return new THREE.Group().add(srub, plinth, boards);
+  // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
+  const trims = buildNalichniki(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
+  return new THREE.Group().add(srub, plinth, boards, trims);
 }
 
 // Цоколь с полуразмерами hx, hz: стенка — сетка по обходу (s) и высоте, каждая точка сдвинута по нормали

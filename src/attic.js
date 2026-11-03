@@ -186,7 +186,7 @@ export function buildBoards({ seed, w, d, pitch, openings }, { front, side, plin
     const e = new THREE.Vector3(...out), t = new THREE.Vector3(...along);
     const X = e.clone().multiplyScalar(Math.cos(DRIP.slope)).setY(-Math.sin(DRIP.slope));
     const n = e.clone().multiplyScalar(Math.sin(DRIP.slope)).setY(Math.cos(DRIP.slope));
-    const doors = openings.filter((o) => o.wall === name && o.bottom < 0.3);
+    const doors = openings.filter((o) => o.wall === name && o.kind === 'door');
     for (let s = -half - r; s < half + r - 0.02; s += DRIP.width + 0.008) {
       if (doors.some((o) => Math.abs(s + DRIP.width / 2 - o.at) < o.width / 2 + 0.1)) continue;
       const o = e.clone().multiplyScalar(at + 0.4 * r).addScaledVector(t, s).setY(plinth + 0.05);
