@@ -21,13 +21,20 @@ const PLINTH = 0.45;     // м — высота цоколя
 const SIDES = 20;        // граней по обводу бревна
 const STEP = 0.25;       // м — шаг колец вдоль бревна
 
-const [logMap, endMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg']);
+// Цоколь — побелённый бут: набор house-plinth.jpg, 10 плиток 2 × 5 с общими левым и правым краем,
+// плитка — PLINTH_TILE[0] метров вдоль стены и PLINTH_TILE[1] в высоту (цоколь берёт полосу из её высоты).
+const PLINTH_TILE = [2, 1];
+
+const [logMap, endMap, plinthMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-plinth.jpg']);
 const ENDS = await (await fetch('assets/textures/house-endgrain.json')).json();
 const LOOK = { contrast: 0.7, saturation: 0.65, scales: [0.3, 1.1], low: [0.8, 0.8, 0.8], high: [1.08, 1.04, 1.0] };
 const materials = [
   soften(new THREE.MeshLambertMaterial({ map: logMap }), { ...LOOK, cells: [5, 2] }),
   soften(new THREE.MeshLambertMaterial({ map: endMap }), LOOK),
 ];
+const plinthMaterial = soften(new THREE.MeshLambertMaterial({ map: plinthMap }), {
+  contrast: 1.0, saturation: 0.8, scales: [0.4, 1.3], low: [0.86, 0.86, 0.86], high: [1.0, 0.99, 0.97], cells: [2, 5],
+});
 
 // Дом по зерну: размер сруба, число венцов, уклон крыши, окна и дверь.
 // Стены: front и back идут вдоль x (z = ±d/2), left и right — вдоль z (x = ∓w/2).
@@ -95,9 +102,17 @@ export function buildHouse(plan) {
   const srub = new THREE.Mesh(geometry, materials);
   srub.castShadow = srub.receiveShadow = true;
 
-  // Цоколь — пока простой короб под срубом, до своей текстуры.
-  const plinth = new THREE.Mesh(new THREE.BoxGeometry(w + 2 * R, PLINTH, d + 2 * R).translate(0, PLINTH / 2, 0),
-    new THREE.MeshLambertMaterial({ color: 0xb9b2a4 }));
+  // Цоколь — короб под срубом. Плитка ложится в метрах: по стене вдоль, по высоте вверх, со сдвигом по зерну;
+  // по высоте сдвиг держит полосу цоколя внутри одной плитки (её верх и низ между собой не сшиты).
+  const box = new THREE.BoxGeometry(w + 2 * R, PLINTH, d + 2 * R).translate(0, PLINTH / 2, 0);
+  const { position, normal, uv } = box.attributes;
+  const u0 = rnd() * 10, v0 = rnd() * (PLINTH_TILE[1] - PLINTH);
+  for (let i = 0; i < uv.count; i++) {
+    const along = Math.abs(normal.getX(i)) > 0.5 ? position.getZ(i) : position.getX(i);
+    const up = Math.abs(normal.getY(i)) > 0.5 ? position.getZ(i) : position.getY(i);
+    uv.setXY(i, u0 + along / PLINTH_TILE[0], v0 + up / PLINTH_TILE[1]);
+  }
+  const plinth = new THREE.Mesh(box, plinthMaterial);
   plinth.castShadow = plinth.receiveShadow = true;
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
   const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });

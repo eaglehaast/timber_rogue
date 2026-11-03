@@ -19,7 +19,7 @@ const TONES = {                          // линейные цвета стар
 const GABLE_ANGLE = Math.PI / 4;         // доски фронтона идут под 45° и сходятся «ёлочкой» на середине
 const EAVE = 0.45, GABLE_OVER = 0.2;     // м — свес крыши за боковые стены и за фронтоны
 const ROOF_BOARD = 0.14, BARGE = 0.2;    // м — ширина доски тёса и причелины
-const DRIP = { length: 0.3, slope: 0.45, width: BOARD }; // отлив: вынос от стены, уклон (рад), ширина доски
+const DRIP = { length: 0.18, slope: 0.6, width: BOARD }; // отлив: вынос от стены, уклон (рад), ширина доски
 
 const boardMaps = tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures/fence-board-${i + 1}.jpg`));
 const [endMap] = tiles(['assets/textures/board-end.jpg']);
