@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { generator } from './random.js';
+import { buildBoards } from './attic.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
 // поперечные сидят на полбревна выше. На углах брёвна врублены «в чашу с остатком»: каждое выходит за угол
@@ -28,7 +29,7 @@ const materials = [
   soften(new THREE.MeshLambertMaterial({ map: endMap }), LOOK),
 ];
 
-// Дом по зерну: размер сруба, число венцов, окна и дверь.
+// Дом по зерну: размер сруба, число венцов, уклон крыши, окна и дверь.
 // Стены: front и back идут вдоль x (z = ±d/2), left и right — вдоль z (x = ∓w/2).
 // Проём — { wall, at (середина вдоль стены от её центра), width, bottom, top } в метрах, низ и верх — от верха цоколя.
 export function planHouse(seed) {
@@ -36,6 +37,7 @@ export function planHouse(seed) {
   const pick = (list) => list[Math.floor(rnd() * list.length)];
   const w = pick([5, 6, 6, 6.5]), d = pick([5, 6, 6]);
   const courses = 11 + Math.floor(rnd() * 3);
+  const pitch = THREE.MathUtils.degToRad(38 + 8 * rnd());
   const window = (wall, at) => ({ wall, at, width: 0.75, bottom: 0.95, top: 2.1 });
   const row = (wall, length, n) => Array.from({ length: n }, (_, i) => window(wall, (i - (n - 1) / 2) * (length / n)));
   const front = w < 5.5 ? 2 : 3;
@@ -48,11 +50,13 @@ export function planHouse(seed) {
     window(door, -d / 5),
     ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
   ];
-  return { seed, w, d, courses, openings };
+  return { seed, w, d, courses, pitch, openings };
 }
 
-// Сруб по плану: группа с мешем брёвен (бок и торцы — две группы граней со своими материалами) и цоколем.
-export function buildSrub({ seed, w, d, courses, openings }) {
+// Дом по плану: сруб (бок и торцы брёвен — две группы граней со своими материалами), цоколь,
+// а над срубом и у цоколя — дощатые части (attic.js).
+export function buildHouse(plan) {
+  const { seed, w, d, courses, openings } = plan;
   const rnd = generator(seed + 1);
   const parts = { pos: [], normal: [], uv: [], side: [], end: [] };
   const walls = {
@@ -64,7 +68,8 @@ export function buildSrub({ seed, w, d, courses, openings }) {
   for (const [name, wall] of Object.entries(walls)) {
     const holes = openings.filter((o) => o.wall === name);
     for (let k = 0; k < courses; k++) {
-      const y = R + k * COURSE + wall.lift;
+      // Нижний венец боковых стен (окладной) лежит прямо на цоколе, остальные — на полбревна выше фасадных.
+      const y = R + k * COURSE + (k ? wall.lift : 0);
       const reach = wall.half + OVERHANG + (rnd() - 0.5) * 0.06;
       const r = R * (0.92 + 0.16 * rnd());
       const butt = k % 2 ? 1 : -1; // комель — то с одного конца, то с другого
@@ -93,7 +98,9 @@ export function buildSrub({ seed, w, d, courses, openings }) {
   const plinth = new THREE.Mesh(new THREE.BoxGeometry(w + 2 * R, PLINTH, d + 2 * R).translate(0, PLINTH / 2, 0),
     new THREE.MeshLambertMaterial({ color: 0xb9b2a4 }));
   plinth.castShadow = plinth.receiveShadow = true;
-  return new THREE.Group().add(srub, plinth);
+  const top = PLINTH + 2 * R + (courses - 1) * COURSE;
+  const boards = buildBoards(plan, { front: top, side: top + COURSE / 2, plinth: PLINTH, r: R });
+  return new THREE.Group().add(srub, plinth, boards);
 }
 
 // Кусок бревна стены wall от from до to вдоль неё, ось на высоте y. look — общее у всех кусков одного бревна:

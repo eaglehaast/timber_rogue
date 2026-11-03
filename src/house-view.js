@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
-import { planHouse, buildSrub } from './house.js';
+import { planHouse, buildHouse } from './house.js';
 
 // Стенд дома отдельно от игры: сруб на лужайке, солнце, камера крутится мышью вокруг дома.
 // R — новый дом (новое зерно), колесо — ближе и дальше.
@@ -37,7 +37,7 @@ const label = document.getElementById('seed');
 function rebuild(seed) {
   if (house) scene.remove(house);
   const plan = planHouse(seed);
-  house = buildSrub(plan);
+  house = buildHouse(plan);
   scene.add(house);
   label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов`;
 }
