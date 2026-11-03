@@ -4,7 +4,7 @@ import { generator } from './random.js';
 import { buildBoards } from './attic.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
-// поперечные сидят на полбревна выше. На углах брёвна врублены «в чашу с остатком»: каждое выходит за угол
+// фасадные сидят на полбревна ниже боковых. На углах брёвна врублены «в чашу с остатком»: каждое выходит за угол
 // на OVERHANG и там пересекает бревно соседней стены, а пересечение и есть чаша. В проёмах окон и двери
 // брёвна перерезаны, и в проёме видны их торцы. Всё строится от числа-зерна: другое зерно — другой дом.
 //
@@ -60,16 +60,17 @@ export function buildHouse(plan) {
   const rnd = generator(seed + 1);
   const parts = { pos: [], normal: [], uv: [], side: [], end: [] };
   const walls = {
-    front: { along: 'x', at: d / 2, half: w / 2, lift: 0 },
-    back: { along: 'x', at: -d / 2, half: w / 2, lift: 0 },
-    left: { along: 'z', at: -w / 2, half: d / 2, lift: COURSE / 2 },
-    right: { along: 'z', at: w / 2, half: d / 2, lift: COURSE / 2 },
+    front: { along: 'x', at: d / 2, half: w / 2, lift: -COURSE / 2 },
+    back: { along: 'x', at: -d / 2, half: w / 2, lift: -COURSE / 2 },
+    left: { along: 'z', at: -w / 2, half: d / 2, lift: 0 },
+    right: { along: 'z', at: w / 2, half: d / 2, lift: 0 },
   };
   for (const [name, wall] of Object.entries(walls)) {
     const holes = openings.filter((o) => o.wall === name);
     for (let k = 0; k < courses; k++) {
-      // Нижний венец боковых стен (окладной) лежит прямо на цоколе, остальные — на полбревна выше фасадных.
-      const y = R + k * COURSE + (k ? wall.lift : 0);
+      // Боковые стены лежат на цоколе, фасадные — на полбревна ниже: их нижний венец — полубревно,
+      // стёсанное снизу по цоколю (см. log), так между венцами нигде нет щели.
+      const y = R + k * COURSE + wall.lift;
       const reach = wall.half + OVERHANG + (rnd() - 0.5) * 0.06;
       const r = R * (0.92 + 0.16 * rnd());
       const butt = k % 2 ? 1 : -1; // комель — то с одного конца, то с другого
@@ -98,8 +99,8 @@ export function buildHouse(plan) {
   const plinth = new THREE.Mesh(new THREE.BoxGeometry(w + 2 * R, PLINTH, d + 2 * R).translate(0, PLINTH / 2, 0),
     new THREE.MeshLambertMaterial({ color: 0xb9b2a4 }));
   plinth.castShadow = plinth.receiveShadow = true;
-  const top = PLINTH + 2 * R + (courses - 1) * COURSE;
-  const boards = buildBoards(plan, { front: top, side: top + COURSE / 2, plinth: PLINTH, r: R });
+  const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
+  const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R });
   return new THREE.Group().add(srub, plinth, boards);
 }
 
@@ -107,6 +108,8 @@ export function buildHouse(plan) {
 // радиус, с какого конца комель, провис, неровность обвода и сдвиг узора, — так перерезанное проёмом бревно
 // остаётся одним бревном.
 function log(parts, wall, y, from, to, { r, butt, reach, sag, wobble, u, v }, rnd) {
+  // Ниже верха цоколя бревно стёсано: точка обвода не опускается под него.
+  const hewn = (s, x, h) => [x, Math.max(h, PLINTH - (y - drop(s)))];
   // Точка бревна: s вдоль стены, x поперёк неё (наружу дома — по знаку wall.at), h — высота; turn — тот же поворот без сдвига.
   const turn = (s, x, h) => (wall.along === 'x' ? [s, h, x] : [x, h, s]);
   const place = (s, x, h) => turn(s, x + wall.at, h);
@@ -122,7 +125,8 @@ function log(parts, wall, y, from, to, { r, butt, reach, sag, wobble, u, v }, rn
     const s = from + ((to - from) * i) / n;
     for (let j = 0; j <= SIDES; j++) {
       const az = (j / SIDES) * 2 * Math.PI, c = Math.cos(az), sn = Math.sin(az), rr = radius(s, az);
-      parts.pos.push(...place(s, c * rr, y - drop(s) + sn * rr));
+      const [x, h] = hewn(s, c * rr, sn * rr);
+      parts.pos.push(...place(s, x, y - drop(s) + h));
       parts.normal.push(...turn(0, c, sn));
       parts.uv.push(u + s / LOG_ALONG, v + (az * r) / LOG_AROUND);
       if (i && j < SIDES) {
@@ -135,16 +139,20 @@ function log(parts, wall, y, from, to, { r, butt, reach, sag, wobble, u, v }, rn
   for (const [s, out] of [[from, -1], [to, 1]]) {
     const cell = Math.floor(rnd() * ENDS.disc.length), [cx, cy, cr] = ENDS.disc[cell];
     const [cols, rows] = ENDS.grid, col = cell % cols, row = rows - 1 - Math.floor(cell / cols), spin = rnd() * 2 * Math.PI;
+    // Точка торца (поперёк стены, вверх) → место в круге картинки, повёрнутом на spin.
+    const turnEnd = (x, h) => [(x * Math.cos(spin) - h * Math.sin(spin)) / r, (x * Math.sin(spin) + h * Math.cos(spin)) / r];
     const at = (x, h) => [(col + cx + x * cr) / cols, (row + cy + h * cr) / rows];
     const center = parts.pos.length / 3;
-    parts.pos.push(...place(s, 0, y - drop(s)));
+    const [x0, h0] = hewn(s, 0, 0);
+    parts.pos.push(...place(s, x0, y - drop(s) + h0));
     parts.normal.push(...dir.map((k) => k * out));
-    parts.uv.push(...at(0, 0));
+    parts.uv.push(...at(...turnEnd(x0, h0)));
     for (let j = 0; j <= SIDES; j++) {
       const az = (j / SIDES) * 2 * Math.PI, rr = radius(s, az);
-      parts.pos.push(...place(s, Math.cos(az) * rr, y - drop(s) + Math.sin(az) * rr));
+      const [x, h] = hewn(s, Math.cos(az) * rr, Math.sin(az) * rr);
+      parts.pos.push(...place(s, x, y - drop(s) + h));
       parts.normal.push(...dir.map((k) => k * out));
-      parts.uv.push(...at((Math.cos(az + spin) * rr) / r, (Math.sin(az + spin) * rr) / r));
+      parts.uv.push(...at(...turnEnd(x, h)));
       if (j) parts.end.push(...(out * (flip ? -1 : 1) > 0 ? [center, center + j, center + j + 1] : [center, center + j + 1, center + j]));
     }
   }
