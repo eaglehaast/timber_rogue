@@ -1690,9 +1690,9 @@ function update(dt) {
   else frame(dt);
 
   // Руки держат пилу или кусок, а пустые — внизу у края взгляда. Видно их только из глаз: из-за плеча
-  // и с летающей камеры они висели бы в воздухе без тела — там пила висит сама. Пока пила стоит в резе,
-  // рук нет и из глаз: в кадре пила, рез и опилки.
-  arms.group.visible = !fly && !SHOTS[shot].back && mode === 'free';
+  // и с летающей камеры они висели бы в воздухе без тела — там пила висит сама. Пока пила приставлена
+  // к стволу или ветке (shown: примерка или рез), рук нет и из глаз: в кадре пила, рез и опилки.
+  arms.group.visible = !fly && !SHOTS[shot].back && !shown;
   const eye = eyeOf().add(player.step);
   if (sawModel.visible) arms.holdSaw(sawModel, trigger && mode === 'cut', eye, player.yaw);
   else if (grasp) {
