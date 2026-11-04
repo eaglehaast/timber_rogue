@@ -6,15 +6,16 @@ import { tiles } from './surface.js';
 // Каждая картинка — 1,1 × 2,2 м, вид строго спереди. У всех пяти один контур и один проём, поэтому
 // проём в срубе меряется по картинке: PANE — ширина и высота проёма в метрах.
 // Рисованы белым: цвет даёт код, на одном доме все наличники одного узора и цвета.
-const COUNT = 5;
+// Мерки картинок — в house-nalichnik.json (tools/nalichnik.py): рама, проём и внешний силуэт каждой рамы в пикселях;
+// по силуэту рама получает толщину THICK — торец доски, отступающий от лица к брёвнам.
 const SIZE = [1.1, 2.2];
-const PX = [1024, 2048];
-// В пикселях картинки 1024 × 2048 (от левого верхнего угла): сама рама и проём в ней.
-const FRAME = { x: [11, 1013], y: [104, 1831] };
-const OPENING = { x: [231, 792], y: [544, 1587] };
-const m = (px, axis) => (px / PX[axis]) * SIZE[axis];
-export const PANE = [m(OPENING.x[1] - OPENING.x[0], 0), m(OPENING.y[1] - OPENING.y[0], 1)];
-export const TRIM_ABOVE = m(OPENING.y[0] - FRAME.y[0], 1); // рама над проёмом (кокошник)
+const THICK = 0.03;
+const KIT = await (await fetch('assets/textures/house-nalichnik.json')).json();
+const COUNT = KIT.outlines.length;
+const [FX0, FX1, FY0, FY1] = KIT.frame, [OX0, OX1, OY0, OY1] = KIT.opening;
+const m = (px, axis) => (px / KIT.px[axis]) * SIZE[axis];
+export const PANE = [m(OX1 - OX0, 0), m(OY1 - OY0, 1)];
+export const TRIM_ABOVE = m(OY0 - FY0, 1); // рама над проёмом (кокошник)
 
 // Краски наличников: голубая как на референсе — чаще всего; белая, синяя, красная, светло-жёлтая.
 export const PAINTS = [
@@ -28,9 +29,13 @@ export const TULLES = 5;
 // Глубины — от плоскости наличника внутрь стены: переплёт, стекло на его середине, тюль за ним.
 const SASH = { bar: 0.05, mullion: 0.035, transom: 0.68, front: 0.06, back: 0.11, paint: [0.92, 0.92, 0.88] };
 const GLASS = 0.085, TULLE = 0.14;
+// Обсада — доски по краям проёма; под них брёвна пропилены шире проёма на эту толщину.
+export const LINING = 0.03;
 
 const [map, tulleMap] = tiles(['assets/textures/house-nalichnik.webp', 'assets/textures/house-tulle.jpg']);
 const trimMaterials = PAINTS.map((paint) => new THREE.MeshLambertMaterial({ map, color: new THREE.Color(...paint), alphaTest: 0.5 }));
+const edgeMaterials = PAINTS.map((paint) => new THREE.MeshLambertMaterial({ map, color: new THREE.Color(...paint) }));
+const liningMaterials = PAINTS.map((paint) => new THREE.MeshLambertMaterial({ color: new THREE.Color(...paint).multiplyScalar(0.8) }));
 const sashMaterial = new THREE.MeshLambertMaterial({ color: new THREE.Color(...SASH.paint) });
 const tulleMaterial = new THREE.MeshLambertMaterial({ map: tulleMap });
 const glassMaterial = new THREE.MeshBasicMaterial({ color: 0xc4d6e8, transparent: true, opacity: 0.22, depthWrite: false });
@@ -61,12 +66,15 @@ class Faces {
 // out — плоскость наличника от оси стены наружу (чуть впереди брёвен), проём картинки совпадает с проёмом окна.
 export function buildWindows({ openings, windows: { pattern, paint, tulle } }, walls, { base, out }) {
   const trims = new Faces(), sash = new Faces(), glass = new Faces(), tulles = new Faces();
-  // Края рамы наличника относительно низа и середины проёма, в метрах; u, v — места в атласе.
-  const left = m(FRAME.x[0] - OPENING.x[0], 0), right = m(FRAME.x[1] - OPENING.x[0], 0) - PANE[0];
-  const below = m(OPENING.y[1] - FRAME.y[1], 1), above = m(OPENING.y[1] - FRAME.y[0], 1);
-  const u = [FRAME.x[0], FRAME.x[1]].map((x) => (pattern + x / PX[0]) / COUNT);
-  const v = [FRAME.y[1], FRAME.y[0]].map((y) => 1 - y / PX[1]);
+  // Пиксель картинки → место на окне (a вправо от середины проёма, y вверх от его низа) и в атласе.
+  const place = (x, y) => [m(x - (OX0 + OX1) / 2, 0), m(OY1 - y, 1)];
+  const texel = (x, y) => [(pattern + x / KIT.px[0]) / COUNT, 1 - y / KIT.px[1]];
+  // Силуэт рамы: точки и нормали наружу; обход картинки (y вниз) мог идти в любую сторону — узнаём по площади.
+  const flat = KIT.outlines[pattern], outline = [];
+  for (let i = 0; i < flat.length; i += 2) outline.push([flat[i], flat[i + 1]]);
+  const turn = Math.sign(outline.reduce((sum, [x, y], i) => { const [x2, y2] = outline[(i + 1) % outline.length]; return sum + x * y2 - x2 * y; }, 0));
   const [w, h] = PANE;
+  const lining = new Faces(), edges = new Faces();
   for (const o of openings) {
     if (o.kind !== 'window') continue;
     const wall = walls[o.wall], side = Math.sign(wall.at);
@@ -77,7 +85,25 @@ export function buildWindows({ openings, windows: { pattern, paint, tulle } }, w
     const s = wall.along === 'x' ? [side, 0, 0] : [0, 0, -side];
     const at = (a, y, d) => [0, 1, 2].map((k) => c[k] + n[k] * (out - d) + s[k] * a + (k === 1 ? y : 0));
     const rect = (faces, a0, a1, y0, y1, d, uvs) => faces.face([at(a0, y0, d), at(a1, y0, d), at(a1, y1, d), at(a0, y1, d)], n, uvs);
-    rect(trims, -w / 2 + left, w / 2 + right, below, above, 0, [[u[0], v[0]], [u[1], v[0]], [u[1], v[1]], [u[0], v[1]]]);
+    const corner = (x, y) => [...place(x, y), ...texel(x, y)];
+    const [a0, y0, u0, v0] = corner(FX0, FY1), [a1, y1, u1, v1] = corner(FX1, FY0);
+    rect(trims, a0, a1, y0, y1, 0, [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
+    // Торцы рамы по силуэту: от лица наличника внутрь на THICK. Краска — с пикселя чуть внутри силуэта
+    // (на самом краю картинки — контур пером), растянутая по толщине.
+    outline.forEach(([x, y], i) => {
+      const [x2, y2] = outline[(i + 1) % outline.length];
+      const len = Math.hypot(x2 - x, y2 - y), nx = (turn * (y2 - y)) / len, ny = (turn * -(x2 - x)) / len; // наружу, в пикселях (y вниз)
+      const [pa, py] = place(x, y), [qa, qy] = place(x2, y2);
+      const tp = texel(x - nx * 8, y - ny * 8), tq = texel(x2 - nx * 8, y2 - ny * 8);
+      const normal = [0, 1, 2].map((k) => s[k] * nx - (k === 1 ? ny : 0));
+      edges.face([at(pa, py, 0), at(qa, qy, 0), at(qa, qy, THICK), at(pa, py, THICK)], normal, [tp, tq, tq, tp]);
+    });
+    // Обсада — доски по краям проёма от лица наличника до тюля: закрывают щель между наличником и рамой.
+    const inward = (dir) => dir.map((k) => -k);
+    lining.face([at(-w / 2, 0, 0), at(-w / 2, h, 0), at(-w / 2, h, TULLE), at(-w / 2, 0, TULLE)], s);
+    lining.face([at(w / 2, 0, 0), at(w / 2, h, 0), at(w / 2, h, TULLE), at(w / 2, 0, TULLE)], inward(s));
+    lining.face([at(-w / 2, 0, 0), at(w / 2, 0, 0), at(w / 2, 0, TULLE), at(-w / 2, 0, TULLE)], [0, 1, 0]);
+    lining.face([at(-w / 2, h, 0), at(w / 2, h, 0), at(w / 2, h, TULLE), at(-w / 2, h, TULLE)], [0, -1, 0]);
     rect(tulles, -w / 2, w / 2, 0, h, TULLE, [[tulle / TULLES, 0], [(tulle + 1) / TULLES, 0], [(tulle + 1) / TULLES, 1], [tulle / TULLES, 1]]);
     rect(glass, -w / 2, w / 2, 0, h, GLASS);
     // Брус переплёта — коробка от a0 до a1 и от y0 до y1; задняя грань не видна.
@@ -96,5 +122,6 @@ export function buildWindows({ openings, windows: { pattern, paint, tulle } }, w
     bar(-M / 2, M / 2, B, h - B);
     bar(-w / 2 + B, w / 2 - B, T * h - M / 2, T * h + M / 2);
   }
-  return new THREE.Group().add(trims.mesh(trimMaterials[paint]), sash.mesh(sashMaterial), tulles.mesh(tulleMaterial), glass.mesh(glassMaterial));
+  return new THREE.Group().add(trims.mesh(trimMaterials[paint]), edges.mesh(edgeMaterials[paint]), lining.mesh(liningMaterials[paint]),
+    sash.mesh(sashMaterial), tulles.mesh(tulleMaterial), Object.assign(glass.mesh(glassMaterial), { castShadow: false }));
 }

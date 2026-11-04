@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { generator, smoothNoise } from './random.js';
 import { buildBoards } from './attic.js';
-import { PANE, TRIM_ABOVE, PAINTS, PATTERNS, TULLES, buildWindows } from './window.js';
+import { PANE, TRIM_ABOVE, PAINTS, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
 // фасадные сидят на полбревна ниже боковых. На углах брёвна врублены «в чашу с остатком»: каждое выходит за угол
@@ -98,8 +98,9 @@ export function buildHouse(plan) {
       // Бревно перерезано проёмами, сквозь которые проходит его ось.
       let pieces = [[-reach - (rnd() - 0.5) * 0.06, reach]];
       for (const o of holes) {
-        if (y + r <= o.bottom || y - r >= o.top) continue; // проём пропилен по всем брёвнам, которые задевает
-        const a = o.at - o.width / 2, b = o.at + o.width / 2;
+        // Проём пропилен по всем брёвнам, которые задевает, и шире на обсаду.
+        if (y + r <= o.bottom - LINING || y - r >= o.top + LINING) continue;
+        const a = o.at - o.width / 2 - LINING, b = o.at + o.width / 2 + LINING;
         pieces = pieces.flatMap(([p, q]) => [[p, Math.min(q, a)], [Math.max(p, b), q]].filter(([u, v]) => v - u > 0.05));
       }
       const look = { r, butt, reach, sag: 0.005 + 0.01 * rnd(), wobble: rnd() * 100, u: rnd() * 10, v: rnd() * 10 };
