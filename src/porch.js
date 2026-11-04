@@ -4,20 +4,22 @@ import { Planks, boardMaterials } from './attic.js';
 import { Faces } from './window.js';
 
 // Крыльцо у двери и сама дверь — из тех же досок забора (attic.js: Planks), только крашеные.
-// Крыльцо: площадка перед дверью вровень с порогом, лестница от неё наружу, по бокам тетивы, столбы и перила,
-// под площадкой обшивка. Краска на ступенях и площадке истёрта посередине — там, где ходят, а к краям остаётся.
+// Крыльцо: площадка перед дверью вровень с порогом, лестница от неё наружу почти во всю её ширину; под площадкой
+// и под лестницей по бокам — обшивка досками стоймя. Перила редко и только с одной стороны.
+// Краска тёмная; на ступенях и площадке истёрта посередине — там, где ходят, а к краям остаётся.
 // Дверь — вертикальные доски в проёме, железные ручка и петли.
-const LANDING = { width: 1.3, depth: 1.0 };   // м — площадка: вдоль стены и от стены
+const LANDING = { width: 1.8, depth: 1.1 };   // м — площадка: вдоль стены и от стены
 export const PORCH_WIDTH = LANDING.width;
-const STAIR = { width: 1.0, run: 0.3, rise: 0.18, boards: 3 }; // ширина, проступь, желаемая высота ступени, досок в проступи
+const STAIR = { width: 1.6, run: 0.3, rise: 0.18 }; // ширина, проступь, желаемая высота ступени
 const BOARD_W = 0.1, GAP = 0.006;              // доска и щель между досками
-const POST = 0.09, RAIL = { height: 0.9, size: 0.06 }, STRINGER = { thick: 0.04, above: 0.05, below: 0.25 };
+const SIDE = { thick: 0.022, above: 0.05 };    // обшивка боков лестницы: толщина, выше носков ступеней на
+const POST = 0.09, RAIL = { height: 0.9, size: 0.06, chance: 0.3 }; // перила — у каждого третьего крыльца
 const DOOR_INSET = 0.08;                      // м — дверь утоплена в проём от лица стены
 // Обналичка двери: ширина боковых досок и верхней, заход за край проёма, отступ от лица стены (поверх брёвен).
 const TRIM = { side: 0.12, top: 0.15, overlap: 0.05, out: 0.02 };
 const WOOD = new THREE.Color(0.2, 0.18, 0.16); // дерево под стёртой краской — серое
-// Краски крыльца и двери: половой сурик, тёмно-коричневая, серо-голубая.
-const PAINTS = [[0.3, 0.09, 0.05], [0.16, 0.08, 0.05], [0.3, 0.4, 0.48]];
+// Краски крыльца и двери — тёмные: коричневая (её Никита назвал привычной), красно-коричневая, синяя.
+const PAINTS = [[0.16, 0.08, 0.05], [0.12, 0.045, 0.03], [0.035, 0.06, 0.15]];
 const iron = new THREE.MeshLambertMaterial({ color: 0x1d1b1a });
 
 // Крыльцо и дверь для проёма door. walls — как в house.js; base — верх цоколя; face — лицо стены от её оси.
@@ -59,27 +61,30 @@ export function buildPorch(seed, door, wall, { base, face }) {
     // Подступёнок под передним краем ступени выше.
     row(painted, plane(P(0, q - 0.03, y), s, up), n, -w, w, 0, rise - 0.022, true);
   }
-  // Тетивы по бокам ступеней: полоса вдоль линии носков ступеней от площадки до нижнего подступёнка,
-  // там срезана отвесно; снизу её подрезает земля.
-  const nose = (q) => top - ((q - L) / run) * rise, qLow = L + (steps - 1) * run, qCut = qLow + 0.04;
-  const qGround = L + ((top - STRINGER.below) / rise) * run; // где низ тетивы уходит в землю
-  const stringer = [[L, top + STRINGER.above], [qCut, nose(qCut) + STRINGER.above], [qCut, 0], [qGround, 0], [L, top - STRINGER.below]];
-  for (const a of [-w - STRINGER.thick, w]) painted.add(stringer, plane(P(a, 0, 0), n, up), s, dir(run, -rise), 0.25, rnd);
-  // Обшивка площадки снизу: по бокам и спереди по обе стороны лестницы, доски стоймя.
+  // Бока лестницы зашиты досками стоймя от земли до линии носков ступеней (чуть выше неё), до нижнего подступёнка.
+  const nose = (q) => top - ((q - L) / run) * rise, qLow = L + (steps - 1) * run;
+  const count = Math.round((qLow - L) / BOARD_W), wd = (qLow - L) / count;
+  for (const a of [-w - SIDE.thick, w]) {
+    for (let i = 0; i < count; i++) {
+      const q0 = L + i * wd, q1 = q0 + wd - GAP;
+      painted.add([[q0, 0], [q1, 0], [q1, nose(q1) + SIDE.above], [q0, nose(q0) + SIDE.above]], plane(P(a, 0, 0), n, up), s, [0, 1], wd - GAP, rnd);
+    }
+  }
+  // Обшивка площадки снизу: по бокам и спереди по обе стороны лестницы.
   for (const a of [-W, W - 0.022]) row(painted, plane(P(a, 0, 0), n, up), s, 0, top - 0.03, 0.05, L, false);
-  for (const [a0, a1] of [[-W, -w - STRINGER.thick], [w + STRINGER.thick, W]]) row(painted, plane(P(0, L - 0.03, 0), s, up), n, 0, top - 0.03, a0, a1, false);
+  for (const [a0, a1] of [[-W, -w - SIDE.thick], [w + SIDE.thick, W]]) row(painted, plane(P(0, L - 0.03, 0), s, up), n, 0, top - 0.03, a0, a1, false);
 
-  // Столбы — по линии тетив: у края площадки и внизу лестницы. Перила по столбам: вдоль площадки от стены
-  // и по лестнице вниз — брус в вертикальной плоскости.
-  const postAt = (a, q, height) => beams.add(rect(a - POST / 2, a + POST / 2, 0, height), plane(P(0, q - POST / 2, 0), s, up), n, [0, 1], POST, rnd);
-  const aPost = w + STRINGER.thick + POST / 2, r = RAIL.size;
-  const railTop = top + RAIL.height, railLow = nose(qLow) + RAIL.height;
-  for (const sign of [-1, 1]) {
-    postAt(sign * aPost, L - POST / 2, railTop + 0.05);
-    postAt(sign * aPost, qLow, railLow + 0.05);
-    const side = plane(P(sign * aPost - r / 2, 0, 0), n, up);
-    rails.add(rect(0, L - POST, railTop - r, railTop), side, s, [1, 0], r, rnd);
-    rails.add([[L - POST, railTop], [qLow, railLow], [qLow, railLow - r], [L - POST, railTop - r]], side, s, dir(qLow - L + POST, railLow - railTop), r, rnd);
+  // Перила — у некоторых крылец, с одной стороны: столбы у края площадки и внизу лестницы, брус по площадке от стены
+  // и по лестнице вниз.
+  if (rnd() < RAIL.chance) {
+    const sign = rnd() < 0.5 ? -1 : 1, r = RAIL.size, a = sign * (w + SIDE.thick + POST / 2);
+    const postAt = (q, height) => beams.add(rect(a - POST / 2, a + POST / 2, 0, height), plane(P(0, q - POST / 2, 0), s, up), n, [0, 1], POST, rnd);
+    const railTop = top + RAIL.height, railLow = nose(qLow) + RAIL.height;
+    postAt(L - POST / 2, railTop + 0.05);
+    postAt(qLow, railLow + 0.05);
+    const frame = plane(P(a - r / 2, 0, 0), n, up);
+    rails.add(rect(0, L - POST, railTop - r, railTop), frame, s, [1, 0], r, rnd);
+    rails.add([[L - POST, railTop], [qLow, railLow], [qLow, railLow - r], [L - POST, railTop - r]], frame, s, dir(qLow - L + POST, railLow - railTop), r, rnd);
   }
 
   // Дверь: доски стоймя в проёме, утоплена; обсада проёма от лица стены до двери.
