@@ -1,0 +1,114 @@
+import * as THREE from 'three';
+import { generator } from './random.js';
+import { Planks, boardMaterials } from './attic.js';
+import { Faces } from './window.js';
+
+// Крыльцо у двери и сама дверь — из тех же досок забора (attic.js: Planks), только крашеные.
+// Крыльцо: площадка перед дверью вровень с порогом, лестница от неё наружу, по бокам тетивы, столбы и перила,
+// под площадкой обшивка. Краска на ступенях и площадке истёрта посередине — там, где ходят, а к краям остаётся.
+// Дверь — вертикальные доски в проёме, железные ручка и петли.
+const LANDING = { width: 1.3, depth: 1.0 };   // м — площадка: вдоль стены и от стены
+export const PORCH_WIDTH = LANDING.width;
+const STAIR = { width: 1.0, run: 0.3, rise: 0.18, boards: 3 }; // ширина, проступь, желаемая высота ступени, досок в проступи
+const BOARD_W = 0.1, GAP = 0.006;              // доска и щель между досками
+const POST = 0.09, RAIL = { height: 0.9, size: 0.06 }, STRINGER = { thick: 0.04, above: 0.05, below: 0.25 };
+const DOOR_INSET = 0.08;                      // м — дверь утоплена в проём от лица стены
+// Обналичка двери: ширина боковых досок и верхней, заход за край проёма, отступ от лица стены (поверх брёвен).
+const TRIM = { side: 0.12, top: 0.15, overlap: 0.05, out: 0.02 };
+const WOOD = new THREE.Color(0.2, 0.18, 0.16); // дерево под стёртой краской — серое
+// Краски крыльца и двери: половой сурик, тёмно-коричневая, серо-голубая.
+const PAINTS = [[0.3, 0.09, 0.05], [0.16, 0.08, 0.05], [0.3, 0.4, 0.48]];
+const iron = new THREE.MeshLambertMaterial({ color: 0x1d1b1a });
+
+// Крыльцо и дверь для проёма door. walls — как в house.js; base — верх цоколя; face — лицо стены от её оси.
+export function buildPorch(seed, door, wall, { base, face }) {
+  const rnd = generator(seed + 3);
+  const paint = PAINTS[Math.floor(rnd() * PAINTS.length)];
+  const side = Math.sign(wall.at);
+  // Точка крыльца: a — вдоль стены вправо (для того, кто смотрит на дверь снаружи), q — от лица стены наружу, y — вверх.
+  const c = wall.along === 'x' ? new THREE.Vector3(door.at, 0, wall.at) : new THREE.Vector3(wall.at, 0, door.at);
+  const n = wall.along === 'x' ? new THREE.Vector3(0, 0, side) : new THREE.Vector3(side, 0, 0);
+  const s = wall.along === 'x' ? new THREE.Vector3(side, 0, 0) : new THREE.Vector3(0, 0, -side);
+  const up = new THREE.Vector3(0, 1, 0);
+  const P = (a, q, y) => c.clone().addScaledVector(n, face + q).addScaledVector(s, a).setY(y);
+  const plane = (o, X, Y) => ({ o, X, Y });
+  const centre = P(0, 0, 0);
+  const worn = new Planks(boardMaterials(WOOD, { color: paint, wear: { centre: centre.toArray(), across: s.toArray(), half: STAIR.width / 2 } }));
+  const coat = boardMaterials(WOOD, { color: paint });
+  const painted = new Planks(coat), beams = new Planks(coat, POST), rails = new Planks(coat, RAIL.size);
+  const dir = (x, y) => [x / Math.hypot(x, y), y / Math.hypot(x, y)];
+  const rect = (a0, a1, b0, b1) => [[a0, b0], [a1, b0], [a1, b1], [a0, b1]];
+  // Доски вдоль along по полосе [from, to] поперёк, шириной BOARD_W: ряд прямоугольников в плоскости frame.
+  const row = (planks, frame, normal, a0, a1, from, to, alongA) => {
+    const count = Math.max(1, Math.round((to - from) / BOARD_W)), wd = (to - from) / count;
+    for (let i = 0; i < count; i++) {
+      const b0 = from + i * wd, b1 = b0 + wd - GAP;
+      planks.add(alongA ? rect(a0, a1, b0, b1) : rect(b0, b1, a0, a1), frame, normal, alongA ? [1, 0] : [0, 1], wd - GAP, rnd);
+    }
+  };
+
+  // Площадка вровень с порогом (верх нижнего бревна под дверью); доски вдоль стены.
+  const top = base + door.bottom, L = LANDING.depth, W = LANDING.width / 2;
+  row(worn, plane(P(0, 0, top - 0.022), s, n), up, -W, W, 0, L, true);
+
+  // Лестница: ступени от площадки наружу, проступь из досок, подступёнки из двух досок.
+  const steps = Math.max(2, Math.round(top / STAIR.rise)), rise = top / steps, w = STAIR.width / 2, run = STAIR.run;
+  for (let k = 1; k <= steps; k++) {
+    const q = L + (k - 1) * run, y = top - k * rise;
+    if (k < steps) row(worn, plane(P(0, q, y - 0.022), s, n), up, -w, w, 0, run, true);
+    // Подступёнок под передним краем ступени выше.
+    row(painted, plane(P(0, q - 0.03, y), s, up), n, -w, w, 0, rise - 0.022, true);
+  }
+  // Тетивы по бокам ступеней: полоса вдоль линии носков ступеней от площадки до нижнего подступёнка,
+  // там срезана отвесно; снизу её подрезает земля.
+  const nose = (q) => top - ((q - L) / run) * rise, qLow = L + (steps - 1) * run, qCut = qLow + 0.04;
+  const qGround = L + ((top - STRINGER.below) / rise) * run; // где низ тетивы уходит в землю
+  const stringer = [[L, top + STRINGER.above], [qCut, nose(qCut) + STRINGER.above], [qCut, 0], [qGround, 0], [L, top - STRINGER.below]];
+  for (const a of [-w - STRINGER.thick, w]) painted.add(stringer, plane(P(a, 0, 0), n, up), s, dir(run, -rise), 0.25, rnd);
+  // Обшивка площадки снизу: по бокам и спереди по обе стороны лестницы, доски стоймя.
+  for (const a of [-W, W - 0.022]) row(painted, plane(P(a, 0, 0), n, up), s, 0, top - 0.03, 0.05, L, false);
+  for (const [a0, a1] of [[-W, -w - STRINGER.thick], [w + STRINGER.thick, W]]) row(painted, plane(P(0, L - 0.03, 0), s, up), n, 0, top - 0.03, a0, a1, false);
+
+  // Столбы — по линии тетив: у края площадки и внизу лестницы. Перила по столбам: вдоль площадки от стены
+  // и по лестнице вниз — брус в вертикальной плоскости.
+  const postAt = (a, q, height) => beams.add(rect(a - POST / 2, a + POST / 2, 0, height), plane(P(0, q - POST / 2, 0), s, up), n, [0, 1], POST, rnd);
+  const aPost = w + STRINGER.thick + POST / 2, r = RAIL.size;
+  const railTop = top + RAIL.height, railLow = nose(qLow) + RAIL.height;
+  for (const sign of [-1, 1]) {
+    postAt(sign * aPost, L - POST / 2, railTop + 0.05);
+    postAt(sign * aPost, qLow, railLow + 0.05);
+    const side = plane(P(sign * aPost - r / 2, 0, 0), n, up);
+    rails.add(rect(0, L - POST, railTop - r, railTop), side, s, [1, 0], r, rnd);
+    rails.add([[L - POST, railTop], [qLow, railLow], [qLow, railLow - r], [L - POST, railTop - r]], side, s, dir(qLow - L + POST, railLow - railTop), r, rnd);
+  }
+
+  // Дверь: доски стоймя в проёме, утоплена; обсада проёма от лица стены до двери.
+  const dw = door.width / 2, dTop = base + door.top;
+  row(painted, plane(P(0, -DOOR_INSET, 0), s, up), n, top, dTop, -dw, dw, false);
+  const lining = new Faces();
+  const at = (a, q, y) => P(a, q, y).toArray();
+  lining.face([at(-dw, 0, top), at(-dw, 0, dTop), at(-dw, -DOOR_INSET, dTop), at(-dw, -DOOR_INSET, top)], s.toArray());
+  lining.face([at(dw, 0, top), at(dw, 0, dTop), at(dw, -DOOR_INSET, dTop), at(dw, -DOOR_INSET, top)], s.clone().negate().toArray());
+  lining.face([at(-dw, 0, dTop), at(dw, 0, dTop), at(dw, -DOOR_INSET, dTop), at(-dw, -DOOR_INSET, dTop)], [0, -1, 0]);
+  // Обналичка двери: доски по бокам и сверху на лице стены, поверх торцов брёвен у проёма.
+  const trim = plane(P(0, TRIM.out, 0), s, up), edge = dw + TRIM.overlap;
+  for (const sign of [-1, 1]) {
+    const a0 = sign > 0 ? edge - TRIM.side : -edge, a1 = a0 + TRIM.side;
+    painted.add(rect(a0, a1, top, dTop + TRIM.top), trim, n, [0, 1], TRIM.side, rnd);
+  }
+  painted.add(rect(-edge, edge, dTop, dTop + TRIM.top), plane(P(0, TRIM.out + 0.022, 0), s, up), n, [1, 0], TRIM.top, rnd);
+  // Железо: две петли-полосы со стороны петель и скоба-ручка с другой.
+  const metal = new THREE.Group();
+  const box = (a0, a1, y0, y1, q0, q1) => {
+    const [p, q] = [P(a0, q0, y0), P(a1, q1, y1)];
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(q.x - p.x), y1 - y0, Math.abs(q.z - p.z)), iron);
+    mesh.position.copy(p).add(q).multiplyScalar(0.5);
+    mesh.castShadow = true;
+    metal.add(mesh);
+  };
+  const face0 = -DOOR_INSET + 0.022;
+  for (const y of [top + 0.3, dTop - 0.3]) box(-dw + 0.02, -dw + 0.45, y - 0.02, y + 0.02, face0, face0 + 0.006);
+  box(dw - 0.14, dw - 0.11, top + 0.85, top + 1.05, face0, face0 + 0.05);
+  const liningMesh = lining.mesh(new THREE.MeshLambertMaterial({ color: new THREE.Color(...paint).multiplyScalar(0.8) }));
+  return new THREE.Group().add(...worn.meshes(), ...painted.meshes(), ...beams.meshes(), ...rails.meshes(), liningMesh, metal);
+}

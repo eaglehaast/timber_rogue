@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { generator, smoothNoise } from './random.js';
 import { buildBoards } from './attic.js';
+import { buildPorch, PORCH_WIDTH } from './porch.js';
 import { PANE, TRIM_ABOVE, PAINTS, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
@@ -65,8 +66,8 @@ export function planHouse(seed) {
     ...row('front', w, front),
     ...row('back', w, 1 + Math.floor(rnd() * 2)),
     // У двери на боку — одно окно ближе к заду, дверь ближе к улице; на другом боку — одно-два окна.
-    // Нижнее бревно под дверью остаётся порогом.
-    { kind: 'door', wall: door, at: d / 4, width: 0.9, bottom: 2 * R, top: 2.0 },
+    // Нижнее бревно под дверью остаётся порогом, верх двери — у стыка венцов около 2 м: бревно над ней цело.
+    { kind: 'door', wall: door, at: d / 4, width: 0.9, bottom: 2 * R, top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015, porch: PORCH_WIDTH },
     window(door, -d / 5),
     ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
   ];
@@ -123,7 +124,9 @@ export function buildHouse(plan) {
   const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
   // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
-  return new THREE.Group().add(srub, plinth, boards, windows);
+  const door = openings.find((o) => o.kind === 'door');
+  const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R });
+  return new THREE.Group().add(srub, plinth, boards, windows, porch);
 }
 
 // Цоколь с полуразмерами hx, hz: стенка — сетка по обходу (s) и высоте, каждая точка сдвинута по нормали

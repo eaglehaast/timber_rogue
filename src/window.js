@@ -41,7 +41,7 @@ const tulleMaterial = new THREE.MeshLambertMaterial({ map: tulleMap });
 const glassMaterial = new THREE.MeshBasicMaterial({ color: 0xc4d6e8, transparent: true, opacity: 0.22, depthWrite: false });
 
 // Набор граней одной сетки; face кладёт четырёхугольник лицом к normal (обход сам подбирается по нормали).
-class Faces {
+export class Faces {
   pos = []; normal = []; uv = []; index = [];
   face(corners, normal, uvs = [[0, 0], [1, 0], [1, 1], [0, 1]]) {
     const [a, b, c] = corners.map((p) => new THREE.Vector3(...p));

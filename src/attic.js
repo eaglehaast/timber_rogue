@@ -25,20 +25,49 @@ const boardMaps = tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures
 const [endMap] = tiles(['assets/textures/board-end.jpg']);
 
 // Краска доски забора → старое дерево цвета color: яркость картинки, делённая на яркость средней краски.
-function weathered(map, color) {
+// paint — доска крашена: { color, wear }; wear = { centre, across, half } — истёртая ногами полоса: на верхних
+// гранях в пределах half от прямой через centre (поперёк неё — across) краска стёрта до дерева, к краям
+// остаётся, граница рваная. Без wear доска крашена вся.
+function weathered(map, color, paint) {
   const material = new THREE.MeshLambertMaterial({ map, color });
+  const wear = paint?.wear;
   material.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+    if (paint) {
+      Object.assign(shader.uniforms, {
+        uPaint: { value: new THREE.Color(...paint.color) },
+        uCentre: { value: new THREE.Vector3(...(wear?.centre ?? [0, 0, 0])) },
+        uAcross: { value: new THREE.Vector3(...(wear?.across ?? [1, 0, 0])) },
+        uHalf: { value: wear?.half ?? 0 },
+      });
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWorld;\nvarying float vUp;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvUp = normalize(mat3(modelMatrix) * objectNormal).y;');
+    }
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>${paint ? `
+        uniform vec3 uPaint, uCentre, uAcross; uniform float uHalf; varying vec3 vWorld; varying float vUp;
+        float wearHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float wearNoise(vec2 p) {
+          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(wearHash(i), wearHash(i + vec2(1, 0)), f.x), mix(wearHash(i + vec2(0, 1)), wearHash(i + vec2(1, 1)), f.x), f.y);
+        }` : ''}`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
       #ifdef USE_MAP
         const vec3 LUMA = vec3(0.299, 0.587, 0.114);
-        diffuseColor.rgb = diffuse * dot(sampledDiffuseColor.rgb, LUMA) / dot(${PAINT}, LUMA);
+        float grainTone = dot(sampledDiffuseColor.rgb, LUMA) / dot(${PAINT}, LUMA);
+        diffuseColor.rgb = diffuse * grainTone;${paint ? `
+        float side = abs(dot(vWorld - uCentre, uAcross)) / max(uHalf, 1e-4);
+        float ragged = 0.6 * wearNoise(vWorld.xz * 9.0) + 0.4 * wearNoise(vWorld.xz * 31.0 + 5.0);
+        float worn = (1.0 - smoothstep(0.35, 0.8, side + (ragged - 0.5) * 0.5)) * step(0.7, vUp) * step(1e-4, uHalf);
+        diffuseColor.rgb = mix(uPaint * grainTone, diffuseColor.rgb, worn);` : ''}
       #endif`);
   };
-  material.customProgramCacheKey = () => 'weathered';
+  material.customProgramCacheKey = () => (paint ? `painted ${wear ? 'worn' : ''}` : 'weathered');
   return material;
 }
-const materials = Object.fromEntries(Object.entries(TONES).map(([part, color]) =>
-  [part, { faces: boardMaps.map((map) => weathered(map, color)), ends: weathered(endMap, color) }]));
+// Материалы досок цвета color (дерево без краски) — по картинке доски забора на лицо и торцы забора на срезы.
+export const boardMaterials = (color, paint) => ({ faces: boardMaps.map((map) => weathered(map, color, paint)), ends: weathered(endMap, color, paint) });
+const materials = Object.fromEntries(Object.entries(TONES).map(([part, color]) => [part, boardMaterials(color)]));
 
 // Многоугольник poly (точки [x, y]) по одну сторону прямой: где x·nx + y·ny ≤ c (Сазерленд — Ходжман).
 function clip(poly, [nx, ny, c]) {
@@ -56,9 +85,11 @@ const area = (poly) => Math.abs(poly.reduce((s, p, i) => {
 }, 0)) / 2;
 
 // Набор досок одной части дома: для каждой картинки доски — свои грани лица и торцов.
-class Planks {
-  constructor(part) {
-    this.part = part;
+// materials — из boardMaterials, thick — толщина доски (брус — та же доска, только толще).
+export class Planks {
+  constructor(materials, thick = T) {
+    this.materials = materials;
+    this.thick = thick;
     this.kinds = Array.from({ length: KINDS }, () => ({ face: mesh(), end: mesh() }));
   }
 
@@ -72,6 +103,7 @@ class Planks {
     const at = ([a, b], h) => o.clone().addScaledVector(X, a).addScaledVector(Y, b).addScaledVector(n, h);
     const grain = (p) => [(t(p) - t0) / width, s(p) / BOARD_SPAN + shift];
     // Лицо и тыл — веером от первой вершины.
+    const T = this.thick;
     for (const [h, side] of [[T, 1], [0, -1]]) {
       for (let i = 1; i + 1 < poly.length; i++) {
         triangle(kind.face, [poly[0], poly[i], poly[i + 1]].map((p) => [at(p, h), grain(p)]), n.clone().multiplyScalar(side));
@@ -97,7 +129,7 @@ class Planks {
 
   // Меши части: по одному на картинку доски, торцы — второй группой граней.
   meshes() {
-    const { faces, ends } = materials[this.part];
+    const { faces, ends } = this.materials;
     return this.kinds.filter((k) => k.face.pos.length).map((k, i) => {
       const geometry = new THREE.BufferGeometry();
       for (const [name, size] of [['pos', 3], ['normal', 3], ['uv', 2]]) {
@@ -133,7 +165,7 @@ export function buildBoards({ seed, w, d, pitch, openings }, { front, side, plin
   // они уходят под свес, а не сквозь него. Запас — на неровность брёвен (сбег, толщина, обвод).
   const clear = 0.25 * r;
   const ridge = Math.max(side + clear + (w / 2) * tan, front + clear + (reach + 0.05) * tan);
-  const gable = new Planks('gable'), roof = new Planks('roof'), drip = new Planks('drip');
+  const gable = new Planks(materials.gable), roof = new Planks(materials.roof), drip = new Planks(materials.drip);
 
   // Фронтоны спереди и сзади: треугольник от верха фасадной стены до ската, доски ёлочкой.
   const base = [[-hx, front - 0.06], [hx, front - 0.06], [hx, ridge], [-hx, ridge]];
@@ -188,7 +220,7 @@ export function buildBoards({ seed, w, d, pitch, openings }, { front, side, plin
     const n = e.clone().multiplyScalar(Math.sin(DRIP.slope)).setY(Math.cos(DRIP.slope));
     const doors = openings.filter((o) => o.wall === name && o.kind === 'door');
     for (let s = -half - r; s < half + r - 0.02; s += DRIP.width + 0.008) {
-      if (doors.some((o) => Math.abs(s + DRIP.width / 2 - o.at) < o.width / 2 + 0.1)) continue;
+      if (doors.some((o) => Math.abs(s + DRIP.width / 2 - o.at) < (o.porch ?? o.width) / 2 + 0.1)) continue; // у двери — крыльцо
       const o = e.clone().multiplyScalar(at + 0.4 * r).addScaledVector(t, s).setY(plinth + 0.05);
       const tail = DRIP.length + r * 0.6 + (rnd() - 0.5) * 0.03;
       drip.add([[0, 0], [tail, 0], [tail, DRIP.width], [0, DRIP.width]], { o, X, Y: t }, n, [1, 0], DRIP.width, rnd);
