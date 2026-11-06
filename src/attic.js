@@ -2,9 +2,11 @@ import * as THREE from 'three';
 import { tiles } from './surface.js';
 import { generator } from './random.js';
 import { KINDS, BOARD, BOARD_SPAN, PAINT } from './fence.js';
+import { buildCover, buildChimney } from './roof.js';
+import { buildCarving } from './carving.js';
 
 // Дощатые части избы — из тех же досок, что забор: фронтоны чердака (доски «ёлочкой»), тесовая крыша
-// с коньком и причелинами, отлив над цоколем. Доска — призма толщиной T по многоугольнику в своей плоскости:
+// с коньком и причелинами, отлив над цоколем. Тёс — сам кровля или обрешётка под шифером, железом, рубероидом (roof.js). Доска — призма толщиной T по многоугольнику в своей плоскости:
 // так фронтонную доску можно срезать по скату. Лицо и кромки одеты картинкой доски забора (вдоль волокон),
 // поперечные срезы — торцами досок забора (board-end.jpg, 5 штук по 10 × 2,5 см друг под другом).
 // Доски забора крашены голубым; краску перекрашиваем в цвет старого дерева так же, как забор: по яркости
@@ -158,7 +160,8 @@ function triangle(target, vertices, want) {
 // Чердак, крыша и отлив дома plan. Высоты от сруба: front — верх фасадных стен, side — верх боковых
 // (на них лежит крыша), plinth — верх цоколя, r — радиус бревна (насколько стена выступает от оси),
 // reach — докуда от середины дома торчат остатки брёвен фасада за углом.
-export function buildBoards({ seed, w, d, pitch, openings }, { front, side, plinth, r, reach }) {
+export function buildBoards(plan, { front, side, plinth, r, reach }) {
+  const { seed, w, d, pitch, openings, roof: cover, carving } = plan;
   const rnd = generator(seed + 2);
   const tan = Math.tan(pitch), hx = w / 2 + r;
   // Скат проходит над верхним бревном боковой стены и над остатками верхних брёвен фасада за углом —
@@ -182,7 +185,8 @@ export function buildBoards({ seed, w, d, pitch, openings }, { front, side, plin
         if (strip.length > 2 && area(strip) > 1e-4) gable.add(strip, frame, n, along, BOARD, rnd);
       }
     }
-    // Причелины — широкие доски по краю скатов, под свесом крыши.
+    // Причелины — широкие доски по краю скатов, под свесом крыши; резные — в carving.js.
+    if (carving) continue;
     const barge = { o: new THREE.Vector3(0, 0, face * (d / 2 + r + GABLE_OVER - 0.03)), X: frame.X, Y: frame.Y };
     const reach = hx + EAVE, drop = BARGE / Math.cos(pitch);
     for (const s of [-1, 1]) {
@@ -202,10 +206,17 @@ export function buildBoards({ seed, w, d, pitch, openings }, { front, side, plin
       const tail = length + (rnd() - 0.5) * 0.04;
       roof.add([[0, z], [tail, z], [tail, Math.min(z + ROOF_BOARD + 0.01, zEnd)], [0, Math.min(z + ROOF_BOARD + 0.01, zEnd)]], { o, X, Y }, n, [1, 0], ROOF_BOARD, rnd);
     }
-    // Конёк — доска вдоль конька на каждом скате, поверх тёса.
+    // Конёк тесовой крыши — доска вдоль конька на каждом скате, поверх тёса.
+    if (cover !== 'tes') continue;
     const o = new THREE.Vector3(0, ridge, 0).addScaledVector(n, 0.012 + T);
     roof.add([[-0.02, -zEnd], [0.17, -zEnd], [0.17, zEnd], [-0.02, zEnd]], { o, X, Y }, n, [0, 1], 0.19, rnd);
   }
+  const top = generator(seed + 4), shape = { ridge, pitch, length, zEnd };
+  const extras = [buildChimney(shape, top), buildCarving(plan, {
+    ridge, pitch, reach: hx + EAVE, gable: d / 2 + 0.55 * r + T, barge: d / 2 + r + GABLE_OVER - 0.03,
+    front, out: d / 2 + 1.13 * r + 0.01, span: w / 2 - r - 0.02, zEnd,
+  })];
+  if (cover !== 'tes') extras.push(buildCover(cover, shape, top));
 
   // Отлив: короткие доски поперёк стены над цоколем, с уклоном наружу, торцами к улице. Под дверью его нет.
   const walls = [
@@ -226,5 +237,5 @@ export function buildBoards({ seed, w, d, pitch, openings }, { front, side, plin
       drip.add([[0, 0], [tail, 0], [tail, DRIP.width], [0, DRIP.width]], { o, X, Y: t }, n, [1, 0], DRIP.width, rnd);
     }
   }
-  return new THREE.Group().add(...gable.meshes(), ...roof.meshes(), ...drip.meshes());
+  return new THREE.Group().add(...gable.meshes(), ...roof.meshes(), ...drip.meshes(), ...extras);
 }

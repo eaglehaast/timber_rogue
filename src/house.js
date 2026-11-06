@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { generator, smoothNoise } from './random.js';
+import { KIT } from './kit.js';
+import { buildZavalinka } from './zavalinka.js';
 import { buildBoards } from './attic.js';
 import { buildPorch, PORCH_WIDTH } from './porch.js';
 import { PANE, TRIM_ABOVE, PAINTS, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
@@ -35,13 +37,18 @@ const PLINTH_SHAPE = { step: 0.04, corner: 0.07, sink: 0.08, splay: 0.035, bumps
 const PLINTH_COLOR = [0.5, 0.48, 0.49];
 const DAMP = 0.6;
 
-const [logMap, endMap, plinthMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-plinth.jpg']);
+const [logMap, endMap, plinthMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-plinth.jpg', 'assets/textures/house-chinking.jpg']);
 const ENDS = await (await fetch('assets/textures/house-endgrain.json')).json();
 const LOOK = { contrast: 0.7, saturation: 0.65, scales: [0.3, 1.1], low: [0.8, 0.8, 0.8], high: [1.08, 1.04, 1.0] };
 const materials = [
   soften(new THREE.MeshLambertMaterial({ map: logMap }), { ...LOOK, cells: [5, 2] }),
   soften(new THREE.MeshLambertMaterial({ map: endMap }), LOOK),
 ];
+// Пакля — жгут в пазу между венцами снаружи: половина трубки радиуса CHINK.r, торчит из паза на CHINK.out.
+// Картинки — набор house-chinking.jpg (5 лент 2048 × 256 с общими краями), лента вдоль жгута — CHINK.tile метров.
+// Картинка темнее брёвен, а пакля в пазу видна светлыми волокнами — поэтому светлее в CHINK.tone раз.
+const CHINK = { r: 0.022, out: 0.018, tile: 0.5, arc: 6, tone: 2.2 };
+const chinkMaterial = soften(new THREE.MeshLambertMaterial({ map: chinkMap, color: new THREE.Color().setScalar(CHINK.tone) }), { ...LOOK, contrast: 0.85, cells: [1, 5] });
 const plinthMaterial = soften(new THREE.MeshLambertMaterial({ map: plinthMap, color: new THREE.Color(...PLINTH_COLOR), vertexColors: true }), {
   contrast: 1.5, saturation: 0.6, scales: [1.4, 3.7], low: [0.7, 0.67, 0.62], high: [1.06, 1.03, 0.98], cells: [2, 5],
 });
@@ -72,7 +79,13 @@ export function planHouse(seed) {
     ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
   ];
   const windows = { pattern: Math.floor(rnd() * PATTERNS), paint: Math.floor(rnd() * PAINTS.length), tulle: Math.floor(rnd() * TULLES) };
-  return { seed, w, d, courses, pitch, openings, windows };
+  // Кровля: чаще шифер, потом зелёное железо, реже рубероид и старый тёс.
+  const roof = pick(['slate', 'slate', 'slate', 'metal', 'metal', 'felt', 'tes']);
+  // Резьба (причелины и фриз, в цвет наличников) — у трёх домов из четырёх; чердачное окно — у всех.
+  const carving = rnd() < 0.75 ? { prichelina: Math.floor(rnd() * KIT.prichelina.count), frieze: Math.floor(rnd() * KIT.frieze.count) } : null;
+  const attic = Math.floor(rnd() * KIT.attic.count);
+  const zavalinka = rnd() < 0.5;
+  return { seed, w, d, courses, pitch, openings, windows, roof, carving, attic, zavalinka };
 }
 
 // Дом по плану: сруб (бок и торцы брёвен — две группы граней со своими материалами), цоколь,
@@ -87,8 +100,10 @@ export function buildHouse(plan) {
     left: { along: 'z', at: -w / 2, half: d / 2, lift: 0 },
     right: { along: 'z', at: w / 2, half: d / 2, lift: 0 },
   };
+  const chink = { pos: [], normal: [], uv: [], index: [] };
   for (const [name, wall] of Object.entries(walls)) {
     const holes = openings.filter((o) => o.wall === name);
+    let below = null; // венец под этим: между ними — пакля
     for (let k = 0; k < courses; k++) {
       // Боковые стены лежат на цоколе, фасадные — на полбревна ниже: их нижний венец — полубревно,
       // стёсанное снизу по цоколю (см. log), так между венцами нигде нет щели.
@@ -106,6 +121,9 @@ export function buildHouse(plan) {
       }
       const look = { r, butt, reach, sag: 0.005 + 0.01 * rnd(), wobble: rnd() * 100, u: rnd() * 10, v: rnd() * 10 };
       for (const [from, to] of pieces) log(parts, wall, y + PLINTH, from, to, look, rnd);
+      const course = { y: y + PLINTH, pieces, ...look };
+      if (below) chinking(chink, wall, below, course);
+      below = course;
     }
   }
   const geometry = new THREE.BufferGeometry();
@@ -117,6 +135,11 @@ export function buildHouse(plan) {
   geometry.addGroup(parts.side.length, parts.end.length, 1);
   const srub = new THREE.Mesh(geometry, materials);
   srub.castShadow = srub.receiveShadow = true;
+  const chinkGeometry = new THREE.BufferGeometry();
+  for (const [name, size] of [['position', 3], ['normal', 3], ['uv', 2]]) chinkGeometry.setAttribute(name, new THREE.Float32BufferAttribute(chink[name === 'position' ? 'pos' : name], size));
+  chinkGeometry.setIndex(chink.index);
+  const chinks = new THREE.Mesh(chinkGeometry, chinkMaterial);
+  chinks.receiveShadow = true;
 
   const plinth = new THREE.Mesh(plinthGeometry(w / 2 + R, d / 2 + R, rnd), plinthMaterial);
   plinth.castShadow = plinth.receiveShadow = true;
@@ -126,7 +149,9 @@ export function buildHouse(plan) {
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
   const door = openings.find((o) => o.kind === 'door');
   const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R });
-  return new THREE.Group().add(srub, plinth, boards, windows, porch);
+  const house = new THREE.Group().add(srub, chinks, plinth, boards, windows, porch);
+  if (plan.zavalinka) house.add(buildZavalinka(w / 2 + R, d / 2 + R, door, rnd));
+  return house;
 }
 
 // Цоколь с полуразмерами hx, hz: стенка — сетка по обходу (s) и высоте, каждая точка сдвинута по нормали
@@ -197,10 +222,42 @@ function plinthGeometry(hx, hz, rnd) {
   return geometry;
 }
 
+// Сбег бревна (радиус без неровности обвода) и провис его оси в месте s — общие для бревна и пакли.
+const taper = ({ r, butt, reach }, s) => r * (1 - 0.04 * butt * (s / reach));
+const sag = ({ sag: depth, reach }, s) => depth * (1 - (s / reach) ** 2);
+
+// Пакля между венцами below и above стены wall снаружи: там, где оба бревна целы, и между углами (за углом
+// остатки брёвен разделены поперечной стеной). Жгут лежит в пазу — где обводы двух брёвен пересекаются.
+function chinking(chink, wall, below, above) {
+  const out = Math.sign(wall.at), end = wall.half - 0.6 * R;
+  const spans = below.pieces.flatMap(([a, b]) => above.pieces.map(([c, d]) => [Math.max(a, c, -end), Math.min(b, d, end)])).filter(([a, b]) => b - a > 0.05);
+  const place = (s, x, h) => (wall.along === 'x' ? [s, h, x + wall.at] : [x + wall.at, h, s]);
+  const turn = (x, h) => (wall.along === 'x' ? [0, h, x] : [x, h, 0]);
+  for (const [from, to] of spans) {
+    const n = Math.max(1, Math.ceil((to - from) / STEP)), start = chink.pos.length / 3;
+    for (let i = 0; i <= n; i++) {
+      const s = from + ((to - from) * i) / n;
+      // Пересечение обводов: оси на расстоянии D, радиусы ra и rb; паз — на высоте a над нижней осью, x — от оси.
+      const ya = below.y - sag(below, s), D = above.y - sag(above, s) - ya, ra = taper(below, s), rb = taper(above, s);
+      const a = (D * D + ra * ra - rb * rb) / (2 * D), x = Math.sqrt(Math.max(0, ra * ra - a * a)) + CHINK.out - CHINK.r;
+      for (let j = 0; j <= CHINK.arc; j++) {
+        const az = (j / CHINK.arc - 0.5) * Math.PI, c = Math.cos(az), sn = Math.sin(az);
+        chink.pos.push(...place(s, out * (x + c * CHINK.r), ya + a + sn * CHINK.r));
+        chink.normal.push(...turn(out * c, sn));
+        chink.uv.push(below.u + s / CHINK.tile, j / CHINK.arc);
+        if (i && j) {
+          const p = start + i * (CHINK.arc + 1) + j, q = p - (CHINK.arc + 1);
+          chink.index.push(...((out > 0) === (wall.along === 'x') ? [q - 1, p - 1, p, q - 1, p, q] : [q - 1, p, p - 1, q - 1, q, p]));
+        }
+      }
+    }
+  }
+}
+
 // Кусок бревна стены wall от from до to вдоль неё, ось на высоте y. look — общее у всех кусков одного бревна:
 // радиус, с какого конца комель, провис, неровность обвода и сдвиг узора, — так перерезанное проёмом бревно
 // остаётся одним бревном.
-function log(parts, wall, y, from, to, { r, butt, reach, sag, wobble, u, v }, rnd) {
+function log(parts, wall, y, from, to, { r, butt, reach, sag: depth, wobble, u, v }, rnd) {
   // Ниже верха цоколя бревно стёсано: точка обвода не опускается под него.
   const hewn = (s, x, h) => [x, Math.max(h, PLINTH - (y - drop(s)))];
   // Точка бревна: s вдоль стены, x поперёк неё (наружу дома — по знаку wall.at), h — высота; turn — тот же поворот без сдвига.
@@ -210,8 +267,8 @@ function log(parts, wall, y, from, to, { r, butt, reach, sag, wobble, u, v }, rn
   // Вдоль x рамка (s, x, h) → (x, y, z) зеркальна — обход треугольников обратный, иначе бок смотрит внутрь.
   const flip = wall.along === 'x';
   // Радиус в месте s: сбег 8 % от комля к вершине и неровность обвода — пара плавных волн по азимуту.
-  const radius = (s, az) => r * (1 - 0.04 * butt * (s / reach)) * (1 + 0.025 * Math.sin(2 * az + wobble) + 0.015 * Math.sin(3 * az + 0.7 * s + wobble));
-  const drop = (s) => sag * (1 - (s / reach) ** 2); // провис к середине
+  const radius = (s, az) => taper({ r, butt, reach }, s) * (1 + 0.025 * Math.sin(2 * az + wobble) + 0.015 * Math.sin(3 * az + 0.7 * s + wobble));
+  const drop = (s) => sag({ sag: depth, reach }, s); // провис к середине
   const n = Math.max(1, Math.ceil((to - from) / STEP));
   const start = parts.pos.length / 3;
   for (let i = 0; i <= n; i++) {
