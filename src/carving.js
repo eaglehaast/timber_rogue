@@ -17,10 +17,13 @@ const TILE = 4 * HEIGHT;
 const FRIEZE_UP = 0.1, GAP = 0.06;
 export const TRIM_ROOM = HEIGHT - FRIEZE_UP + GAP;
 const SHAPES = await (await fetch('assets/textures/house-carving.json')).json();
-// Чердачное окно — по центру фронтона, высоко, под коньком: верх на UNDER ниже причелин над его углами (не ниже
-// SILL над фасадной стеной). Размер — пиксели картинки, делённые на PX_PER_M. Толщина — по силуэту, как у резьбы;
-// краска — наличников.
-const PX_PER_M = 1280, SILL = 0.35, UNDER = 0.2;
+// Чердачное окно — по центру фронтона, серединой на RISE высоты фронтона (как на избах-образцах: чуть ниже
+// середины), но не выше чем на UNDER под причелинами над его углами и не ниже SILL над фасадной стеной.
+// Размер — пиксели картинки, делённые на PX_PER_M. Толщина — по силуэту, как у резьбы; краска — наличников.
+const PX_PER_M = 1280, SILL = 0.35, UNDER = 0.2, RISE = 0.4;
+
+// Доска в цвет наличника: краска, умноженная на оттенок и яркость рисунка наличников (house-carving.json).
+export const trimColor = (paint) => paint.map((v, k) => v * SHAPES.nalichnik.tint[k] * SHAPES.nalichnik.luma);
 
 // Краска — как у наличника, а оттенок картинки приведён к наличниковому (tint): иначе белая на желтоватом рисунке желтеет.
 const painted = (name, paint, alphaTest) => new THREE.MeshLambertMaterial({
@@ -113,7 +116,8 @@ export function buildCarving({ carving, attic, windows: { paint } }, { ridge, pi
   // Чердачное окно, если влезает под скаты (с запасом на причелину).
   if (attic === null) return group;
   const [x, y, w, h, pw, ph] = KIT.attic.rects[attic], width = pw / PX_PER_M, height = ph / PX_PER_M;
-  const bottom = ridge - (width / 2) * tan - HEIGHT - UNDER - height;
+  const highest = ridge - (width / 2) * tan - HEIGHT - UNDER - height;
+  const bottom = Math.min(highest, front + RISE * (ridge - front) - height / 2);
   if (bottom >= front + SILL) {
     const windows = [new Faces(), new Faces()];
     for (const face of [-1, 1]) {

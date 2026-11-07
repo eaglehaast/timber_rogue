@@ -3,8 +3,8 @@ import { tiles } from './surface.js';
 import { generator } from './random.js';
 import { KINDS, BOARD, BOARD_SPAN, PAINT } from './fence.js';
 import { buildCover, buildChimney } from './roof.js';
-import { buildCarving } from './carving.js';
-import { TRIM_ABOVE } from './window.js';
+import { buildCarving, trimColor } from './carving.js';
+import { TRIM_ABOVE, PAINTS } from './window.js';
 
 // Дощатые части избы — из тех же досок, что забор: фронтоны чердака (доски «ёлочкой»), тесовая крыша
 // с коньком и причелинами, отлив над цоколем. Тёс — сам кровля или обрешётка под шифером, железом, рубероидом (roof.js). Доска — призма толщиной T по многоугольнику в своей плоскости:
@@ -17,7 +17,6 @@ const ENDS = 5;                          // торцов в board-end.jpg
 const TONES = {                          // линейные цвета старого некрашеного дерева
   gable: new THREE.Color(0.13, 0.105, 0.085), // фронтон — тёмный, бурый, как на образце
   roof: new THREE.Color(0.2, 0.19, 0.18),     // тёс крыши — серый, выбеленный солнцем и дождём
-  drip: new THREE.Color(0.22, 0.2, 0.18),     // отлив — серый, светлее стен
 };
 const GABLE_ANGLE = Math.PI / 4;         // доски фронтона идут под 45° и сходятся «ёлочкой» на середине
 const EAVE = 0.45, GABLE_OVER = 0.2;     // м — свес крыши за боковые стены и за фронтоны
@@ -169,7 +168,9 @@ export function buildBoards(plan, { front, side, plinth, r, reach }) {
   // они уходят под свес, а не сквозь него. Запас — на неровность брёвен (сбег, толщина, обвод).
   const clear = 0.25 * r;
   const ridge = Math.max(side + clear + (w / 2) * tan, front + clear + (reach + 0.05) * tan);
-  const gable = new Planks(materials.gable), roof = new Planks(materials.roof), drip = new Planks(materials.drip);
+  const gable = new Planks(materials.gable), roof = new Planks(materials.roof);
+  // Отлив крашен в цвет наличников: лишний цвет у цоколя не нужен (Никита, 2026-11-07).
+  const drip = new Planks(boardMaterials(TONES.roof, { color: trimColor(PAINTS[plan.windows.paint]) }));
 
   // Фронтоны спереди и сзади: треугольник от верха фасадной стены до ската, доски ёлочкой.
   const base = [[-hx, front - 0.06], [hx, front - 0.06], [hx, ridge], [-hx, ridge]];
