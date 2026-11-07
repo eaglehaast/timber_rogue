@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { soften } from './surface.js';
 import { KIT, atlas, cell, strip } from './kit.js';
 import { Faces } from './window.js';
+import { Smoke } from './smoke.js';
 
 // Кровля поверх тёса (тёс остаётся обрешёткой: его видно снизу под свесом и с торцов) и печная труба.
 // Кровли — наборы Никиты с общими краями, плитки перемешаны по клеткам, как земля:
@@ -12,7 +13,7 @@ import { Faces } from './window.js';
 // полотна заходят друг на друга на гребне.
 // tone — во сколько светлее или темнее картинки (белёсый шифер в тени сереет, рубероид иначе выходит чёрной дырой).
 export const COVERS = {
-  slate: { tile: [2.26, 3.0], lift: 0.055, wave: { count: 16, crest: 23 / 48, height: 0.015 }, ridge: [2, 3], tone: 0.8 },
+  slate: { tile: [2.26, 3.0], lift: 0.055, wave: { count: 16, crest: 23 / 48, height: 0.015 }, ridge: [2, 3], tone: 0.55 },
   metal: { tile: [1.4, 1.4], lift: 0.04, ridge: [0, 1], tone: 1 },
   felt: { tile: [2, 2], lift: 0.038, tone: 1.6 },
 };
@@ -26,7 +27,8 @@ const ridgeMaterial = new THREE.MeshLambertMaterial({ map: atlas('ridge') });
 // Труба: сечение (поперёк конька и вдоль), выше конька на above, оголовок шире на out и высотой height;
 // плитка кирпича — 2 кирпича (0,52 м) на 6 рядов (0,45 м). Копоть — картинка набора по верху трубы.
 const CHIMNEY = { size: [0.51, 0.38], above: 0.6, cap: { height: 0.15, out: 0.05 }, brick: [0.52, 0.45], soot: 0.003 };
-const brickMaterial = soften(new THREE.MeshLambertMaterial({ map: atlas('brick') }), { ...LOOK, contrast: 0.85, cells: KIT.brick.grid });
+// Кирпич старый, закопчённый и выцветший: темнее и глуше картинки, иначе труба горит морковным пятном.
+const brickMaterial = soften(new THREE.MeshLambertMaterial({ map: atlas('brick'), color: new THREE.Color().setScalar(0.7) }), { ...LOOK, contrast: 0.85, saturation: 0.55, cells: KIT.brick.grid });
 const sootMaterial = new THREE.MeshLambertMaterial({ map: atlas('soot'), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
 const flueMaterial = new THREE.MeshLambertMaterial({ color: 0x141211 });
 
@@ -99,7 +101,7 @@ export function buildCover(kind, { ridge, pitch, length, zEnd }, rnd) {
   return group;
 }
 
-// Печная труба на одном из скатов крыши ridge/pitch, у конька; zEnd — полудлина крыши.
+// Печная труба на одном из скатов крыши ridge/pitch, у конька, с дымом; zEnd — полудлина крыши.
 export function buildChimney({ ridge, pitch, zEnd }, rnd) {
   const { size: [wx, wz], above, cap, brick, soot } = CHIMNEY;
   const cx = (rnd() < 0.5 ? -1 : 1) * (0.35 + 0.5 * rnd()), cz = (rnd() - 0.5) * zEnd * 0.8;
@@ -133,5 +135,5 @@ export function buildChimney({ ridge, pitch, zEnd }, rnd) {
   flue.face([[cx - hx, neck, cz - hz], [cx + hx, neck, cz - hz], [cx + hx, neck, cz + hz], [cx - hx, neck, cz + hz]], [0, -1, 0]);
   const sootMesh = sootFaces.mesh(sootMaterial);
   sootMesh.castShadow = false;
-  return new THREE.Group().add(bricks.mesh(brickMaterial), flue.mesh(flueMaterial), sootMesh);
+  return new THREE.Group().add(bricks.mesh(brickMaterial), flue.mesh(flueMaterial), sootMesh, new Smoke(new THREE.Vector3(cx, top, cz), rnd));
 }
