@@ -203,9 +203,23 @@ export function measure(axis, zone) {
 // трубка у основания раздута. Начало оси сидит на оси родителя, внутри него, — стык без щели.
 // Текстура в метрах: по кругу — по среднему радиусу оси, вдоль — по длине дуги. Толстый конец оси
 // (сломанная вершина, сухой пенёк) закрыт крышкой.
-// Доля гладкой коры молодых веток: до YOUNG[0] радиуса (с запястье) только она, от YOUNG[1] — только кора ствола.
-const YOUNG = [0.035, 0.08];
-const young = (r) => 1 - THREE.MathUtils.smoothstep(r, ...YOUNG);
+// Ступень коры (атрибут blend, см. dressLimbs): 0 — молодая ветка, 1 — ветка постарше, 2 — кора ствола.
+// У ясенелистного клёна ветки до толщины в руку гладкие и оливковые, толще — серые, с редкими тонкими
+// трещинами; бороздчатая кора — на стволе и только на самых толстых сучьях (STAGE[2]). На стволе и
+// сдвоенных стволах она с радиуса STAGE[1], выше к вершине кора молодеет, как у ветки.
+// Ветка у основания одета корой родителя: на длине около своего радиуса кора ствола заходит на неё воротником.
+const STAGE = [[0.02, 0.045], [0.05, 0.09], [0.16, 0.22]];
+const ramp = (r, [lo, hi]) => THREE.MathUtils.smoothstep(r, lo, hi);
+function stage(a, s, r) {
+  const own = ramp(r, STAGE[0]) + (a.level === 0 ? ramp(r, STAGE[1]) : ramp(r, STAGE[2]));
+  if (!a.parent) return own;
+  // Ветка выходит из коры родителя на расстоянии его радиуса от его оси; кору родителя там считаем один раз.
+  if (!a.barkBase) {
+    const r = section(a.parent, a.attach).r;
+    a.barkBase = { from: r, stage: stage(a.parent, a.attach, r) };
+  }
+  return own + Math.max(0, a.barkBase.stage - own) * Math.exp(-Math.max(0, s - a.barkBase.from) / a.points[0].r);
+}
 
 function barkGeometry(axes, from) {
   const pos = [], normal = [], uv = [], blend = [], index = [];
@@ -228,7 +242,7 @@ function barkGeometry(axes, from) {
         const r = q.r * collar * (a.profile ? a.profile(az, q.s) : 1);
         pos.push(...q.p.clone().addScaledVector(out, r).toArray());
         normal.push(...out.toArray());
-        blend.push(young(q.r));
+        blend.push(stage(a, q.s, q.r));
         if (a.bark) uv.push(((world(0) + turn * az) * a.bark.radius) / BARK_TILE, (q.s - a.bark.s + a.bark.y) / BARK_TILE);
         else uv.push((az * mean) / BARK_TILE, q.s / BARK_TILE);
         if (k && j < sides) {
@@ -242,7 +256,7 @@ function barkGeometry(axes, from) {
       const c = pos.length / 3, last = c - (sides + 1);
       pos.push(...end.p.toArray());
       normal.push(...end.t.toArray());
-      blend.push(young(end.r));
+      blend.push(stage(a, end.s, end.r));
       uv.push(0, 0);
       for (let j = 0; j < sides; j++) index.push(last + j, last + j + 1, c);
     }
