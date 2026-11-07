@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { generator, smoothNoise } from './random.js';
 import { KIT } from './kit.js';
-import { buildZavalinka } from './zavalinka.js';
 import { buildBoards } from './attic.js';
+import { brickMaterial, BRICK_TILE } from './roof.js';
 import { buildPorch, PORCH_WIDTH } from './porch.js';
-import { PANE, TRIM_ABOVE, PAINT_ODDS, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
+import { PANE, TRIM_ABOVE, PAINT_ODDS, BLUES, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
 import { TRIM_ROOM } from './carving.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
@@ -31,7 +31,7 @@ const LIFT = { front: -COURSE / 2, back: -COURSE / 2, left: 0, right: 0 };
 // закрывает низ наличника (у фасада и боков венцы на разной высоте — у каждой стены свой).
 const onCourse = (wall, k) => R + k * COURSE + LIFT[wall] + THICKEST * R + LINING;
 // Части из набора 2026-11-06 включаем по одной, когда Никита примет предыдущую (2026-11-07: резьба, чердачное окно,
-// кровля, труба с дымом). Остальные собраны и лежат выключенными: chinking, door, balusters, zavalinka.
+// кровля, труба с дымом). Остальные собраны и лежат выключенными: chinking, door, balusters.
 const PARTS = new Set(['carving', 'attic', 'roof', 'chimney']);
 const SIDES = 20;        // граней по обводу бревна
 const STEP = 0.25;       // м — шаг колец вдоль бревна
@@ -46,6 +46,10 @@ const PLINTH_TILE = [2, 1];
 // углы скруглены и обиты, низ ушёл в землю. Верх ровный: на нём лежат брёвна и над ним висит отлив.
 const PLINTH_SHAPE = { step: 0.04, corner: 0.07, sink: 0.08, splay: 0.035, bumps: [[0.6, 0.35, 0.04], [0.13, 0.11, 0.012]], chip: 0.025 };
 const PLINTH_COLOR = [0.5, 0.48, 0.49];
+// Цоколь бывает трёх видов: обмазанный бут (как выше), обшитый досками (attic.js) и кирпичный.
+// Под досками и кирпичом стенка ровная, с почти прямыми углами. Кирпич — набор трубы (roof.js).
+const PLINTHS = { rubble: 2, boards: 1.2, brick: 0.8 }; // как часто выпадает
+const FLAT = { ...PLINTH_SHAPE, corner: 0.01, splay: 0, bumps: [], chip: 0 };
 const DAMP = 0.6;
 
 const [logMap, endMap, plinthMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-plinth.jpg', 'assets/textures/house-chinking.jpg']);
@@ -60,6 +64,7 @@ const materials = [
 // Картинка темнее брёвен, а пакля в пазу видна светлыми волокнами — поэтому светлее в CHINK.tone раз.
 const CHINK = { r: 0.022, out: 0.018, tile: 0.5, arc: 6, tone: 2.2 };
 const chinkMaterial = soften(new THREE.MeshLambertMaterial({ map: chinkMap, color: new THREE.Color().setScalar(CHINK.tone) }), { ...LOOK, contrast: 0.85, cells: [1, 5] });
+const brickPlinth = brickMaterial({ vertexColors: true });
 const plinthMaterial = soften(new THREE.MeshLambertMaterial({ map: plinthMap, color: new THREE.Color(...PLINTH_COLOR), vertexColors: true }), {
   contrast: 1.5, saturation: 0.6, scales: [1.4, 3.7], low: [0.7, 0.67, 0.62], high: [1.06, 1.03, 0.98], cells: [2, 5],
 });
@@ -101,16 +106,17 @@ export function planHouse(seed) {
     ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
   ];
   const windows = { pattern: Math.floor(rnd() * PATTERNS), paint: weighted(PAINT_ODDS, rnd()), tulle: Math.floor(rnd() * TULLES) };
-  // Кровля: чаще шифер, потом зелёное железо, реже рубероид и старый тёс.
-  const roof = pick(['slate', 'slate', 'slate', 'metal', 'metal', 'felt', 'tes']);
+  // Кровля: чаще шифер, потом зелёное железо, реже рубероид и старый тёс. Зелёное железо не сочетают
+  // с голубыми и синими наличниками (Никита, 2026-11-07) — у таких домов его нет.
+  const roof = pick(['slate', 'slate', 'slate', 'metal', 'metal', 'felt', 'tes'].filter((kind) => !(kind === 'metal' && BLUES.includes(windows.paint))));
   // Резьба (причелины и фриз, в цвет наличников) и чердачное окно — у всех.
   const carving = { prichelina: Math.floor(rnd() * KIT.prichelina.count), frieze: Math.floor(rnd() * KIT.frieze.count) };
   const attic = Math.floor(rnd() * KIT.attic.count);
-  const zavalinka = rnd() < 0.5;
+  const plinth = Object.keys(PLINTHS)[weighted(Object.values(PLINTHS), rnd())];
   return {
     seed, w, d, courses, pitch, openings, windows, parts: PARTS,
     roof: PARTS.has('roof') ? roof : 'tes', carving: PARTS.has('carving') ? carving : null,
-    attic: PARTS.has('attic') ? attic : null, zavalinka: PARTS.has('zavalinka') && zavalinka,
+    attic: PARTS.has('attic') ? attic : null, plinth,
   };
 }
 
@@ -167,7 +173,9 @@ export function buildHouse(plan) {
   const chinks = new THREE.Mesh(chinkGeometry, chinkMaterial);
   chinks.receiveShadow = true;
 
-  const plinth = new THREE.Mesh(plinthGeometry(w / 2 + R, d / 2 + R, rnd), plinthMaterial);
+  const plinth = plan.plinth === 'rubble'
+    ? new THREE.Mesh(plinthGeometry(w / 2 + R, d / 2 + R, rnd), plinthMaterial)
+    : new THREE.Mesh(plinthGeometry(w / 2 + R, d / 2 + R, rnd, FLAT, plan.plinth === 'brick' ? BRICK_TILE : PLINTH_TILE), plan.plinth === 'brick' ? brickPlinth : plinthMaterial);
   plinth.castShadow = plinth.receiveShadow = true;
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
   const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
@@ -175,16 +183,14 @@ export function buildHouse(plan) {
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
   const door = openings.find((o) => o.kind === 'door');
   const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, parts: plan.parts });
-  const house = new THREE.Group().add(srub, chinks, plinth, boards, windows, porch);
-  if (plan.zavalinka) house.add(buildZavalinka(w / 2 + R, d / 2 + R, door, rnd));
-  return house;
+  return new THREE.Group().add(srub, chinks, plinth, boards, windows, porch);
 }
 
 // Цоколь с полуразмерами hx, hz: стенка — сетка по обходу (s) и высоте, каждая точка сдвинута по нормали
-// обхода (PLINTH_SHAPE), сверху — крышка. Плитка ложится в метрах обхода, так что на углах узор не рвётся;
+// обхода (shape), сверху — крышка. Плитка tile ложится в метрах обхода, так что на углах узор не рвётся;
 // по высоте сдвиг держит полосу цоколя внутри одной плитки (её верх и низ между собой не сшиты).
-function plinthGeometry(hx, hz, rnd) {
-  const { step, corner: c, sink, splay, bumps, chip } = PLINTH_SHAPE;
+function plinthGeometry(hx, hz, rnd, shape = PLINTH_SHAPE, tile = PLINTH_TILE) {
+  const { step, corner: c, sink, splay, bumps, chip } = shape;
   const noise = smoothNoise(rnd);
   // Обход скруглённого прямоугольника от середины зада: прямые стены и дуги углов. at(s) — точка и нормаль наружу.
   const straight = [2 * (hx - c), 2 * (hz - c)], arc = (c * Math.PI) / 2;
@@ -207,7 +213,7 @@ function plinthGeometry(hx, hz, rnd) {
     return [ox + Math.cos(a) * c, oz + Math.sin(a) * c, Math.cos(a), Math.sin(a), Math.sin((s / arc) * Math.PI)];
   };
   const pos = [], uv = [], color = [], index = [];
-  const u0 = rnd() * 10, v0 = rnd() * (PLINTH_TILE[1] - PLINTH);
+  const u0 = rnd() * 10, v0 = rnd() * Math.max(0, tile[1] - PLINTH);
   const cols = Math.ceil(perimeter / step), rows = Math.ceil((PLINTH + sink) / step);
   for (let i = 0; i <= cols; i++) {
     const s = (perimeter * i) / cols, [x, z, nx, nz, round] = at(s);
@@ -220,7 +226,7 @@ function plinthGeometry(hx, hz, rnd) {
       out -= chip * round * wrap((p, q) => noise(p / 0.2 + 40, q / 0.15));
       out *= THREE.MathUtils.smoothstep(PLINTH - y, 0, 0.12); // у верха — вровень с брёвнами
       pos.push(x + nx * out, y, z + nz * out);
-      uv.push(u0 + s / PLINTH_TILE[0], v0 + y / PLINTH_TILE[1]);
+      uv.push(u0 + s / tile[0], v0 + y / tile[1]);
       const k = THREE.MathUtils.lerp(DAMP, 1, rise);
       color.push(k, k, k);
       if (i && j) {

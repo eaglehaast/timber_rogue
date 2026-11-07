@@ -23,7 +23,6 @@ KITS = {
     'brick': ('chimney_brick_01_05/*.png', (512, 512), 5, False),
     'soot': ('chimney_soot_01_05/*.png', (512, 512), 5, False),
     'chinking': ('chinking_01_05/*.png', (1024, 128), 1, False),
-    'zavalinka': ('zavalinka_01_05/*.png', (1024, 256), 1, False),
     'door': ('doors_01_04*/*.png', (512, 1024), 4, False),
     'frieze': ('carved_trim_01_15/*frieze*.png', (1024, 256), 3, False),
     'prichelina': ('carved_trim_01_15/*prichelina*.png', (1024, 256), 3, False),

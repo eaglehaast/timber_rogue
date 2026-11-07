@@ -26,9 +26,13 @@ const ridgeMaterial = new THREE.MeshLambertMaterial({ map: atlas('ridge') });
 
 // Труба: сечение (поперёк конька и вдоль), выше конька на above, оголовок шире на out и высотой height;
 // плитка кирпича — 2 кирпича (0,52 м) на 6 рядов (0,45 м). Копоть — картинка набора по верху трубы.
-const CHIMNEY = { size: [0.51, 0.38], above: 0.6, cap: { height: 0.15, out: 0.05 }, brick: [0.52, 0.45], soot: 0.003 };
-// Кирпич старый, закопчённый и выцветший: темнее и глуше картинки, иначе труба горит морковным пятном.
-const brickMaterial = soften(new THREE.MeshLambertMaterial({ map: atlas('brick'), color: new THREE.Color().setScalar(0.7) }), { ...LOOK, contrast: 0.85, saturation: 0.55, cells: KIT.brick.grid });
+export const BRICK_TILE = [0.52, 0.45];
+const CHIMNEY = { size: [0.51, 0.38], above: 0.6, cap: { height: 0.15, out: 0.05 }, brick: BRICK_TILE, soot: 0.003 };
+// Кирпич старый, закопчённый и выцветший: темнее и глуше картинки, иначе горит морковным пятном.
+// Тот же кирпич — у кирпичного цоколя (house.js); extra — что добавить материалу (например, цвета вершин).
+export const brickMaterial = (extra) => soften(new THREE.MeshLambertMaterial({ map: atlas('brick'), color: new THREE.Color().setScalar(0.7), ...extra }),
+  { ...LOOK, contrast: 0.85, saturation: 0.55, cells: KIT.brick.grid });
+const chimneyBrick = brickMaterial();
 const sootMaterial = new THREE.MeshLambertMaterial({ map: atlas('soot'), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
 const flueMaterial = new THREE.MeshLambertMaterial({ color: 0x141211 });
 
@@ -135,5 +139,5 @@ export function buildChimney({ ridge, pitch, zEnd }, rnd) {
   flue.face([[cx - hx, neck, cz - hz], [cx + hx, neck, cz - hz], [cx + hx, neck, cz + hz], [cx - hx, neck, cz + hz]], [0, -1, 0]);
   const sootMesh = sootFaces.mesh(sootMaterial);
   sootMesh.castShadow = false;
-  return new THREE.Group().add(bricks.mesh(brickMaterial), flue.mesh(flueMaterial), sootMesh, new Smoke(new THREE.Vector3(cx, top, cz), rnd));
+  return new THREE.Group().add(bricks.mesh(chimneyBrick), flue.mesh(flueMaterial), sootMesh, new Smoke(new THREE.Vector3(cx, top, cz), rnd));
 }

@@ -250,5 +250,18 @@ export function buildBoards(plan, { front, side, plinth, r, reach }) {
       drip.add([[0, 0], [tail, 0], [tail, DRIP.width], [0, DRIP.width]], { o, X, Y: t }, n, [1, 0], DRIP.width, rnd);
     }
   }
-  return new THREE.Group().add(...gable.meshes(), ...roof.meshes(), ...drip.meshes(), ...extras);
+  // Обшитый цоколь: доски стоймя от земли до верха цоколя, под отливом, того же старого дерева, что фронтон.
+  // Доски фасада и зада шире на толщину доски с каждого конца и закрывают торцы досок боков.
+  const cladding = new Planks(materials.gable);
+  if (plan.plinth === 'boards') {
+    for (const { out, along, half, at } of walls) {
+      const e = new THREE.Vector3(...out), t = new THREE.Vector3(...along), end = half + r + (along[0] ? T : 0);
+      const frame = { o: e.clone().multiplyScalar(at + r), X: t, Y: new THREE.Vector3(0, 1, 0) };
+      for (let s = -end; s < end - 0.01; s += BOARD + 0.003) {
+        const s1 = Math.min(s + BOARD, end);
+        cladding.add([[s, -0.05], [s1, -0.05], [s1, plinth], [s, plinth]], frame, e, [0, 1], s1 - s, rnd);
+      }
+    }
+  }
+  return new THREE.Group().add(...gable.meshes(), ...roof.meshes(), ...drip.meshes(), ...cladding.meshes(), ...extras);
 }
