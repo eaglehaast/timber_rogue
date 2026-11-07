@@ -22,6 +22,9 @@ const R = 0.13;          // м — средний радиус бревна
 const COURSE = 1.7 * R;  // м — шаг венцов: бревно лежит в пазу нижнего, венцы ниже двух радиусов
 const OVERHANG = 0.3;    // м — остаток бревна за углом, от оси поперечной стены
 const PLINTH = 0.45;     // м — высота цоколя
+// Части из набора 2026-11-06 включаем по одной, когда Никита примет предыдущую (2026-11-07: начали с резьбы).
+// Остальные собраны и лежат выключенными: roof, chimney, chinking, attic, door, balusters, zavalinka.
+const PARTS = new Set(['carving']);
 const SIDES = 20;        // граней по обводу бревна
 const STEP = 0.25;       // м — шаг колец вдоль бревна
 
@@ -61,7 +64,8 @@ export function planHouse(seed) {
   const rnd = generator(seed);
   const pick = (list) => list[Math.floor(rnd() * list.length)];
   const w = pick([5, 6, 6, 6.5]), d = pick([5, 6, 6]);
-  const courses = 11 + Math.floor(rnd() * 3);
+  // Над окнами — не меньше трёх венцов: под фронтоном висит резной фриз, наличник не должен в него упираться.
+  const courses = 12 + Math.floor(rnd() * 3);
   const pitch = THREE.MathUtils.degToRad(38 + 8 * rnd());
   // Низ окна — 0,95 м над цоколем, а в низком срубе ниже: кокошник наличника не должен лезть выше стен.
   const sill = Math.min(0.95, 2 * R + (courses - 1) * COURSE - COURSE / 2 - TRIM_ABOVE - PANE[1] - 0.03);
@@ -85,7 +89,11 @@ export function planHouse(seed) {
   const carving = rnd() < 0.75 ? { prichelina: Math.floor(rnd() * KIT.prichelina.count), frieze: Math.floor(rnd() * KIT.frieze.count) } : null;
   const attic = Math.floor(rnd() * KIT.attic.count);
   const zavalinka = rnd() < 0.5;
-  return { seed, w, d, courses, pitch, openings, windows, roof, carving, attic, zavalinka };
+  return {
+    seed, w, d, courses, pitch, openings, windows, parts: PARTS,
+    roof: PARTS.has('roof') ? roof : 'tes', carving: PARTS.has('carving') ? carving : null,
+    attic: PARTS.has('attic') ? attic : null, zavalinka: PARTS.has('zavalinka') && zavalinka,
+  };
 }
 
 // Дом по плану: сруб (бок и торцы брёвен — две группы граней со своими материалами), цоколь,
@@ -122,7 +130,7 @@ export function buildHouse(plan) {
       const look = { r, butt, reach, sag: 0.005 + 0.01 * rnd(), wobble: rnd() * 100, u: rnd() * 10, v: rnd() * 10 };
       for (const [from, to] of pieces) log(parts, wall, y + PLINTH, from, to, look, rnd);
       const course = { y: y + PLINTH, pieces, ...look };
-      if (below) chinking(chink, wall, below, course);
+      if (below && plan.parts.has('chinking')) chinking(chink, wall, below, course);
       below = course;
     }
   }
@@ -148,7 +156,7 @@ export function buildHouse(plan) {
   // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
   const door = openings.find((o) => o.kind === 'door');
-  const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R });
+  const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, parts: plan.parts });
   const house = new THREE.Group().add(srub, chinks, plinth, boards, windows, porch);
   if (plan.zavalinka) house.add(buildZavalinka(w / 2 + R, d / 2 + R, door, rnd));
   return house;

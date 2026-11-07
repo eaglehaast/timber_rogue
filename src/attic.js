@@ -212,10 +212,11 @@ export function buildBoards(plan, { front, side, plinth, r, reach }) {
     roof.add([[-0.02, -zEnd], [0.17, -zEnd], [0.17, zEnd], [-0.02, zEnd]], { o, X, Y }, n, [0, 1], 0.19, rnd);
   }
   const top = generator(seed + 4), shape = { ridge, pitch, length, zEnd };
-  const extras = [buildChimney(shape, top), buildCarving(plan, {
+  const extras = [buildCarving(plan, {
     ridge, pitch, reach: hx + EAVE, gable: d / 2 + 0.55 * r + T, barge: d / 2 + r + GABLE_OVER - 0.03,
     front, out: d / 2 + 1.13 * r + 0.01, span: w / 2 - r - 0.02, zEnd,
   })];
+  if (plan.parts.has('chimney')) extras.push(buildChimney(shape, top));
   if (cover !== 'tes') extras.push(buildCover(cover, shape, top));
 
   // Отлив: короткие доски поперёк стены над цоколем, с уклоном наружу, торцами к улице. Под дверью его нет.
