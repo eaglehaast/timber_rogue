@@ -257,7 +257,7 @@ export function buildBoards(plan, { front, side, plinth, r, reach }) {
     for (const { out, along, half, at } of walls) {
       const e = new THREE.Vector3(...out), t = new THREE.Vector3(...along), end = half + r + (along[0] ? T : 0);
       const frame = { o: e.clone().multiplyScalar(at + r), X: t, Y: new THREE.Vector3(0, 1, 0) };
-      for (let s = -end; s < end - 0.01; s += BOARD + 0.003) {
+      for (let s = -end; s < end - 0.01; s += BOARD) { // встык: под досками цоколя нет
         const s1 = Math.min(s + BOARD, end);
         cladding.add([[s, -0.05], [s1, -0.05], [s1, plinth], [s, plinth]], frame, e, [0, 1], s1 - s, rnd);
       }

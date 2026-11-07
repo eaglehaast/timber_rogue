@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
-import { generator, smoothNoise } from './random.js';
+import { generator } from './random.js';
 import { KIT } from './kit.js';
 import { buildBoards } from './attic.js';
 import { brickMaterial, BRICK_TILE } from './roof.js';
@@ -36,23 +36,12 @@ const PARTS = new Set(['carving', 'attic', 'roof', 'chimney']);
 const SIDES = 20;        // граней по обводу бревна
 const STEP = 0.25;       // м — шаг колец вдоль бревна
 
-// Цоколь — старая обмазка по буту: набор house-plinth.jpg, 10 плиток 2 × 5 с общими левым и правым краем,
-// плитка — PLINTH_TILE[0] метров вдоль стены и PLINTH_TILE[1] в высоту (цоколь берёт полосу из её высоты).
-// Плитки почти белые и ровные, а на референсе обмазка серо-бурая, пятнами, и у земли темнее от сырости и
-// брызг. Поэтому плитки темним цветом PLINTH_COLOR, их рисунок усиливаем, а пятна тона кладём не в шаг
-// плиток (так у плиток, одинаковых у краёв, стык не повторяется каждые 2 м). DAMP — во сколько темнее у земли.
-const PLINTH_TILE = [2, 1];
-// Форма цоколя: обмазка руками по камню — стенка в буграх и вмятинах (две крупности), к низу оплыла наружу,
-// углы скруглены и обиты, низ ушёл в землю. Верх ровный: на нём лежат брёвна и над ним висит отлив.
-const PLINTH_SHAPE = { step: 0.04, corner: 0.07, sink: 0.08, splay: 0.035, bumps: [[0.6, 0.35, 0.04], [0.13, 0.11, 0.012]], chip: 0.025 };
-const PLINTH_COLOR = [0.5, 0.48, 0.49];
-// Цоколь бывает трёх видов: обмазанный бут (как выше), обшитый досками (attic.js) и кирпичный.
-// Под досками и кирпичом стенка ровная, с почти прямыми углами. Кирпич — набор трубы (roof.js).
-const PLINTHS = { rubble: 2, boards: 1.2, brick: 0.8 }; // как часто выпадает
-const FLAT = { ...PLINTH_SHAPE, corner: 0.01, splay: 0, bumps: [], chip: 0 };
-const DAMP = 0.6;
+// Цоколь — кирпичный (кирпич трубы, roof.js) или обшитый досками стоймя (attic.js); PLINTHS — как часто.
+// Обмазанный бут убран (Никита, 2026-11-07: «некрасиво»). Кирпич уходит в землю на SINK, у земли темнее в DAMP раз.
+const PLINTHS = { boards: 1.2, brick: 0.8 };
+const SINK = 0.05, DAMP = 0.6;
 
-const [logMap, endMap, plinthMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-plinth.jpg', 'assets/textures/house-chinking.jpg']);
+const [logMap, endMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-chinking.jpg']);
 const ENDS = await (await fetch('assets/textures/house-endgrain.json')).json();
 const LOOK = { contrast: 0.7, saturation: 0.65, scales: [0.3, 1.1], low: [0.8, 0.8, 0.8], high: [1.08, 1.04, 1.0] };
 const materials = [
@@ -64,10 +53,7 @@ const materials = [
 // Картинка темнее брёвен, а пакля в пазу видна светлыми волокнами — поэтому светлее в CHINK.tone раз.
 const CHINK = { r: 0.022, out: 0.018, tile: 0.5, arc: 6, tone: 2.2 };
 const chinkMaterial = soften(new THREE.MeshLambertMaterial({ map: chinkMap, color: new THREE.Color().setScalar(CHINK.tone) }), { ...LOOK, contrast: 0.85, cells: [1, 5] });
-const brickPlinth = brickMaterial({ vertexColors: true });
-const plinthMaterial = soften(new THREE.MeshLambertMaterial({ map: plinthMap, color: new THREE.Color(...PLINTH_COLOR), vertexColors: true }), {
-  contrast: 1.5, saturation: 0.6, scales: [1.4, 3.7], low: [0.7, 0.67, 0.62], high: [1.06, 1.03, 0.98], cells: [2, 5],
-});
+const plinthBrick = brickMaterial({ vertexColors: true });
 
 // Дом по зерну: размер сруба, число венцов, уклон крыши, окна и дверь.
 // Стены: front и back идут вдоль x (z = ±d/2), left и right — вдоль z (x = ∓w/2).
@@ -173,84 +159,45 @@ export function buildHouse(plan) {
   const chinks = new THREE.Mesh(chinkGeometry, chinkMaterial);
   chinks.receiveShadow = true;
 
-  const plinth = plan.plinth === 'rubble'
-    ? new THREE.Mesh(plinthGeometry(w / 2 + R, d / 2 + R, rnd), plinthMaterial)
-    : new THREE.Mesh(plinthGeometry(w / 2 + R, d / 2 + R, rnd, FLAT, plan.plinth === 'brick' ? BRICK_TILE : PLINTH_TILE), plan.plinth === 'brick' ? brickPlinth : plinthMaterial);
-  plinth.castShadow = plinth.receiveShadow = true;
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
   const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
   // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
   const door = openings.find((o) => o.kind === 'door');
   const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, parts: plan.parts });
-  return new THREE.Group().add(srub, chinks, plinth, boards, windows, porch);
+  const house = new THREE.Group().add(srub, chinks, boards, windows, porch);
+  if (plan.plinth === 'brick') {
+    const brick = new THREE.Mesh(brickPlinth(w / 2 + R, d / 2 + R, rnd), plinthBrick);
+    brick.castShadow = brick.receiveShadow = true;
+    house.add(brick);
+  }
+  return house;
 }
 
-// Цоколь с полуразмерами hx, hz: стенка — сетка по обходу (s) и высоте, каждая точка сдвинута по нормали
-// обхода (shape), сверху — крышка. Плитка tile ложится в метрах обхода, так что на углах узор не рвётся;
-// по высоте сдвиг держит полосу цоколя внутри одной плитки (её верх и низ между собой не сшиты).
-function plinthGeometry(hx, hz, rnd, shape = PLINTH_SHAPE, tile = PLINTH_TILE) {
-  const { step, corner: c, sink, splay, bumps, chip } = shape;
-  const noise = smoothNoise(rnd);
-  // Обход скруглённого прямоугольника от середины зада: прямые стены и дуги углов. at(s) — точка и нормаль наружу.
-  const straight = [2 * (hx - c), 2 * (hz - c)], arc = (c * Math.PI) / 2;
-  const legs = [];
-  for (let k = 0; k < 4; k++) legs.push(straight[k % 2], arc);
-  const perimeter = legs.reduce((a, b) => a + b);
-  const at = (s) => {
-    s = ((s + straight[0] / 2) % perimeter + perimeter) % perimeter; // от середины зада
-    let k = 0;
-    while (s > legs[k]) s -= legs[k++];
-    const side = k >> 1, angle = -Math.PI / 2 + (side * Math.PI) / 2; // зад, право, фасад, лево — нормали по кругу
-    const [ex, ez] = [hx - c, hz - c];
-    const corners = [[-ex, -ez], [ex, -ez], [ex, ez], [-ex, ez]];
-    if (k % 2 === 0) { // прямая: от угла side вдоль к углу side + 1
-      const [ax, az] = corners[side], [bx, bz] = corners[(side + 1) % 4], t = s / legs[k];
-      const [nx, nz] = [Math.cos(angle), Math.sin(angle)];
-      return [ax + (bx - ax) * t + nx * c, az + (bz - az) * t + nz * c, nx, nz, 0];
-    }
-    const a = angle + (s / arc) * (Math.PI / 2), [ox, oz] = corners[(side + 1) % 4];
-    return [ox + Math.cos(a) * c, oz + Math.sin(a) * c, Math.cos(a), Math.sin(a), Math.sin((s / arc) * Math.PI)];
-  };
-  const pos = [], uv = [], color = [], index = [];
-  const u0 = rnd() * 10, v0 = rnd() * Math.max(0, tile[1] - PLINTH);
-  const cols = Math.ceil(perimeter / step), rows = Math.ceil((PLINTH + sink) / step);
-  for (let i = 0; i <= cols; i++) {
-    const s = (perimeter * i) / cols, [x, z, nx, nz, round] = at(s);
-    for (let j = 0; j <= rows; j++) {
-      const y = -sink + ((PLINTH + sink) * j) / rows, rise = Math.max(0, y) / PLINTH;
-      // Шум по обходу зациклен: последний столбец совпадает с первым.
-      const wrap = (f) => THREE.MathUtils.lerp(f(s, y), f(s - perimeter, y), s / perimeter);
-      let out = splay * (1 - rise) ** 2;
-      for (const [cs, cy, a] of bumps) out += a * (2 * wrap((p, q) => noise(p / cs, q / cy)) - 1);
-      out -= chip * round * wrap((p, q) => noise(p / 0.2 + 40, q / 0.15));
-      out *= THREE.MathUtils.smoothstep(PLINTH - y, 0, 0.12); // у верха — вровень с брёвнами
-      pos.push(x + nx * out, y, z + nz * out);
-      uv.push(u0 + s / tile[0], v0 + y / tile[1]);
-      const k = THREE.MathUtils.lerp(DAMP, 1, rise);
-      color.push(k, k, k);
-      if (i && j) {
-        const a = i * (rows + 1) + j, b = a - (rows + 1);
-        index.push(b - 1, b, a, b - 1, a, a - 1);
+// Кирпичный цоколь с полуразмерами hx, hz: четыре стенки от SINK под землёй до верха. Кирпич ложится в метрах
+// обхода — на углах ряды не рвутся; к земле темнее (цвет вершин). Крышки нет: сверху лежат брёвна.
+function brickPlinth(hx, hz, rnd) {
+  const corners = [[-hx, -hz], [hx, -hz], [hx, hz], [-hx, hz]];
+  const pos = [], normal = [], uv = [], color = [], index = [];
+  let u = rnd() * 10;
+  corners.forEach(([ax, az], k) => {
+    const [bx, bz] = corners[(k + 1) % 4], length = Math.hypot(bx - ax, bz - az), start = pos.length / 3;
+    for (const [x, z, along] of [[ax, az, 0], [bx, bz, length]]) {
+      for (const y of [-SINK, PLINTH]) {
+        const damp = y < 0 ? DAMP : 1;
+        pos.push(x, y, z); normal.push((bz - az) / length, 0, -(bx - ax) / length); color.push(damp, damp, damp);
+        uv.push((u + along) / BRICK_TILE[0], y / BRICK_TILE[1]);
       }
     }
-  }
-  // Крышка: веер от середины к верхнему кольцу.
-  const center = pos.length / 3;
-  pos.push(0, PLINTH, 0); uv.push(u0, v0); color.push(1, 1, 1);
-  for (let i = 0; i < cols; i++) index.push(center, (i + 2) * (rows + 1) - 1, (i + 1) * (rows + 1) - 1);
+    index.push(start, start + 1, start + 2, start + 1, start + 3, start + 2);
+    u += length;
+  });
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(color, 3));
   geometry.setIndex(index);
-  geometry.computeVertexNormals();
-  // Первый и последний столбцы — одни и те же точки: нормали у них общие, иначе на заду виден шов.
-  const normal = geometry.attributes.normal, last = cols * (rows + 1);
-  for (let j = 0; j <= rows; j++) {
-    const n = new THREE.Vector3().fromBufferAttribute(normal, j).add(new THREE.Vector3().fromBufferAttribute(normal, last + j)).normalize();
-    normal.setXYZ(j, n.x, n.y, n.z); normal.setXYZ(last + j, n.x, n.y, n.z);
-  }
   return geometry;
 }
 
