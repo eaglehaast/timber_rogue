@@ -38,7 +38,7 @@ const trimMaterials = PAINTS.map((paint) => new THREE.MeshLambertMaterial({ map,
 const edgeMaterials = PAINTS.map((paint) => new THREE.MeshLambertMaterial({ map, color: new THREE.Color(...paint) }));
 const liningMaterials = PAINTS.map((paint) => new THREE.MeshLambertMaterial({ color: new THREE.Color(...paint).multiplyScalar(0.8) }));
 const sashMaterial = new THREE.MeshLambertMaterial({ color: new THREE.Color(...SASH.paint) });
-const tulleMaterial = new THREE.MeshLambertMaterial({ map: tulleMap });
+export const tulleMaterial = new THREE.MeshLambertMaterial({ map: tulleMap });
 const glassMaterial = new THREE.MeshBasicMaterial({ color: 0xc4d6e8, transparent: true, opacity: 0.22, depthWrite: false });
 
 // Набор граней одной сетки; face кладёт четырёхугольник лицом к normal (обход сам подбирается по нормали).

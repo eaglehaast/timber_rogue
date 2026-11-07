@@ -4,7 +4,7 @@ import { generator } from './random.js';
 import { KIT } from './kit.js';
 import { buildBoards } from './attic.js';
 import { brickMaterial, BRICK_TILE } from './roof.js';
-import { buildPorch, PORCH_WIDTH } from './porch.js';
+import { buildPorch, porchWidth } from './porch.js';
 import { PANE, TRIM_ABOVE, PAINT_ODDS, BLUES, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
 import { TRIM_ROOM } from './carving.js';
 
@@ -31,14 +31,15 @@ const LIFT = { front: -COURSE / 2, back: -COURSE / 2, left: 0, right: 0 };
 // закрывает низ наличника (у фасада и боков венцы на разной высоте — у каждой стены свой).
 const onCourse = (wall, k) => R + k * COURSE + LIFT[wall] + THICKEST * R + LINING;
 // Части из набора 2026-11-06 включаем по одной, когда Никита примет предыдущую (2026-11-07: резьба, чердачное окно,
-// кровля, труба с дымом, обитая дверь; перила с балясинами — всегда). Выключена пока пакля: chinking.
-const PARTS = new Set(['carving', 'attic', 'roof', 'chimney', 'door']);
+// кровля, труба с дымом; обитая дверь и перила с балясинами — всегда). Выключена пока пакля: chinking.
+const PARTS = new Set(['carving', 'attic', 'roof', 'chimney']);
 const SIDES = 20;        // граней по обводу бревна
 const STEP = 0.25;       // м — шаг колец вдоль бревна
 
 // Цоколь — кирпичный (кирпич трубы, roof.js) или обшитый досками стоймя (attic.js); PLINTHS — как часто.
 // Обмазанный бут убран (Никита, 2026-11-07: «некрасиво»). Кирпич уходит в землю на SINK, у земли темнее в DAMP раз.
 const PLINTHS = { boards: 1.2, brick: 0.8 };
+const TAMBOUR_CHANCE = 0.4;
 const SINK = 0.05, DAMP = 0.6;
 
 const [logMap, endMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-chinking.jpg']);
@@ -82,12 +83,15 @@ export function planHouse(seed) {
   const row = (wall, length, n) => Array.from({ length: n }, (_, i) => window(wall, (i - (n - 1) / 2) * (length / n)));
   const front = w < 5.5 ? 2 : 3;
   const door = pick(['left', 'right']);
+  // Остеклённый тамбур на крыльце (porch.js) — у части домов; площадка под ним шире.
+  const tambour = rnd() < TAMBOUR_CHANCE;
   const openings = [
     ...row('front', w, front),
     ...row('back', w, 1 + Math.floor(rnd() * 2)),
     // У двери на боку — одно окно ближе к заду, дверь ближе к улице; на другом боку — одно-два окна.
+    // Крыльцо (с тамбуром — шире) не заходит на остатки брёвен соседней стены за углом.
     // Нижнее бревно под дверью остаётся порогом, верх двери — у стыка венцов около 2 м: бревно над ней цело.
-    { kind: 'door', wall: door, at: d / 4, width: 0.9, bottom: onCourse(door, 0), top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015, porch: PORCH_WIDTH },
+    { kind: 'door', wall: door, at: Math.min(d / 4, d / 2 - 2 * R - porchWidth(tambour) / 2), width: 0.9, bottom: onCourse(door, 0), top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015, porch: porchWidth(tambour) },
     window(door, -d / 5),
     ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
   ];
@@ -102,7 +106,7 @@ export function planHouse(seed) {
   return {
     seed, w, d, courses, pitch, openings, windows, parts: PARTS,
     roof: PARTS.has('roof') ? roof : 'tes', carving: PARTS.has('carving') ? carving : null,
-    attic: PARTS.has('attic') ? attic : null, plinth,
+    attic: PARTS.has('attic') ? attic : null, plinth, tambour,
   };
 }
 
@@ -164,7 +168,7 @@ export function buildHouse(plan) {
   // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
   const door = openings.find((o) => o.kind === 'door');
-  const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, parts: plan.parts });
+  const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, tambour: plan.tambour, tulle: plan.windows.tulle });
   const house = new THREE.Group().add(srub, chinks, boards, windows, porch);
   if (plan.plinth === 'brick') {
     const brick = new THREE.Mesh(brickPlinth(w / 2 + R, d / 2 + R, rnd), plinthBrick);

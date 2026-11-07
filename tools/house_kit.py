@@ -31,7 +31,11 @@ KITS = {
     'attic': ('attic_window_01_05/*.png', (512, 512), 5, True),
     'baluster': ('porch_balusters_01_05/*.png', (128, 512), 5, False),
     'newel': ('porch_newels_01_05/*.png', (128, 1024), 5, False, 0.6),
+    'veranda': ('veranda_windows_01_05/*.png', (768, 768), 5, True),
 }
+# Стекло, нарисованное в картинке, делаем полупрозрачным, чтобы за ним было видно тюль: пиксели темнее
+# яркости threshold (рама светлая, стекло серо-голубое) получают непрозрачность keep.
+GLASS = {'veranda': (0.65, 0.5)}
 
 
 def linear(a):
@@ -54,6 +58,13 @@ def main(src, out, *names):
                 row = np.asarray(im)[int(body[0] * im.height), :, 3] > 128
                 x0, x1 = np.argmax(row), len(row) - np.argmax(row[::-1])
                 im = im.crop((x0, 0, x1, im.height))
+            if name in GLASS:
+                threshold, keep = GLASS[name]
+                px = np.asarray(im).astype(float) / 255
+                luma = px[..., :3] @ [0.299, 0.587, 0.114]
+                glass = np.clip((threshold + 0.05 - luma) / 0.1, 0, 1)
+                px[..., 3] *= 1 - glass * (1 - keep)
+                im = Image.fromarray((px * 255).round().astype(np.uint8), 'RGBA')
             a = np.asarray(im.resize((256, 256)))
             alpha |= bool(a[..., 3].min() < 250)
             pixels.append(a[a[..., 3] > 128][:, :3])

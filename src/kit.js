@@ -4,7 +4,7 @@ import { tiles } from './surface.js';
 // Картинки Никиты для дома, собранные tools/house_kit.py в атласы: house-<имя>.jpg/.webp — клетки сеткой
 // grid, по клетке на картинку; house-kit.json — сетка, число картинок и средний линейный цвет каждого набора.
 export const KIT = await (await fetch('assets/textures/house-kit.json')).json();
-const FILES = { soot: 'webp', door: 'webp', frieze: 'webp', prichelina: 'webp', attic: 'webp', baluster: 'webp', newel: 'webp' };
+const FILES = { soot: 'webp', door: 'webp', frieze: 'webp', prichelina: 'webp', attic: 'webp', baluster: 'webp', newel: 'webp', veranda: 'webp' };
 const cache = {};
 export const atlas = (name) => (cache[name] ??= tiles([`assets/textures/house-${name}.${FILES[name] ?? 'jpg'}`])[0]);
 
