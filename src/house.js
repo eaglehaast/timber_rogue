@@ -6,6 +6,7 @@ import { buildZavalinka } from './zavalinka.js';
 import { buildBoards } from './attic.js';
 import { buildPorch, PORCH_WIDTH } from './porch.js';
 import { PANE, TRIM_ABOVE, PAINTS, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
+import { TRIM_ROOM } from './carving.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
 // фасадные сидят на полбревна ниже боковых. На углах брёвна врублены «в чашу с остатком»: каждое выходит за угол
@@ -24,7 +25,7 @@ const OVERHANG = 0.3;    // м — остаток бревна за углом, 
 const PLINTH = 0.45;     // м — высота цоколя
 // Части из набора 2026-11-06 включаем по одной, когда Никита примет предыдущую (2026-11-07: начали с резьбы).
 // Остальные собраны и лежат выключенными: roof, chimney, chinking, attic, door, balusters, zavalinka.
-const PARTS = new Set(['carving']);
+const PARTS = new Set(['carving', 'attic']);
 const SIDES = 20;        // граней по обводу бревна
 const STEP = 0.25;       // м — шаг колец вдоль бревна
 
@@ -67,8 +68,9 @@ export function planHouse(seed) {
   // Над окнами — не меньше трёх венцов: под фронтоном висит резной фриз, наличник не должен в него упираться.
   const courses = 12 + Math.floor(rnd() * 3);
   const pitch = THREE.MathUtils.degToRad(38 + 8 * rnd());
-  // Низ окна — 0,95 м над цоколем, а в низком срубе ниже: кокошник наличника не должен лезть выше стен.
-  const sill = Math.min(0.95, 2 * R + (courses - 1) * COURSE - COURSE / 2 - TRIM_ABOVE - PANE[1] - 0.03);
+  // Низ окна — 0,95 м над цоколем, а в низком срубе ниже: кокошник наличника не должен доставать до резного фриза
+  // под фронтоном (carving.js: TRIM_ROOM — сколько оставить под верхом фасадной стены).
+  const sill = Math.min(0.95, 2 * R + (courses - 1) * COURSE - COURSE / 2 - TRIM_ROOM - TRIM_ABOVE - PANE[1]);
   const window = (wall, at) => ({ kind: 'window', wall, at, width: PANE[0], bottom: sill, top: sill + PANE[1] });
   const row = (wall, length, n) => Array.from({ length: n }, (_, i) => window(wall, (i - (n - 1) / 2) * (length / n)));
   const front = w < 5.5 ? 2 : 3;
@@ -85,8 +87,8 @@ export function planHouse(seed) {
   const windows = { pattern: Math.floor(rnd() * PATTERNS), paint: Math.floor(rnd() * PAINTS.length), tulle: Math.floor(rnd() * TULLES) };
   // Кровля: чаще шифер, потом зелёное железо, реже рубероид и старый тёс.
   const roof = pick(['slate', 'slate', 'slate', 'metal', 'metal', 'felt', 'tes']);
-  // Резьба (причелины и фриз, в цвет наличников) — у трёх домов из четырёх; чердачное окно — у всех.
-  const carving = rnd() < 0.75 ? { prichelina: Math.floor(rnd() * KIT.prichelina.count), frieze: Math.floor(rnd() * KIT.frieze.count) } : null;
+  // Резьба (причелины и фриз, в цвет наличников) и чердачное окно — у всех.
+  const carving = { prichelina: Math.floor(rnd() * KIT.prichelina.count), frieze: Math.floor(rnd() * KIT.frieze.count) };
   const attic = Math.floor(rnd() * KIT.attic.count);
   const zavalinka = rnd() < 0.5;
   return {

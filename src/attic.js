@@ -4,6 +4,7 @@ import { generator } from './random.js';
 import { KINDS, BOARD, BOARD_SPAN, PAINT } from './fence.js';
 import { buildCover, buildChimney } from './roof.js';
 import { buildCarving } from './carving.js';
+import { TRIM_ABOVE } from './window.js';
 
 // Дощатые части избы — из тех же досок, что забор: фронтоны чердака (доски «ёлочкой»), тесовая крыша
 // с коньком и причелинами, отлив над цоколем. Тёс — сам кровля или обрешётка под шифером, железом, рубероидом (roof.js). Доска — призма толщиной T по многоугольнику в своей плоскости:
@@ -215,6 +216,8 @@ export function buildBoards(plan, { front, side, plinth, r, reach }) {
   const extras = [buildCarving(plan, {
     ridge, pitch, reach: hx + EAVE, gable: d / 2 + 0.55 * r + T, barge: d / 2 + r + GABLE_OVER - 0.03,
     front, out: d / 2 + 1.13 * r + 0.01, span: w / 2 - r - 0.02, zEnd,
+    trims: Object.fromEntries([['left', -1], ['right', 1]].map(([wall, face]) => [face, Math.max(...openings
+      .filter((o) => o.wall === wall && o.kind === 'window').map((o) => plinth + o.top + TRIM_ABOVE))])),
   })];
   if (plan.parts.has('chimney')) extras.push(buildChimney(shape, top));
   if (cover !== 'tes') extras.push(buildCover(cover, shape, top));

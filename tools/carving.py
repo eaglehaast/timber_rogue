@@ -1,8 +1,8 @@
 """Силуэты резьбы для объёма: по ним код даёт причелинам и фризу толщину, как наличникам.
 
 python3 tools/carving.py
-  читает атласы assets/textures/house-frieze.webp и house-prichelina.webp (сетка — из house-kit.json)
-  → assets/textures/house-carving.json: { frieze: [...], prichelina: [...] } — для каждой картинки список
+  читает атласы assets/textures/house-frieze.webp, house-prichelina.webp и house-attic.webp (сетка — из house-kit.json)
+  → assets/textures/house-carving.json: { frieze, prichelina, attic: { px, outlines } } — для каждой картинки список
     замкнутых ломаных [x, y, x, y, ...] в пикселях клетки (от левого верхнего угла): внешний край доски и края
     сквозных прорезей. Обход у всех такой, что дерево справа по ходу (в координатах с y вниз).
 """
@@ -27,7 +27,7 @@ def contours(mask):
         part = parts == k
         if part.sum() >= SPECK: out.append(trace(part))
     # Прорези — прозрачные места, не связанные с краем картинки.
-    holes, n = ndimage.label(np.pad(~mask, 1))
+    holes, n = ndimage.label(np.pad(~mask, 1, constant_values=True))
     outside = set(np.unique(np.concatenate([holes[0], holes[-1], holes[:, 0], holes[:, -1]])))
     for k in range(1, n + 1):
         hole = (holes == k)[1:-1, 1:-1]
@@ -49,7 +49,7 @@ def contours(mask):
 def main():
     kit = json.load(open('assets/textures/house-kit.json'))
     result = {}
-    for name in ['frieze', 'prichelina']:
+    for name in ['frieze', 'prichelina', 'attic']:
         atlas = np.asarray(Image.open(f'assets/textures/house-{name}.webp').convert('RGBA'))[..., 3]
         cols, rows = kit[name]['grid']
         h, w = atlas.shape[0] // rows, atlas.shape[1] // cols
