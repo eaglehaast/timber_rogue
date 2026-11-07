@@ -18,6 +18,8 @@ const TONES = {                          // линейные цвета стар
   gable: new THREE.Color(0.13, 0.105, 0.085), // фронтон — тёмный, бурый, как на образце
   roof: new THREE.Color(0.2, 0.19, 0.18),     // тёс крыши — серый, выбеленный солнцем и дождём
 };
+// Чердак внутри — сумрак: за досками фронтона тёмная плоскость, чтобы в щелях между досками было темно, а не небо.
+const GLOOM = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.012, 0.01, 0.009) });
 const GABLE_ANGLE = Math.PI / 4;         // доски фронтона идут под 45° и сходятся «ёлочкой» на середине
 const EAVE = 0.45, GABLE_OVER = 0.2;     // м — свес крыши за боковые стены и за фронтоны
 const ROOF_BOARD = 0.14, BARGE = 0.2;    // м — ширина доски тёса и причелины
@@ -175,9 +177,15 @@ export function buildBoards(plan, { front, side, plinth, r, reach }) {
   // Фронтоны спереди и сзади: треугольник от верха фасадной стены до ската, доски ёлочкой.
   const base = [[-hx, front - 0.06], [hx, front - 0.06], [hx, ridge], [-hx, ridge]];
   const under = [[tan, 1, ridge - 0.004], [-tan, 1, ridge - 0.004]]; // y ± x·tan ≤ конёк: под скатами
+  const gloom = new THREE.ShapeGeometry(new THREE.Shape(under.reduce(clip, base).map(([x, y]) => new THREE.Vector2(x, y))));
+  const extras = [];
   for (const face of [1, -1]) {
     const frame = { o: new THREE.Vector3(0, 0, face * (d / 2 + 0.55 * r)), X: new THREE.Vector3(1, 0, 0), Y: new THREE.Vector3(0, 1, 0) };
     const n = new THREE.Vector3(0, 0, face);
+    const back = new THREE.Mesh(gloom, GLOOM);
+    back.position.z = face * (d / 2 + 0.55 * r - 0.01);
+    back.rotation.y = face > 0 ? 0 : Math.PI; // лицом наружу
+    extras.push(back);
     for (const half of [-1, 1]) {
       const shape = [...under, [-half, 0, 0]].reduce(clip, base);
       const along = [half * Math.cos(GABLE_ANGLE), Math.sin(GABLE_ANGLE)], across = [-along[1], along[0]];
@@ -214,12 +222,12 @@ export function buildBoards(plan, { front, side, plinth, r, reach }) {
     roof.add([[-0.02, -zEnd], [0.17, -zEnd], [0.17, zEnd], [-0.02, zEnd]], { o, X, Y }, n, [0, 1], 0.19, rnd);
   }
   const top = generator(seed + 4), shape = { ridge, pitch, length, zEnd };
-  const extras = [buildCarving(plan, {
+  extras.push(buildCarving(plan, {
     ridge, pitch, reach: hx + EAVE, gable: d / 2 + 0.55 * r + T, barge: d / 2 + r + GABLE_OVER - 0.03,
     front, out: d / 2 + 1.13 * r + 0.01, span: w / 2 - r - 0.02, zEnd,
     trims: Object.fromEntries([['left', -1], ['right', 1]].map(([wall, face]) => [face, Math.max(...openings
       .filter((o) => o.wall === wall && o.kind === 'window').map((o) => plinth + o.top + TRIM_ABOVE))])),
-  })];
+  }));
   if (plan.parts.has('chimney')) extras.push(buildChimney(shape, top));
   if (cover !== 'tes') extras.push(buildCover(cover, shape, top));
 

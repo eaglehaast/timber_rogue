@@ -29,15 +29,19 @@ export const trimColor = (paint) => paint.map((v, k) => v * SHAPES.nalichnik.tin
 const painted = (name, paint, alphaTest) => new THREE.MeshLambertMaterial({
   map: atlas(name), color: new THREE.Color(...paint.map((v, k) => (v * SHAPES.nalichnik.tint[k]) / SHAPES[name].tint[k])), alphaTest,
 });
-// Стекло чердачного окна — тёмные пиксели картинки (яркость ниже GLASS.dark) — не крашено и светлее в GLASS.glow раз:
-// у чердака два окна, свет проходит насквозь, и за стеклом не чернота, а сумрак.
-const GLASS = { dark: [0.06, 0.12], glow: 3.5 };
+// Стекло чердачного окна — тёмные пиксели картинки (яркость ниже GLASS.dark) — не крашено: за ним нарисован чердак.
+// Он светлее картинки в GLASS.glow раз (у чердака два окна, внутри сумрак, а не чернота), но темнее досок фронтона,
+// а поверх — отблеск неба sky (линейный цвет, от освещения не зависит): так стекло не сливается с досками.
+const GLASS = { dark: [0.06, 0.12], glow: 1.8, sky: [0.03, 0.04, 0.055] };
 function glassy(material) {
   material.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
       #ifdef USE_MAP
         float glass = 1.0 - smoothstep(${GLASS.dark[0].toFixed(3)}, ${GLASS.dark[1].toFixed(3)}, dot(sampledDiffuseColor.rgb, vec3(0.299, 0.587, 0.114)));
         diffuseColor.rgb = mix(diffuseColor.rgb, sampledDiffuseColor.rgb * ${GLASS.glow.toFixed(2)}, glass);
+      #endif`).replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      #ifdef USE_MAP
+        totalEmissiveRadiance += glass * vec3(${GLASS.sky.map((v) => v.toFixed(3)).join(', ')});
       #endif`);
   };
   material.customProgramCacheKey = () => 'attic glass';

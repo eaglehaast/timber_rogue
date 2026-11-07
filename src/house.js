@@ -23,6 +23,13 @@ const R = 0.13;          // м — средний радиус бревна
 const COURSE = 1.7 * R;  // м — шаг венцов: бревно лежит в пазу нижнего, венцы ниже двух радиусов
 const OVERHANG = 0.3;    // м — остаток бревна за углом, от оси поперечной стены
 const PLINTH = 0.45;     // м — высота цоколя
+const THICKEST = 1.08;   // радиус бревна — от (2 − THICKEST)·R до THICKEST·R
+// Боковые стены лежат на цоколе, фасадные (front, back) — на полбревна ниже.
+const LIFT = { front: -COURSE / 2, back: -COURSE / 2, left: 0, right: 0 };
+// Низ проёма, стоящего на венце k стены wall: над самым толстым бревном, какое может выпасть в этом венце,
+// и над обсадой. Так бревно под проёмом остаётся целым, пропил начинается сразу над ним, и щель между ними
+// закрывает низ наличника (у фасада и боков венцы на разной высоте — у каждой стены свой).
+const onCourse = (wall, k) => R + k * COURSE + LIFT[wall] + THICKEST * R + LINING;
 // Части из набора 2026-11-06 включаем по одной, когда Никита примет предыдущую (2026-11-07: начали с резьбы).
 // Остальные собраны и лежат выключенными: roof, chimney, chinking, attic, door, balusters, zavalinka.
 const PARTS = new Set(['carving', 'attic']);
@@ -71,7 +78,11 @@ export function planHouse(seed) {
   // Низ окна — 0,95 м над цоколем, а в низком срубе ниже: кокошник наличника не должен доставать до резного фриза
   // под фронтоном (carving.js: TRIM_ROOM — сколько оставить под верхом фасадной стены).
   const sill = Math.min(0.95, 2 * R + (courses - 1) * COURSE - COURSE / 2 - TRIM_ROOM - TRIM_ABOVE - PANE[1]);
-  const window = (wall, at) => ({ kind: 'window', wall, at, width: PANE[0], bottom: sill, top: sill + PANE[1] });
+  // Окно садится на ближайший венец не выше sill.
+  const window = (wall, at) => {
+    const bottom = onCourse(wall, Math.floor((sill - onCourse(wall, 0)) / COURSE));
+    return { kind: 'window', wall, at, width: PANE[0], bottom, top: bottom + PANE[1] };
+  };
   const row = (wall, length, n) => Array.from({ length: n }, (_, i) => window(wall, (i - (n - 1) / 2) * (length / n)));
   const front = w < 5.5 ? 2 : 3;
   const door = pick(['left', 'right']);
@@ -80,7 +91,7 @@ export function planHouse(seed) {
     ...row('back', w, 1 + Math.floor(rnd() * 2)),
     // У двери на боку — одно окно ближе к заду, дверь ближе к улице; на другом боку — одно-два окна.
     // Нижнее бревно под дверью остаётся порогом, верх двери — у стыка венцов около 2 м: бревно над ней цело.
-    { kind: 'door', wall: door, at: d / 4, width: 0.9, bottom: 2 * R, top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015, porch: PORCH_WIDTH },
+    { kind: 'door', wall: door, at: d / 4, width: 0.9, bottom: onCourse(door, 0), top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015, porch: PORCH_WIDTH },
     window(door, -d / 5),
     ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
   ];
@@ -105,10 +116,10 @@ export function buildHouse(plan) {
   const rnd = generator(seed + 1);
   const parts = { pos: [], normal: [], uv: [], side: [], end: [] };
   const walls = {
-    front: { along: 'x', at: d / 2, half: w / 2, lift: -COURSE / 2 },
-    back: { along: 'x', at: -d / 2, half: w / 2, lift: -COURSE / 2 },
-    left: { along: 'z', at: -w / 2, half: d / 2, lift: 0 },
-    right: { along: 'z', at: w / 2, half: d / 2, lift: 0 },
+    front: { along: 'x', at: d / 2, half: w / 2 },
+    back: { along: 'x', at: -d / 2, half: w / 2 },
+    left: { along: 'z', at: -w / 2, half: d / 2 },
+    right: { along: 'z', at: w / 2, half: d / 2 },
   };
   const chink = { pos: [], normal: [], uv: [], index: [] };
   for (const [name, wall] of Object.entries(walls)) {
@@ -117,9 +128,9 @@ export function buildHouse(plan) {
     for (let k = 0; k < courses; k++) {
       // Боковые стены лежат на цоколе, фасадные — на полбревна ниже: их нижний венец — полубревно,
       // стёсанное снизу по цоколю (см. log), так между венцами нигде нет щели.
-      const y = R + k * COURSE + wall.lift;
+      const y = R + k * COURSE + LIFT[name];
       const reach = wall.half + OVERHANG + (rnd() - 0.5) * 0.06;
-      const r = R * (0.92 + 0.16 * rnd());
+      const r = R * (2 - THICKEST + 2 * (THICKEST - 1) * rnd());
       const butt = k % 2 ? 1 : -1; // комель — то с одного конца, то с другого
       // Бревно перерезано проёмами, сквозь которые проходит его ось.
       let pieces = [[-reach - (rnd() - 0.5) * 0.06, reach]];
