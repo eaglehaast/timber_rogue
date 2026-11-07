@@ -5,6 +5,8 @@ python3 tools/carving.py
   → assets/textures/house-carving.json: { frieze, prichelina, attic: { px, outlines } } — для каждой картинки список
     замкнутых ломаных [x, y, x, y, ...] в пикселях клетки (от левого верхнего угла): внешний край доски и края
     сквозных прорезей. Обход у всех такой, что дерево справа по ходу (в координатах с y вниз).
+    tint — оттенок светлых пикселей (линейный цвет, делённый на яркость) у них и у наличников: резьба красится
+    как наличник, и чтобы белая краска везде была одной белой, код приводит оттенок картинки к наличниковому.
 """
 import json
 
@@ -46,6 +48,20 @@ def contours(mask):
     return lines
 
 
+def tint(path):
+    """Оттенок светлого дерева картинки: средний линейный цвет пикселей ярче LIGHT, делённый на его яркость."""
+    a = np.asarray(Image.open(path).convert('RGBA'), float)
+    c = a[..., :3][a[..., 3] > 128] / 255
+    c = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    luma = c @ LUMA
+    mean = c[luma > LIGHT].mean(0)
+    return [round(float(v), 3) for v in mean / (mean @ LUMA)]
+
+
+LUMA = np.array([0.299, 0.587, 0.114])
+LIGHT = 0.25  # стекло и тени темнее — в оттенок не идут
+
+
 def main():
     kit = json.load(open('assets/textures/house-kit.json'))
     result = {}
@@ -53,12 +69,13 @@ def main():
         atlas = np.asarray(Image.open(f'assets/textures/house-{name}.webp').convert('RGBA'))[..., 3]
         cols, rows = kit[name]['grid']
         h, w = atlas.shape[0] // rows, atlas.shape[1] // cols
-        result[name] = {'px': [w, h], 'outlines': []}
+        result[name] = {'px': [w, h], 'tint': tint(f'assets/textures/house-{name}.webp'), 'outlines': []}
         for i in range(kit[name]['count']):
             cell = atlas[(i // cols) * h:(i // cols + 1) * h, (i % cols) * w:(i % cols + 1) * w]
             small = np.asarray(Image.fromarray(cell).resize((w // TRACE, h // TRACE), Image.BOX)) > 128
             result[name]['outlines'].append(contours(small))
-        print(name, [sum(len(l) // 2 for l in c) for c in result[name]['outlines']])
+        print(name, result[name]['tint'], [sum(len(l) // 2 for l in c) for c in result[name]['outlines']])
+    result['nalichnik'] = {'tint': tint('assets/textures/house-nalichnik.webp')}
     with open('assets/textures/house-carving.json', 'w') as f:
         json.dump(result, f, separators=(',', ':'))
 

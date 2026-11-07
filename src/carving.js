@@ -17,14 +17,34 @@ const TILE = 4 * HEIGHT;
 const FRIEZE_UP = 0.1, GAP = 0.06;
 export const TRIM_ROOM = HEIGHT - FRIEZE_UP + GAP;
 const SHAPES = await (await fetch('assets/textures/house-carving.json')).json();
-// Чердачное окно — по центру фронтона; его размер — пиксели картинки, делённые на PX_PER_M; низ — на SILL над
-// верхом фасадной стены. Толщина — по силуэту, как у резьбы; краска — наличников (белая получалась кремовой —
-// картинка нарисована старым некрашеным деревом).
-const PX_PER_M = 1280, SILL = 0.35;
+// Чердачное окно — по центру фронтона, высоко, под коньком: верх на UNDER ниже причелин над его углами (не ниже
+// SILL над фасадной стеной). Размер — пиксели картинки, делённые на PX_PER_M. Толщина — по силуэту, как у резьбы;
+// краска — наличников.
+const PX_PER_M = 1280, SILL = 0.35, UNDER = 0.2;
 
-const painted = (name, paint, alphaTest) => new THREE.MeshLambertMaterial({ map: atlas(name), color: new THREE.Color(...paint), alphaTest });
+// Краска — как у наличника, а оттенок картинки приведён к наличниковому (tint): иначе белая на желтоватом рисунке желтеет.
+const painted = (name, paint, alphaTest) => new THREE.MeshLambertMaterial({
+  map: atlas(name), color: new THREE.Color(...paint.map((v, k) => (v * SHAPES.nalichnik.tint[k]) / SHAPES[name].tint[k])), alphaTest,
+});
+// Стекло чердачного окна — тёмные пиксели картинки (яркость ниже GLASS.dark) — не крашено и светлее в GLASS.glow раз:
+// у чердака два окна, свет проходит насквозь, и за стеклом не чернота, а сумрак.
+const GLASS = { dark: [0.06, 0.12], glow: 3.5 };
+function glassy(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      #ifdef USE_MAP
+        float glass = 1.0 - smoothstep(${GLASS.dark[0].toFixed(3)}, ${GLASS.dark[1].toFixed(3)}, dot(sampledDiffuseColor.rgb, vec3(0.299, 0.587, 0.114)));
+        diffuseColor.rgb = mix(diffuseColor.rgb, sampledDiffuseColor.rgb * ${GLASS.glow.toFixed(2)}, glass);
+      #endif`);
+  };
+  material.customProgramCacheKey = () => 'attic glass';
+  return material;
+}
 const materials = Object.fromEntries(['frieze', 'prichelina', 'attic'].map((name) => [name,
-  PAINTS.map((paint) => ({ faces: painted(name, paint, 0.5), edges: painted(name, paint, 0) }))]));
+  PAINTS.map((paint) => {
+    const faces = painted(name, paint, 0.5);
+    return { faces: name === 'attic' ? glassy(faces) : faces, edges: painted(name, paint, 0) };
+  })]));
 
 // Резная доска картинки index набора name длиной length: точка лица — origin + along·t + up·h (t — метры вдоль,
 // h — от 0 у низа картинки до 1 у верха), normal — куда смотрит лицо. Лицо и тыл кладутся в faces, торцы — в edges.
@@ -92,8 +112,9 @@ export function buildCarving({ carving, attic, windows: { paint } }, { ridge, pi
   }
   // Чердачное окно, если влезает под скаты (с запасом на причелину).
   if (attic === null) return group;
-  const [x, y, w, h, pw, ph] = KIT.attic.rects[attic], width = pw / PX_PER_M, height = ph / PX_PER_M, bottom = front + SILL;
-  if (bottom + height < ridge - (width / 2) * tan - HEIGHT) {
+  const [x, y, w, h, pw, ph] = KIT.attic.rects[attic], width = pw / PX_PER_M, height = ph / PX_PER_M;
+  const bottom = ridge - (width / 2) * tan - HEIGHT - UNDER - height;
+  if (bottom >= front + SILL) {
     const windows = [new Faces(), new Faces()];
     for (const face of [-1, 1]) {
       carvedBoard(...windows, 'attic', attic, width, V(-face * width / 2, bottom, face * (gable + THICK / 2 + 0.005)),
