@@ -6,17 +6,17 @@ import { KIT, atlas, cell, repaint } from './kit.js';
 
 // Крыльцо у двери и обналичка двери — из тех же досок забора (attic.js: Planks), только крашеные.
 // Крыльцо: площадка перед дверью вровень с порогом, лестница от неё наружу почти во всю её ширину; под площадкой
-// и под лестницей по бокам — обшивка досками стоймя. Перила редко и только с одной стороны.
+// и под лестницей по бокам — обшивка досками стоймя. Перила всегда, обычно с одной стороны.
 // На ступенях и площадке тон истёрт посередине — там, где ходят, а к краям остаётся.
 // Дверь — доски стоймя с железными ручкой и петлями, а с частью door (house.js: PARTS) — картинка Никиты: обитая дверь
-// с ручкой, 4 рисунка под перекраску, крашеная кодом в цвет обивки. С частью balusters у перил — балясины, картинки на
-// прозрачном (5 рисунков), две крест-накрест, чтобы точёная балясина была объёмной.
+// с ручкой, 4 рисунка под перекраску, крашеная кодом в цвет обивки. У перил — балясины, картинки на прозрачном
+// (5 рисунков), две крест-накрест, чтобы точёная балясина была объёмной, и столбы с шапками (5 рисунков).
 const LANDING = { width: 1.8, depth: 1.1 };   // м — площадка: вдоль стены и от стены
 export const PORCH_WIDTH = LANDING.width;
 const STAIR = { width: 1.6, run: 0.3, rise: 0.18 }; // ширина, проступь, желаемая высота ступени
 const BOARD_W = 0.1, GAP = 0.006;              // доска и щель между досками
 const SIDE = { thick: 0.022, above: 0.05 };    // обшивка боков лестницы: толщина, выше носков ступеней на
-const POST = 0.09, RAIL = { height: 0.9, size: 0.06, chance: 0.3 }; // перила — у каждого третьего крыльца
+const POST = 0.11, RAIL = { height: 0.9, size: 0.06, both: 0.12 }; // столб; перила, доля крылец с перилами с двух сторон
 const BALUSTER = 0.2;                         // м — шаг балясин
 const DOOR_INSET = 0.08;                      // м — дверь утоплена в проём от лица стены
 // Обналичка двери: ширина боковых досок и верхней, заход за край проёма, отступ от лица стены (поверх брёвен).
@@ -45,7 +45,7 @@ export function buildPorch(seed, door, wall, { base, face, parts }) {
   const centre = P(0, 0, 0);
   const worn = new Planks(boardMaterials(WOOD, { color: paint, wear: { centre: centre.toArray(), across: s.toArray(), half: STAIR.width / 2 } }));
   const coat = boardMaterials(WOOD, { color: paint });
-  const painted = new Planks(coat), beams = new Planks(coat, POST), rails = new Planks(coat, RAIL.size), balusters = new Faces();
+  const painted = new Planks(coat), rails = new Planks(coat, RAIL.size), balusters = new Faces(), posts = new Faces();
   const dir = (x, y) => [x / Math.hypot(x, y), y / Math.hypot(x, y)];
   const rect = (a0, a1, b0, b1) => [[a0, b0], [a1, b0], [a1, b1], [a0, b1]];
   // Доски вдоль along по полосе [from, to] поперёк, шириной BOARD_W: ряд прямоугольников в плоскости frame.
@@ -82,21 +82,22 @@ export function buildPorch(seed, door, wall, { base, face, parts }) {
   for (const a of [-W, W - 0.022]) row(painted, plane(P(a, 0, 0), n, up), s, 0, top - 0.03, 0.05, L, false);
   for (const [a0, a1] of [[-W, -w - SIDE.thick], [w + SIDE.thick, W]]) row(painted, plane(P(0, L - 0.03, 0), s, up), n, 0, top - 0.03, a0, a1, false);
 
-  // Перила — у некоторых крылец, с одной стороны: столбы у края площадки и внизу лестницы, брус по площадке от стены
-  // и по лестнице вниз.
-  if (rnd() < RAIL.chance) {
-    const sign = rnd() < 0.5 ? -1 : 1, r = RAIL.size, a = sign * (w + SIDE.thick + POST / 2);
-    const postAt = (q, height) => beams.add(rect(a - POST / 2, a + POST / 2, 0, height), plane(P(0, q - POST / 2, 0), s, up), n, [0, 1], POST, rnd);
-    const railTop = top + RAIL.height, railLow = nose(qLow) + RAIL.height;
-    postAt(L - POST / 2, railTop + 0.05);
-    postAt(qLow, railLow + 0.05);
+  // Перила — у каждого крыльца (в таких домах живут старики): обычно с одной стороны, изредка с двух.
+  // Столбы у края площадки и внизу лестницы, брус по площадке от стены и по лестнице вниз, между ними балясины.
+  const sides = rnd() < RAIL.both ? [-1, 1] : [rnd() < 0.5 ? -1 : 1];
+  const [u0, v0, u1, v1] = cell('baluster', Math.floor(rnd() * KIT.baluster.count)), uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
+  const newel = Math.floor(rnd() * KIT.newel.count);
+  const floor = (q) => (q < L ? top : nose(q) + SIDE.above);
+  const railTop = top + RAIL.height, railLow = nose(qLow) + RAIL.height, r = RAIL.size;
+  for (const sign of sides) {
+    const a = sign * (w + SIDE.thick + POST / 2);
+    newelPost(posts, newel, P(a, L - POST / 2, 0), s, n, railTop + 0.12);
+    newelPost(posts, newel, P(a, qLow, 0), s, n, railLow + 0.12);
     const frame = plane(P(a - r / 2, 0, 0), n, up);
     rails.add(rect(0, L - POST, railTop - r, railTop), frame, s, [1, 0], r, rnd);
     rails.add([[L - POST, railTop], [qLow, railLow], [qLow, railLow - r], [L - POST, railTop - r]], frame, s, dir(qLow - L + POST, railLow - railTop), r, rnd);
     // Балясины от настила (на лестнице — от обшивки бока) до бруса: две картинки крест-накрест, ширина — четверть высоты.
-    const [u0, v0, u1, v1] = cell('baluster', Math.floor(rnd() * KIT.baluster.count)), uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
-    const floor = (q) => (q < L ? top : nose(q) + SIDE.above);
-    if (parts.has('balusters')) for (let q = BALUSTER; q < qLow - POST; q += BALUSTER) {
+    for (let q = BALUSTER; q < qLow - POST; q += BALUSTER) {
       if (Math.abs(q - (L - POST / 2)) < POST) continue; // столб
       const y0 = floor(q), y1 = (q < L ? railTop : nose(q) + RAIL.height) - r, half = (y1 - y0) / 8;
       balusters.face([P(a - half, q, y0), P(a + half, q, y0), P(a + half, q, y1), P(a - half, q, y1)].map((p) => p.toArray()), n.toArray(), uv);
@@ -142,7 +143,31 @@ export function buildPorch(seed, door, wall, { base, face, parts }) {
   }
   painted.add(rect(-edge, edge, dTop, dTop + TRIM.top), plane(P(0, TRIM.out + 0.022, 0), s, up), n, [1, 0], TRIM.top, rnd);
   const liningMesh = lining.mesh(new THREE.MeshLambertMaterial({ color: new THREE.Color(...paint).multiplyScalar(0.8) }));
-  const group = new THREE.Group().add(...worn.meshes(), ...painted.meshes(), ...beams.meshes(), ...rails.meshes(), liningMesh, door3d);
-  if (balusters.pos.length) group.add(balusters.mesh(new THREE.MeshLambertMaterial({ map: atlas('baluster'), color: repaint('baluster', paint), alphaTest: 0.5, side: THREE.DoubleSide })));
-  return group;
+  return new THREE.Group().add(...worn.meshes(), ...painted.meshes(), ...rails.meshes(), liningMesh, door3d,
+    balusters.mesh(new THREE.MeshLambertMaterial({ map: atlas('baluster'), color: repaint('baluster', paint), alphaTest: 0.5, side: THREE.DoubleSide })),
+    posts.mesh(new THREE.MeshLambertMaterial({ map: atlas('newel'), color: repaint('newel', paint), alphaTest: 0.5 })));
+}
+
+// Столб перил: брус POST × POST от земли до height, грани — картинка столба index (набор house-newel.webp — тело
+// столба с шапкой, без свеса шапки). Низ и шапка картинки — в своём масштабе (по ширине столба), середина тянется
+// по высоте. s, n — оси столба вдоль стены и от неё, base — середина низа.
+const NEWEL = { foot: 0.05, cap: 0.16 }; // доли высоты картинки: низ и шапка, которые не тянутся
+function newelPost(faces, index, base, s, n, height) {
+  const [u0, v0, u1, v1] = cell('newel', index), [, , , , pw, ph] = KIT.newel.rects[index];
+  const natural = (POST * ph) / pw, foot = NEWEL.foot * natural, cap = NEWEL.cap * natural;
+  const v = (f) => v0 + f * (v1 - v0);
+  // Пояса по высоте: [низ, верх, доля картинки снизу, доля сверху].
+  const bands = [[0, foot, 0, NEWEL.foot], [foot, height - cap, NEWEL.foot, 1 - NEWEL.cap], [height - cap, height, 1 - NEWEL.cap, 1]];
+  const h = POST / 2, corner = (i, j, y) => base.clone().addScaledVector(s, i * h).addScaledVector(n, j * h).setY(y).toArray();
+  // Четыре грани: [угол слева, угол справа, наружу] для того, кто смотрит на грань снаружи.
+  const sides = [[[-1, 1], [1, 1], n], [[1, 1], [1, -1], s], [[1, -1], [-1, -1], n.clone().negate()], [[-1, -1], [-1, 1], s.clone().negate()]];
+  for (const [[ai, aj], [bi, bj], out] of sides) {
+    for (const [y0, y1, f0, f1] of bands) {
+      faces.face([corner(ai, aj, y0), corner(bi, bj, y0), corner(bi, bj, y1), corner(ai, aj, y1)], out.toArray(),
+        [[u0, v(f0)], [u1, v(f0)], [u1, v(f1)], [u0, v(f1)]]);
+    }
+  }
+  // Верх шапки — цветом шапки.
+  const lid = [u0 + (u1 - u0) / 2, v(1 - NEWEL.cap / 2)];
+  faces.face([corner(-1, -1, height), corner(1, -1, height), corner(1, 1, height), corner(-1, 1, height)], [0, 1, 0], [lid, lid, lid, lid]);
 }
