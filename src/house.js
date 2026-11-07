@@ -5,7 +5,7 @@ import { KIT } from './kit.js';
 import { buildZavalinka } from './zavalinka.js';
 import { buildBoards } from './attic.js';
 import { buildPorch, PORCH_WIDTH } from './porch.js';
-import { PANE, TRIM_ABOVE, PAINTS, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
+import { PANE, TRIM_ABOVE, PAINT_ODDS, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
 import { TRIM_ROOM } from './carving.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
@@ -68,6 +68,11 @@ const plinthMaterial = soften(new THREE.MeshLambertMaterial({ map: plinthMap, co
 // Стены: front и back идут вдоль x (z = ±d/2), left и right — вдоль z (x = ∓w/2).
 // Проём — { kind (window или door), wall, at (середина вдоль стены от её центра), width, bottom, top } в метрах,
 // низ и верх — от верха цоколя. Окно — по проёму наличника (PANE); наличники на доме одного узора и цвета.
+// Номер по весам odds: чем больше вес, тем чаще выпадает; u — случайное число от 0 до 1.
+const weighted = (odds, u) => {
+  let x = u * odds.reduce((a, b) => a + b);
+  return odds.findIndex((o) => (x -= o) < 0);
+};
 export function planHouse(seed) {
   const rnd = generator(seed);
   const pick = (list) => list[Math.floor(rnd() * list.length)];
@@ -95,7 +100,7 @@ export function planHouse(seed) {
     window(door, -d / 5),
     ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
   ];
-  const windows = { pattern: Math.floor(rnd() * PATTERNS), paint: Math.floor(rnd() * PAINTS.length), tulle: Math.floor(rnd() * TULLES) };
+  const windows = { pattern: Math.floor(rnd() * PATTERNS), paint: weighted(PAINT_ODDS, rnd()), tulle: Math.floor(rnd() * TULLES) };
   // Кровля: чаще шифер, потом зелёное железо, реже рубероид и старый тёс.
   const roof = pick(['slate', 'slate', 'slate', 'metal', 'metal', 'felt', 'tes']);
   // Резьба (причелины и фриз, в цвет наличников) и чердачное окно — у всех.

@@ -11,8 +11,8 @@ const PUFF = {
   rise: [0.7, 0.15],          // м/с — подъём у трубы и в конце жизни: дым остывает и замедляется
   wind: [0.32, 0, 0.1],       // м/с — снос ветром
   size: [0.25, 2.2],          // м — поперечник у трубы и в конце
-  opacity: 0.55,
-  tone: [0.7, 0.7, 0.72],     // сероватый; картинка облака и так светлая
+  opacity: 0.6,
+  tone: [0.4, 0.39, 0.39],    // печной дым серый, темнее неба (светлый выходил паром)
 };
 const COUNT = Math.ceil(PUFF.life / PUFF.every);
 const aspects = await (await fetch('assets/textures/cloud-below.json')).json();
