@@ -31,8 +31,8 @@ const LIFT = { front: -COURSE / 2, back: -COURSE / 2, left: 0, right: 0 };
 // закрывает низ наличника (у фасада и боков венцы на разной высоте — у каждой стены свой).
 const onCourse = (wall, k) => R + k * COURSE + LIFT[wall] + THICKEST * R + LINING;
 // Части из набора 2026-11-06 включаем по одной, когда Никита примет предыдущую (2026-11-07: резьба, чердачное окно,
-// кровля, труба с дымом). Остальные собраны и лежат выключенными: chinking, door, balusters.
-const PARTS = new Set(['carving', 'attic', 'roof', 'chimney']);
+// кровля, труба с дымом, обитая дверь). Остальные собраны и лежат выключенными: chinking, balusters.
+const PARTS = new Set(['carving', 'attic', 'roof', 'chimney', 'door']);
 const SIDES = 20;        // граней по обводу бревна
 const STEP = 0.25;       // м — шаг колец вдоль бревна
 

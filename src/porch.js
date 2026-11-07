@@ -25,8 +25,8 @@ const WOOD = new THREE.Color(0.2, 0.18, 0.16); // дерево под стёрт
 // Крыльцо и обналичка — цвета среза брёвен (Никита, 2026-11-07: без лишних цветов, но разное): тон среза
 // (house-endgrain.jpg, приглушённый, как на срубе), темнее и светлее-серее.
 const PAINTS = [[0.18, 0.12, 0.1], [0.13, 0.085, 0.065], [0.2, 0.15, 0.12]];
-// Обивка двери: коричневая, бордовая, чёрная, тёмно-зелёная. Картинка двери — без прозрачной каймы (INSET).
-const DOOR_PAINTS = [[0.2, 0.1, 0.06], [0.16, 0.04, 0.03], [0.07, 0.07, 0.07], [0.08, 0.14, 0.09]];
+// Обивка двери — дерматин: коричневый, бордовый, чёрный (зелёный выбивался из дома). Картинка двери — без прозрачной каймы (INSET).
+const DOOR_PAINTS = [[0.14, 0.08, 0.05], [0.12, 0.035, 0.03], [0.09, 0.085, 0.08]]; // чёрный чуть светлее: иначе дверь читается как пустой проём
 const INSET = [4 / 512, 4 / 1024];
 const iron = new THREE.MeshLambertMaterial({ color: 0x1d1b1a });
 
@@ -132,6 +132,8 @@ export function buildPorch(seed, door, wall, { base, face, parts }) {
   lining.face([at(-dw, 0, top), at(-dw, 0, dTop), at(-dw, -DOOR_INSET, dTop), at(-dw, -DOOR_INSET, top)], s.toArray());
   lining.face([at(dw, 0, top), at(dw, 0, dTop), at(dw, -DOOR_INSET, dTop), at(dw, -DOOR_INSET, top)], s.clone().negate().toArray());
   lining.face([at(-dw, 0, dTop), at(dw, 0, dTop), at(dw, -DOOR_INSET, dTop), at(-dw, -DOOR_INSET, dTop)], [0, -1, 0]);
+  // Порог — доска от лица стены до двери вровень с площадкой: под ней бревно-порог, между ними иначе видна щель.
+  lining.face([at(-dw, 0, top), at(dw, 0, top), at(dw, -DOOR_INSET, top), at(-dw, -DOOR_INSET, top)], [0, 1, 0]);
   // Обналичка двери: доски по бокам и сверху на лице стены, поверх торцов брёвен у проёма.
   const trim = plane(P(0, TRIM.out, 0), s, up), edge = dw + TRIM.overlap;
   for (const sign of [-1, 1]) {
