@@ -5,7 +5,7 @@ import { KIT } from './kit.js';
 import { buildBoards } from './attic.js';
 import { brickMaterial, BRICK_TILE } from './roof.js';
 import { buildPorch, porchWidth } from './porch.js';
-import { PANE, TRIM_ABOVE, TRIM_BELOW, PAINT_ODDS, BLUES, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
+import { PANE, TRIM_WIDTH, TRIM_ABOVE, TRIM_BELOW, PAINT_ODDS, BLUES, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
 import { TRIM_ROOM, ABOVE_FRIEZE } from './carving.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
@@ -135,6 +135,23 @@ export function planHouse(seed) {
     roof: PARTS.has('roof') ? roof : 'tes', carving: PARTS.has('carving') ? carving : null,
     attic: PARTS.has('attic') && !high ? attic : null, plinth, tambour,
   };
+}
+
+// Глухие места бока wall (left или right): отрезки вдоль него [a, b] от середины дома (+ — к фасаду), где нет
+// наличников и выпусков пятой стены — до них не ближе clear, — а до углов не меньше полуметра. По порядку от зада.
+export function blind(plan, wall, clear) {
+  const edge = plan.d / 2 - 0.5;
+  const blocked = plan.openings.filter((o) => o.wall === wall).map((o) => [o.at - TRIM_WIDTH / 2 - clear, o.at + TRIM_WIDTH / 2 + clear]);
+  if (plan.middle !== null) blocked.push([plan.middle - R - clear, plan.middle + R + clear]);
+  blocked.sort((a, b) => a[0] - b[0]);
+  const free = [];
+  let from = -edge;
+  for (const [a, b] of blocked) {
+    if (a > from) free.push([from, Math.min(a, edge)]);
+    from = Math.max(from, b);
+  }
+  if (from < edge) free.push([from, edge]);
+  return free.filter(([a, b]) => b > a);
 }
 
 // Дом по плану: сруб (бок и торцы брёвен — две группы граней со своими материалами), цоколь,

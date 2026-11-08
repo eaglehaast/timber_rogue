@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { planHouse, buildHouse } from './house.js';
 import { generator } from './random.js';
-import { makeFence, YARD, GATES } from './fence.js';
+import { makeFence, YARD, GATES, WICKET } from './fence.js';
 import { planGas, buildGas } from './gas.js';
+import { planPower, buildPower } from './power.js';
 import { castShadows } from './sky.js';
 
-// Стенд дома отдельно от игры: сруб во дворе у забора, газовая труба с улицы, солнце; камера крутится мышью вокруг дома.
+// Стенд дома отдельно от игры: сруб во дворе у забора, газовая труба и провода с улицы, солнце; камера крутится мышью вокруг дома.
 // R — новый дом (новое зерно), колесо — ближе и дальше.
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
@@ -38,7 +39,7 @@ scene.add(lawn);
 
 // Дом стоит фасадом к улице у забора, за палисадником в 1,5–2,5 м (Никита, 2026-11-08: фасад прямо в линию забора
 // не нравится). Боком с крыльцом — к воротам, в ASIDE от их середины.
-// Мир стенда — от середины дома: двор с забором и газом сдвинут так, чтобы дом оказался в нуле.
+// Мир стенда — от середины дома: двор с забором, газом и проводами сдвинут так, чтобы дом оказался в нуле.
 const PALISADE = [1.5, 2.5], ASIDE = 5;
 let house = null, yard = null, layout = null;
 const label = document.getElementById('seed');
@@ -50,9 +51,10 @@ function rebuild(seed) {
   const door = plan.openings.find((o) => o.kind === 'door').wall === 'right' ? 1 : -1;
   const at = { x: GATES.at - door * (plan.w / 2 + ASIDE), z: YARD.d / 2 - front - plan.d / 2 };
   const gas = planGas(plan, at, { fence: YARD.d / 2, gate: GATES.at });
-  yard = new THREE.Group().add(makeFence(), buildGas(gas));
+  const power = planPower(plan, at, gas, { fence: YARD.d / 2, keep: [WICKET, GATES] });
+  yard = new THREE.Group().add(makeFence(), buildGas(gas), buildPower(power));
   yard.position.set(-at.x, 0, -at.z);
-  layout = { at, gas };
+  layout = { at, gas, power };
   scene.add(house, yard);
   label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов · палисадник ${front.toFixed(1)} м`;
 }

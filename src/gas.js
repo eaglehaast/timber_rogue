@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { generator } from './random.js';
 import { tiles, soften, merge } from './surface.js';
-import { R, COURSE, PLINTH, THICKEST, OVERHANG } from './house.js';
-import { TRIM_WIDTH } from './window.js';
+import { route, curve, tube } from './pipe.js';
+import { R, COURSE, PLINTH, THICKEST, OVERHANG, blind } from './house.js';
 
 // Газовая линия по каталогу ChatGPT «Газовая линия и ввод в дом» (2026-11-08, по видео Никиты).
 // Улица: жёлтая труба на тёмных круглых стойках, в открытом седле, выше забора (Никита: 2,5–3 м),
@@ -45,80 +45,13 @@ const MAT = {
 };
 const FEET = 5; // картинок цемента в ряд
 
-// Путь трубы — ломаная, в углах колена радиуса bend(i): точки оси с касательной t и длиной s от начала.
-function route(points, bend) {
-  const dir = (a, b) => b.clone().sub(a).normalize();
-  const out = [{ p: points[0].clone(), t: dir(points[0], points[1]), s: 0 }];
-  const push = (p, t) => out.push({ p, t, s: out.at(-1).s + p.distanceTo(out.at(-1).p) });
-  for (let i = 1; i < points.length - 1; i++) {
-    const a = dir(points[i - 1], points[i]), b = dir(points[i], points[i + 1]), turn = a.angleTo(b);
-    if (turn < 1e-4) continue;
-    const r = bend(i), start = points[i].clone().addScaledVector(a, -r * Math.tan(turn / 2));
-    const axis = a.clone().cross(b).normalize(), center = start.clone().addScaledVector(axis.clone().cross(a), r);
-    const n = Math.ceil(turn / (Math.PI / 16));
-    for (let k = 0; k <= n; k++) {
-      const q = new THREE.Quaternion().setFromAxisAngle(axis, (turn * k) / n);
-      push(start.clone().sub(center).applyQuaternion(q).add(center), a.clone().applyQuaternion(q));
-    }
-  }
-  push(points.at(-1).clone(), dir(points.at(-2), points.at(-1)));
-  return out;
-}
-const line = (...points) => route(points);
-
-// Трубка вдоль пути: кольца в его точках. Рамку кольца переносим от точки к точке поворотом касательной —
-// сечение не перекручивается на коленах, а шов развёртки идёт по одной линии. Вдоль трубы укладывается целое число
-// развёрток (чуть растянутых или сжатых): труба начинается и кончается краем картинки — там, где у всех картинок
-// набора общий край, и соседняя трубка продолжает её без шва. Номер картинки — по клетке uv (soften, cells):
-// у каждой трубки свой ряд клеток set, чтобы порядок картинок не повторялся.
-function tube(path, r, set) {
-  const length = path.at(-1).s, tile = length / Math.max(1, Math.round(length / ((TILE * r) / MAIN.r)));
-  const pos = [], normal = [], uv = [], index = [];
-  const n = new THREE.Vector3(0, 1, 0);
-  if (Math.abs(path[0].t.y) > 0.9) n.set(1, 0, 0);
-  n.sub(path[0].t.clone().multiplyScalar(n.dot(path[0].t))).normalize();
-  const d = new THREE.Vector3();
-  path.forEach(({ p, t, s }, i) => {
-    if (i) n.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(path[i - 1].t, t));
-    const b = t.clone().cross(n);
-    for (let j = 0; j <= SIDES; j++) {
-      const angle = (j / SIDES) * Math.PI * 2;
-      d.copy(n).multiplyScalar(Math.cos(angle)).addScaledVector(b, Math.sin(angle));
-      pos.push(p.x + d.x * r, p.y + d.y * r, p.z + d.z * r);
-      normal.push(d.x, d.y, d.z);
-      uv.push(s / tile, set + j / SIDES);
-    }
-    if (!i) return;
-    const a0 = (i - 1) * (SIDES + 1), a1 = i * (SIDES + 1);
-    for (let j = 0; j < SIDES; j++) index.push(a0 + j, a0 + j + 1, a1 + j, a1 + j, a0 + j + 1, a1 + j + 1);
-  });
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
-  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-  geometry.setIndex(index);
-  return geometry;
-}
-
 // Где отвод входит в бок дома: глухой бок (без двери), ближнее к улице место между окнами, углами и выпусками
 // пятой стены. Всё — в метрах двора: дом стоит в at фасадом к улице (+z), fence — где забор со стороны улицы (z),
 // gate — середина ворот (x).
 export function planGas(plan, at, { fence, gate }) {
   const door = plan.openings.find((o) => o.kind === 'door').wall;
   const wall = door === 'left' ? 'right' : 'left', out = wall === 'right' ? 1 : -1;
-  const edge = plan.d / 2 - 0.5;
-  const blocked = plan.openings.filter((o) => o.wall === wall).map((o) => [o.at - TRIM_WIDTH / 2 - CLEAR, o.at + TRIM_WIDTH / 2 + CLEAR]);
-  if (plan.middle !== null) blocked.push([plan.middle - R - CLEAR, plan.middle + R + CLEAR]);
-  blocked.sort((a, b) => a[0] - b[0]);
-  // Свободные отрезки вдоль бока, z — от середины дома; берём ближний к улице.
-  const free = [];
-  let from = -edge;
-  for (const [a, b] of blocked) {
-    if (a > from) free.push([from, Math.min(a, edge)]);
-    from = Math.max(from, b);
-  }
-  if (from < edge) free.push([from, edge]);
-  const [a, b] = free.filter(([a, b]) => b - a >= ROOM).at(-1);
+  const [a, b] = blind(plan, wall, CLEAR).filter(([a, b]) => b - a >= ROOM).at(-1);
   const wallX = at.x + (out * plan.w) / 2;
   return { seed: plan.seed, street: fence + STREET, gate, branch: { x: wallX + out * BRANCH.out, z: at.z + Math.max((a + b) / 2, b - 0.25), wallX, out } };
 }
@@ -129,18 +62,21 @@ export function buildGas({ seed, street, gate, branch }) {
   const parts = Object.fromEntries(Object.keys(MAT).map((name) => [name, []]));
   const put = (name, geometry, matrix) => parts[name].push(matrix ? geometry.applyMatrix4(matrix) : geometry);
   const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  // Трубка: развёртка на TILE метров у трубы улицы, у тонких — короче во столько раз, во сколько они тоньше.
+  const pipe = (path, r) => tube(path, r, { set: set(), tile: (TILE * r) / MAIN.r, sides: SIDES });
+  const line = (...points) => curve(points);
   const H = MAIN.axis, z = street;
 
   // Улица и арка над воротами. Рыжая — от начала нижних колен; перед ними по развёртке перехода краски в окись,
   // её жёлтый край снаружи (правая трубка перехода идёт к арке с другой стороны).
   const left = gate - ARCH.w / 2 - MAIN.r, right = gate + ARCH.w / 2 + MAIN.r, top = ARCH.h + MAIN.r;
   const a0 = left - ARCH.low, a1 = right + ARCH.low;
-  put('yellow', tube(line(V(-REACH, H, z), V(a0 - TILE, H, z)), MAIN.r, set()));
-  put('turn', tube(line(V(a0 - TILE, H, z), V(a0, H, z)), MAIN.r, set()));
-  put('oxide', tube(route([V(a0, H, z), V(left, H, z), V(left, top, z), V(right, top, z), V(right, H, z), V(a1, H, z)],
-    (i) => (i === 1 || i === 4 ? ARCH.low : ARCH.high)), MAIN.r, set()));
-  put('turn', tube(line(V(a1 + TILE, H, z), V(a1, H, z)), MAIN.r, set()));
-  put('yellow', tube(line(V(a1 + TILE, H, z), V(REACH, H, z)), MAIN.r, set()));
+  put('yellow', pipe(line(V(-REACH, H, z), V(a0 - TILE, H, z)), MAIN.r));
+  put('turn', pipe(line(V(a0 - TILE, H, z), V(a0, H, z)), MAIN.r));
+  put('oxide', pipe(route([V(a0, H, z), V(left, H, z), V(left, top, z), V(right, top, z), V(right, H, z), V(a1, H, z)],
+    (i) => (i === 1 || i === 4 ? ARCH.low : ARCH.high)), MAIN.r));
+  put('turn', pipe(line(V(a1 + TILE, H, z), V(a1, H, z)), MAIN.r));
+  put('yellow', pipe(line(V(a1 + TILE, H, z), V(REACH, H, z)), MAIN.r));
 
   // Цемент — картинка сверху на земле, стойка в её середине; какая из FEET и как повёрнута — наугад.
   const feet = (x, zz) => {
@@ -149,12 +85,12 @@ export function buildGas({ seed, street, gate, branch }) {
     for (let i = 0; i < uv.count; i++) uv.setX(i, (k + uv.getX(i)) / FEET);
     put('footing', plane, new THREE.Matrix4().setPosition(x, 0.005, zz));
   };
-  // Стойка: круглая труба от цемента до седла — гнутой полосы толщиной 4 мм, что подхватывает трубу снизу на 200°.
-  const stand = (x, zz, pipe, post, axis, y = H) => {
-    const seat = y - pipe - 0.006;
-    put('post', tube(line(V(x, -0.05, zz), V(x, seat, zz)), post, set()));
-    const saddle = new THREE.Shape().absarc(0, 0, pipe + 0.006, THREE.MathUtils.degToRad(170), THREE.MathUtils.degToRad(370), false)
-      .absarc(0, 0, pipe + 0.002, THREE.MathUtils.degToRad(370), THREE.MathUtils.degToRad(170), true);
+  // Стойка: круглая труба от цемента до седла — гнутой полосы толщиной 4 мм, что подхватывает трубу радиуса held снизу на 200°.
+  const stand = (x, zz, held, post, axis, y = H) => {
+    const seat = y - held - 0.006;
+    put('post', pipe(line(V(x, -0.05, zz), V(x, seat, zz)), post));
+    const saddle = new THREE.Shape().absarc(0, 0, held + 0.006, THREE.MathUtils.degToRad(170), THREE.MathUtils.degToRad(370), false)
+      .absarc(0, 0, held + 0.002, THREE.MathUtils.degToRad(370), THREE.MathUtils.degToRad(170), true);
     put('iron', new THREE.ExtrudeGeometry(saddle, { depth: 0.06, bevelEnabled: false, curveSegments: 12 }).translate(0, 0, -0.03)
       .rotateY(axis === 'x' ? Math.PI / 2 : 0), new THREE.Matrix4().setPosition(x, y, zz));
     put('iron', new THREE.CylinderGeometry(post + 0.004, post + 0.004, 0.03, 12), new THREE.Matrix4().setPosition(x, seat - 0.012, zz));
@@ -170,8 +106,8 @@ export function buildGas({ seed, street, gate, branch }) {
 
   // Тройник на улице и отвод: над забором вдоль бока к месту ввода, коленом к стене и в стену.
   const { x, wallX, out } = branch;
-  put('yellow', tube(line(V(x - 0.11, H, z), V(x + 0.11, H, z)), MAIN.r * 1.15, set()));
-  put('yellow', tube(route([V(x, H, z), V(x, H, branch.z), V(wallX, H, branch.z)], () => ELBOW), BRANCH.r, set()));
+  put('yellow', pipe(line(V(x - 0.11, H, z), V(x + 0.11, H, z)), MAIN.r * 1.15));
+  put('yellow', pipe(route([V(x, H, z), V(x, H, branch.z), V(wallX, H, branch.z)], () => ELBOW), BRANCH.r));
   const span = z - branch.z, count = Math.ceil(span / BRANCH_SPAN);
   for (let i = 1; i < count; i++) stand(x, z - (span * i) / count, BRANCH.r, POST.branch, 'z');
 
@@ -189,7 +125,7 @@ export function buildGas({ seed, street, gate, branch }) {
   // Ввод: футляр, крашенный как труба, из стены (бревно бывает и тоньше — тогда футляр торчит чуть больше),
   // в нём тёмная заделка.
   const sleeve = r * 1.8, toWall = new THREE.Matrix4().makeRotationY((out * Math.PI) / 2);
-  put('yellow', tube(line(V(wallX, H, branch.z), V(face, H, branch.z)), sleeve, set()));
+  put('yellow', pipe(line(V(wallX, H, branch.z), V(face, H, branch.z)), sleeve));
   put('seal', new THREE.RingGeometry(r, sleeve, SIDES).applyMatrix4(toWall), new THREE.Matrix4().setPosition(face, H, branch.z));
 
   const group = new THREE.Group();
