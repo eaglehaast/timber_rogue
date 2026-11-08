@@ -4,9 +4,9 @@ import { generator } from './random.js';
 import { makeFence, YARD, GATES, WICKET } from './fence.js';
 import { planGas, buildGas } from './gas.js';
 import { planPower, buildPower } from './power.js';
-import { buildRoad, roadCover } from './road.js';
+import { planRoad, buildRoad } from './road.js';
 import { shapeGround, height } from './terrain.js';
-import { makeWorld, makeMeadow, fenced, RINGS } from './world.js';
+import { makeWorld, makeMeadow, RINGS } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
 
@@ -27,9 +27,9 @@ const world = await makeWorld(renderer, scene, [RINGS.far]);
 const GROUND = 2 * RINGS.far[1];
 
 // Дом стоит фасадом к улице у забора, за палисадником в 1,5–2,5 м (Никита, 2026-11-08: фасад прямо в линию забора
-// не нравится). Боком с крыльцом — к воротам, в ASIDE от их середины. Земля под домом выровнена (terrain.js),
-// трава не растёт под ним и на дороге.
+// не нравится). Боком с крыльцом — к воротам, в ASIDE от их середины. Земля под домом выровнена (terrain.js).
 const PALISADE = [1.5, 2.5], ASIDE = 5;
+const MEADOW = 76, OUTSIDE = 0.7; // м: сторона квадрата с травой; сколько травы за забором
 let house = null, yard = null, layout = null;
 const label = document.getElementById('seed');
 function rebuild(seed) {
@@ -45,15 +45,20 @@ function rebuild(seed) {
   // Площадка под дом — всё, что он занимает с крыльцом и свесами крыши.
   const box = new THREE.Box3().setFromObject(house), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
   const pad = { x: at.x + mid.x, z: at.z + mid.z, w: size.x, d: size.z };
-  shapeGround(seed, [pad], YARD.w, YARD.d);
+  const fence = YARD.d / 2, road = planRoad({ seed, fence });
+  shapeGround(seed, [pad], YARD.w, YARD.d, road);
   at.y = height(at.x, at.z);
   house.position.set(at.x, at.y, at.z);
-  const fence = YARD.d / 2, road = roadCover(fence);
-  const open = (x, z) => (Math.abs(x - pad.x) < pad.w / 2 && Math.abs(z - pad.z) < pad.d / 2 ? 0 : 1 - road(x, z));
+  // Трава: во дворе густая, за забором — луг пореже, к краю квадрата MEADOW сходит на нет; под домом её нет,
+  // на улице — как скажет колея.
+  const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
+  const lawn = (x, z) => (inside(x, z, { x: 0, z: 0 }, YARD.w, YARD.d) ? 1
+    : OUTSIDE * (1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), MEADOW / 2 - 8, MEADOW / 2)));
+  const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) ? 0 : road.grass(x, z) * lawn(x, z));
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES] });
-  yard = new THREE.Group().add(makeMeadow((x, z) => fenced(x, z) * open(x, z), 76, GROUND), makeFence(), buildGas(gas), buildPower(power), buildRoad({ seed, fence }));
-  layout = { at, gas, power };
+  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, road.trodden), makeFence(), buildGas(gas), buildPower(power), buildRoad(road));
+  layout = { at, gas, power, road };
   scene.add(house, yard);
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
   view.target.set(at.x, at.y + 1.6, at.z);

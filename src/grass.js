@@ -84,18 +84,20 @@ export const noise = smoothNoise(Math.random);
 // Трава сплошным покровом: на каждый квадратный метр около density(x, z) × count / size² попыток.
 // Где травы нет (дорога, дом, у ствола) — там density равна нулю.
 // Куртины: где шум «дикий», берём в основном высокие пучки и сажаем гуще, между ними — низкая трава.
-export function makeTufts({ material, cols, rows, aspect, heights, rank, turning }, count, size, density) {
+// Где траву топчут (между колеями), trodden близко к 1: куртин высокой там нет, растёт низкая.
+export function makeTufts({ material, cols, rows, aspect, heights, rank, turning }, count, size, density, trodden = () => 0) {
   const pos = [], uv = [], index = [], side = [], lift = [];
   for (let n = 0; n < count; n++) {
     const x = (Math.random() - 0.5) * size, z = (Math.random() - 0.5) * size;
-    const wild = THREE.MathUtils.smoothstep(noise(x / 5, z / 5), 0.3, 0.7);
+    const wild = THREE.MathUtils.smoothstep(noise(x / 5, z / 5), 0.3, 0.7) * (1 - trodden(x, z));
     if (Math.random() > density(x, z) * (0.5 + 0.5 * wild)) continue;
     const weights = rank.map((t) => t * wild + (1 - t) * (1 - wild) + 0.05);
     let pick = Math.random() * weights.reduce((a, b) => a + b), cell = 0;
     while ((pick -= weights[cell]) > 0) cell++;
     const [low, high] = heights[cell];
     const u0 = (cell % cols) / cols, v0 = 1 - (Math.floor(cell / cols) + 1) / rows, u1 = u0 + 1 / cols, v1 = v0 + 1 / rows;
-    const h = low + Math.random() * (high - low), w = h * aspect, turn = Math.random() * Math.PI, y = height(x, z);
+    // Где топчут, пучок примят: ниже до трети роста.
+    const h = (low + Math.random() * (high - low)) * (1 - 0.65 * trodden(x, z)), w = h * aspect, turn = Math.random() * Math.PI, y = height(x, z);
     const cards = turning ? [[0, 0]] : [turn, turn + Math.PI / 2].map((a) => [Math.cos(a) * w / 2, Math.sin(a) * w / 2]);
     for (const [dx, dz] of cards) {
       const k = pos.length / 3;
