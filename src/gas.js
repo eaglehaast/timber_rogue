@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { generator } from './random.js';
-import { tiles, soften, merge } from './surface.js';
+import { tiles, strips, decal, merge } from './surface.js';
 import { route, curve, tube } from './pipe.js';
 import { R, COURSE, PLINTH, THICKEST, OVERHANG, blind } from './house.js';
 
@@ -35,12 +35,10 @@ const TILE = 1.2;                             // м трубы Ø 95 мм на �
 const FOOTING = 0.5;                          // м: сторона картинки цемента
 const SIDES = 16;
 
-const strips = (file, rows) => soften(new THREE.MeshLambertMaterial({ map: tiles([`assets/textures/${file}`])[0] }),
-  { contrast: 1, saturation: 1, scales: [0.3, 1], low: [1, 1, 1], high: [1, 1, 1], cells: [1, rows] });
 const paint = (hex) => new THREE.MeshLambertMaterial({ color: hex });
 const MAT = {
   yellow: strips('gas-yellow.jpg', 11), turn: strips('gas-turn.jpg', 2), oxide: strips('gas-oxide.jpg', 6), post: strips('gas-post.jpg', 4),
-  footing: new THREE.MeshLambertMaterial({ map: tiles(['assets/textures/gas-footing.webp'])[0], transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
+  footing: decal(tiles(['assets/textures/gas-footing.webp'])[0]),
   iron: paint(0x1e2022), brass: paint(0x95815c), handle: paint(0xa3261d), seal: paint(0x2f2d29),
 };
 const FEET = 5; // картинок цемента в ряд

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { generator } from './random.js';
-import { merge } from './surface.js';
+import { tiles, strips, decal, merge } from './surface.js';
 import { route, curve, sag, resample, tube, twist } from './pipe.js';
 import { R, COURSE, PLINTH, THICKEST, OVERHANG, blind } from './house.js';
 
@@ -12,9 +12,9 @@ import { R, COURSE, PLINTH, THICKEST, OVERHANG, blind } from './house.js';
 // От анкера хвост делает петлю и снизу входит в чёрную гофру; гофра на клипсах спускается мимо щита учёта,
 // петлёй-«U» уходит под него и снизу входит в сальник. Щит — светло-серый ящик с дверцей, окошком и круглым замком.
 //
-// Всё объёмное — кодом. Картинки придут от ChatGPT: развёртки опор 2,8 м × 0,7 м обхвата (низ опоры — своя, с землёй
-// у левого края; у дерева на приставке — своя, с пропилом), дверцы и бока щита, земля у основания опоры, номера,
-// знаки. Пока на их местах — цвета из палитры каталога; развёртки уже лягут по uv.
+// Всё объёмное — кодом. Поверхности — картинки ChatGPT (tools/power.py → power-*): развёртки опор 2,8 м × 0,7 м
+// обхвата вперемешку (низ опоры — своя, с землёй у левого края; у бревна на приставке — своя, с пропилом),
+// земля у основания, номер краской и знак «молния» со стороны улицы, дверца и бока щита.
 const POLE = {
   top: 7.6,           // м видимой высоты
   street: 2.2,        // м от забора к улице — дальше газовой трубы
@@ -38,14 +38,26 @@ const CONDUIT = { r: 0.013, rib: 0.008, side: 0.05, loop: [0.35, 0.45], clips: 0
 const ROOM = BOX.w / 2 + CONDUIT.side + 2 * CONDUIT.r;         // м от середины щита до края гофры
 const GAS = 0.25;                                              // м от ввода газа до края щита и гофры
 const KEEP = 0.8;                                              // м от калитки и ворот до опоры
+const BASE = 1;                                                // м: сторона картинки земли у основания
+// Номер краской: промежуток между знаками, середина над землёй (у бревна на приставке — выше приставки: она
+// заслоняет), row — строка цифр атласа в метрах: 4096 × 512 точек, знак в 300 точек высотой 12 см.
+// Знак «молния» — size метров на картинку, над номером на above, у части опор.
+const NUMBER = { gap: 0.014, y: 2.0, row: [4096 * 0.0004, 512 * 0.0004] };
+const SIGN = { size: 0.23, above: 0.45, chance: 0.4 };
+const GLYPHS = await (await fetch('assets/textures/power-numbers.json')).json();
+const SIDE = 0.5;                                              // м: сторона плитки бока щита
 
 const paint = (hex, more = {}) => new THREE.MeshLambertMaterial({ color: hex, ...more });
+const [numbersMap, baseMap, signMap, doorMap, sideMap] = tiles(['power-numbers.webp', 'power-base.webp', 'power-sign.webp', 'power-door.jpg', 'power-side.jpg'].map((f) => `assets/textures/${f}`));
 const MAT = {
-  concrete: paint(0xaba99e, { flatShading: true }), concreteButt: paint(0x97958a, { flatShading: true }),
-  wood: paint(0x5c5244), woodButt: paint(0x4b4338), woodEnd: paint(0x6d604e), base: paint(0x76786b, { transparent: true, opacity: 0.55, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
+  concrete: strips('power-concrete.jpg', 6, { flatShading: true }), concreteButt: strips('power-concrete-butt.jpg', 3, { flatShading: true }),
+  wood: strips('power-wood.jpg', 6), woodButt: strips('power-wood-butt.jpg', 3), woodEnd: strips('power-wood-end.jpg', 2),
+  base: decal(baseMap), sign: decal(signMap), dark: decal(numbersMap, { color: 0x2c2823 }), light: decal(numbersMap, { color: 0xe6e0cf }),
   steel: paint(0x51595d), porcelain: paint(0xdfd9c9), wire: paint(0x303a41), sip: paint(0x20272c), clamp: paint(0x2b2f33),
-  conduit: paint(0x1b1d1f), box: paint(0xd0d2c7), door: paint(0xd0d2c7), rim: paint(0x818d91), glass: paint(0x171f27), lock: paint(0x929b9e),
+  conduit: paint(0x1b1d1f), box: new THREE.MeshLambertMaterial({ map: sideMap }), door: new THREE.MeshLambertMaterial({ map: doorMap }),
+  rim: paint(0x818d91), glass: paint(0x171f27), lock: paint(0x929b9e),
 };
+const DOORS = 4, SIDES = 2, BASES = 4, SIGNS = 3;
 
 // Где что: место щита и анкера на боку с газовым вводом (gas — planGas), опоры вдоль улицы. Всё в метрах двора:
 // fence — забор со стороны улицы (z), keep — калитка и ворота { at, width } (x), перед ними опор нет.
@@ -84,10 +96,13 @@ export function planPower(plan, at, gas, { fence, keep }) {
     const lean = THREE.MathUtils.degToRad(kind === 'concrete' ? 0.6 : 1.8);
     return { x, z: z + (rnd() - 0.5) * 0.3, kind, lean: [(rnd() - 0.5) * lean, (rnd() - 0.5) * lean], crook: [(rnd() - 0.5) * 0.08, (rnd() - 0.5) * 0.08] };
   });
-  return { seed: plan.seed, poles, feeder, house: { anchor, out, box: at.z + box, conduit: at.z + conduit } };
+  // Номера идут по улице подряд, все одной рукой (почерк — строка атласа цифр); у опор ответвлений — «номер/ветка».
+  const first = 1 + Math.floor(rnd() * 40), hand = Math.floor(rnd() * GLYPHS.glyphs.length);
+  poles.forEach((p, i) => { p.number = `${first + i}${rnd() < 0.2 ? `/${1 + Math.floor(rnd() * 3)}` : ''}`; p.sign = rnd() < SIGN.chance; });
+  return { seed: plan.seed, poles, feeder, hand, house: { anchor, out, box: at.z + box, conduit: at.z + conduit } };
 }
 
-export function buildPower({ seed, poles, feeder, house }) {
+export function buildPower({ seed, poles, feeder, hand, house }) {
   const rnd = generator(seed + 31);
   const set = () => Math.floor(rnd() * 1000);
   const parts = Object.fromEntries(Object.keys(MAT).map((name) => [name, []]));
@@ -113,7 +128,7 @@ export function buildPower({ seed, poles, feeder, house }) {
   // Опоры. Каждая строится стоя в нуле так, чтобы улица была +x: у отвесной трубки шов развёртки на +x — он уходит
   // к улице, со двора не виден. Потом опора поворачивается улицей к +z, наклоняется и встаёт на место.
   // Возвращает, где на ней провода (по порядку HOOKS) и как найти её ось и радиус на высоте y.
-  const pole = ({ x, z, kind, lean, crook }) => {
+  const pole = ({ x, z, kind, lean, crook, number, sign: warn }) => {
     const top = POLE.top, [r0, r1] = kind === 'concrete' ? CONCRETE : WOOD;
     const radius = (y) => r0 + ((r1 - r0) * y) / top;
     const bend = 5.2; // выше этого места ось кривого бревна идёт прямо к верху
@@ -122,15 +137,18 @@ export function buildPower({ seed, poles, feeder, house }) {
         : V(crook[0], 0, crook[1]).multiplyScalar((top - y) / (top - bend)).setY(y));
     const M = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(lean[0], 0, lean[1])).setPosition(x, 0, z)
       .multiply(new THREE.Matrix4().makeRotationY(-Math.PI / 2));
-    const sides = kind === 'concrete' ? 8 : 12;
-    const piece = (name, from, to, points) => put(name, tube(route(points ?? [axis(from), axis(to)], () => 8), (s) => radius(from + s), { set: set(), tile: POLE.strip, sides }), M);
+    // Бетон — восьмигранник гранью к улице: вершины трубки начинаются с +x, поворачиваем на полграни.
+    const sides = kind === 'concrete' ? 8 : 12, facet = kind === 'concrete' ? Math.PI / 8 : 0;
+    const piece = (name, from, to, points) => put(name, tube(route(points ?? [axis(from), axis(to)], () => 8), (s) => radius(from + s), { set: set(), tile: POLE.strip, sides })
+      .rotateY(facet), M);
     const lower = kind === 'spur' ? SPUR.from : 0;
     const body = kind === 'concrete' ? [axis(2.8), axis(top)] : [axis(2.8), axis(bend), axis(top)];
     piece(kind === 'concrete' ? 'concreteButt' : kind === 'spur' ? 'woodEnd' : 'woodButt', lower, 2.8 + lower,
       kind === 'spur' ? [axis(lower), axis(2.8 + lower)] : undefined);
     if (kind === 'spur') piece('wood', 2.8 + lower, top, [axis(2.8 + lower), axis(bend), axis(top)]);
     else piece(kind === 'concrete' ? 'concrete' : 'wood', 2.8, top, body);
-    const cap = (name, y, flip) => put(name, new THREE.CircleGeometry(radius(y), sides).rotateX(flip ? Math.PI / 2 : -Math.PI / 2).translate(...axis(y).toArray()), M);
+    const cap = (name, y, flip) => put(name, new THREE.CircleGeometry(radius(y), sides).rotateX(flip ? Math.PI / 2 : -Math.PI / 2).rotateY(facet)
+      .translate(...axis(y).toArray()), M);
     cap(kind === 'concrete' ? 'concrete' : 'wood', top);
     if (kind === 'spur') {
       // Приставка — короткая бетонная стойка рядом с бревном вдоль улицы (−z здесь); бревно над землёй на SPUR.from,
@@ -152,8 +170,47 @@ export function buildPower({ seed, poles, feeder, house }) {
         put('steel', tube(curve([...loop, loop[0]]), 0.003, { sides: 5 }), M);
       }
     }
-    // Земля у основания — будет картинкой; пока пятно.
-    put('base', new THREE.CircleGeometry(0.5, 20).rotateX(-Math.PI / 2).translate(0, 0.006, kind === 'spur' ? radius(1.5) / 2 : 0), M);
+    // Земля у основания — одна из картинок, повёрнута наугад; у приставки — между ней и бревном.
+    const ground = new THREE.PlaneGeometry(BASE, BASE).rotateX(-Math.PI / 2), k = Math.floor(rnd() * BASES);
+    for (let i = 0; i < ground.attributes.uv.count; i++) ground.attributes.uv.setX(i, (k + ground.attributes.uv.getX(i)) / BASES);
+    put('base', ground.rotateY(rnd() * Math.PI * 2).translate(0, 0.006, kind === 'spur' ? radius(1.5) / 2 : 0), M);
+    // Номер и знак над ним — со стороны улицы (+x), по поверхности опоры: у бетона — по граням, у бревна — по кругу.
+    const surface = (y, angle) => {
+      const r = radius(y);
+      if (!facet) return r;
+      const a = ((((angle + facet) % (2 * facet)) + 2 * facet) % (2 * facet)) - facet;
+      return (r * Math.cos(facet)) / Math.cos(a);
+    };
+    const paste = (name, mid, [w, h], [u0, u1, v0, v1], y) => {
+      const n = Math.ceil(w / 0.01), geometry = new THREE.BufferGeometry(), pos = [], normal = [], uv = [], index = [];
+      for (let i = 0; i <= n; i++) {
+        const along = mid + (i / n - 0.5) * w, angle = along / radius(y), d = V(Math.cos(angle), 0, -Math.sin(angle));
+        for (const [dy, v] of [[-h / 2, v0], [h / 2, v1]]) {
+          const p = axis(y + dy).addScaledVector(d, surface(y + dy, angle) + 0.002);
+          pos.push(p.x, p.y, p.z);
+          normal.push(d.x, d.y, d.z);
+          uv.push(u0 + ((u1 - u0) * i) / n, v);
+        }
+        if (i) index.push(2 * i - 2, 2 * i, 2 * i - 1, 2 * i - 1, 2 * i, 2 * i + 1);
+      }
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      geometry.setIndex(index);
+      put(name, geometry, M);
+    };
+    // Цифры: атлас — три строки почерков сверху вниз, в строке знаки 0–9 и «/»; на бетоне краска тёмная, на дереве светлая.
+    const y = kind === 'spur' ? SPUR.top + 0.3 : NUMBER.y, rows = GLYPHS.glyphs.length, marks = [...number].map((c) => GLYPHS.glyphs[hand][c === '/' ? 10 : Number(c)]);
+    const width = (m) => (m[1] - m[0]) * NUMBER.row[0], height = (GLYPHS.bottom - GLYPHS.top) * NUMBER.row[1];
+    let along = -(marks.reduce((s, m) => s + width(m), 0) + NUMBER.gap * (marks.length - 1)) / 2;
+    for (const m of marks) {
+      paste(kind === 'concrete' ? 'dark' : 'light', along + width(m) / 2, [width(m), height], [m[0], m[1], 1 - (hand + GLYPHS.bottom) / rows, 1 - (hand + GLYPHS.top) / rows], y);
+      along += width(m) + NUMBER.gap;
+    }
+    if (warn) {
+      const k = Math.floor(rnd() * SIGNS);
+      paste('sign', 0, [SIGN.size, SIGN.size], [k / SIGNS, (k + 1) / SIGNS, 0, 1], y + SIGN.above);
+    }
     // Крюки с изоляторами: крюк из опоры в сторону side, загнут вверх; провод лежит в желобке на макушке изолятора.
     const wires = HOOKS.map(({ side, drop }) => {
       const y = top - drop, c = axis(y), r = radius(y);
@@ -244,10 +301,21 @@ export function buildPower({ seed, poles, feeder, house }) {
   // Щит: корпус, верхняя кромка, дверца на тонком шве, окошко в ободке, круглый замок. Строим стоя дверцей к +z,
   // вдоль стены — x (слева от смотрящего — −x), и поворачиваем дверцей от стены.
   const B = new THREE.Matrix4().makeRotationY((out * Math.PI) / 2).setPosition(face, BOX.y, house.box);
-  put('box', new THREE.BoxGeometry(BOX.w, BOX.h, BOX.d).translate(0, 0, BOX.d / 2), B);
-  put('box', new THREE.BoxGeometry(BOX.w + 0.016, 0.012, BOX.d + 0.014).translate(0, BOX.h / 2 + 0.004, BOX.d / 2 + 0.002), B);
-  const door = { w: BOX.w - 0.012, h: BOX.h - 0.014 };
-  put('door', new THREE.BoxGeometry(door.w, door.h, 0.004).translate(0, -0.002, BOX.d + 0.003), B);
+  // Бока — плитка SIDE метров, одна из SIDES для всего щита; дверца — одна из DOORS целиком.
+  const shell = (w, h, d) => {
+    const geometry = new THREE.BoxGeometry(w, h, d), uv = geometry.attributes.uv, k = Math.floor(rnd() * SIDES);
+    const faces = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]]; // +x −x +y −y +z −z, по 4 вершины
+    for (let i = 0; i < uv.count; i++) {
+      const [fw, fh] = faces[Math.floor(i / 4)];
+      uv.setXY(i, (k + (uv.getX(i) * fw) / SIDE) / SIDES, (uv.getY(i) * fh) / SIDE);
+    }
+    return geometry;
+  };
+  put('box', shell(BOX.w, BOX.h, BOX.d).translate(0, 0, BOX.d / 2), B);
+  put('box', shell(BOX.w + 0.016, 0.012, BOX.d + 0.014).translate(0, BOX.h / 2 + 0.004, BOX.d / 2 + 0.002), B);
+  const door = { w: BOX.w - 0.012, h: BOX.h - 0.014 }, leaf = new THREE.BoxGeometry(door.w, door.h, 0.004), k = Math.floor(rnd() * DOORS);
+  for (let i = 0; i < leaf.attributes.uv.count; i++) leaf.attributes.uv.setX(i, (k + leaf.attributes.uv.getX(i)) / DOORS);
+  put('door', leaf.translate(0, -0.002, BOX.d + 0.003), B);
   const spot = (u, v) => [-door.w / 2 + u * door.w, door.h / 2 - v * door.h - 0.002];
   const [wx, wy] = spot(0.42, 0.23), ww = 0.28 * door.w, wh = 0.17 * door.h;
   const pane = (inset) => rounded(ww - 2 * inset, wh - 2 * inset, 0.012 - inset);
@@ -263,7 +331,7 @@ export function buildPower({ seed, poles, feeder, house }) {
   for (const [name, list] of Object.entries(parts)) {
     if (!list.length) continue;
     const mesh = new THREE.Mesh(merge(list), MAT[name]);
-    mesh.castShadow = name !== 'base';
+    mesh.castShadow = !mesh.material.transparent;
     mesh.receiveShadow = true;
     group.add(mesh);
   }

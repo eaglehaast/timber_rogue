@@ -82,6 +82,13 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
   return material;
 }
 
+// Развёртки труб и опор — набор картинок rows штук столбиком, с общими краями: каждая клетка uv берёт свою.
+// Нарисованы под игру, поэтому не смягчаем. И картинка на земле или на стене поверх поверхности (decal):
+// с прозрачностью, сдвинута к камере, чтобы не мерцать с тем, на чём лежит.
+export const strips = (file, rows, more = {}) => soften(new THREE.MeshLambertMaterial({ map: tiles([`assets/textures/${file}`])[0], ...more }),
+  { contrast: 1, saturation: 1, scales: [0.3, 1], low: [1, 1, 1], high: [1, 1, 1], cells: [1, rows] });
+export const decal = (map, more = {}) => new THREE.MeshLambertMaterial({ map, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, ...more });
+
 // Детали одной картинки сливаем в одну геометрию: тысяча досок — один вызов отрисовки.
 export function merge(parts) {
   parts = parts.map((g) => (g.index ? g.toNonIndexed() : g));
