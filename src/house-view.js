@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
-import { planHouse, buildHouse } from './house.js';
+import { planHouse, buildHouse, R, OVERHANG } from './house.js';
+import { generator } from './random.js';
 import { makeFence, YARD, GATES } from './fence.js';
 import { planGas, buildGas } from './gas.js';
 import { castShadows } from './sky.js';
 
-// Стенд дома отдельно от игры: сруб во дворе за забором, газовая труба с улицы, солнце; камера крутится мышью вокруг дома.
+// Стенд дома отдельно от игры: сруб во дворе у забора, газовая труба с улицы, солнце; камера крутится мышью вокруг дома.
 // R — новый дом (новое зерно), колесо — ближе и дальше.
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
@@ -35,23 +36,28 @@ const lawn = new THREE.Mesh(new THREE.PlaneGeometry(160, 160).rotateX(-Math.PI /
 lawn.receiveShadow = true;
 scene.add(lawn);
 
-// Дом стоит в дворе фасадом к улице, в FRONT от забора, боком с крыльцом к воротам — в ASIDE от них.
+// Дом стоит фасадом к улице прямо у забора (Никита, 2026-11-08): чаще фасад в линию забора и забор примыкает
+// к углам дома, реже перед фасадом палисадник в 1,5–2,5 м. Боком с крыльцом — к воротам, в ASIDE от их середины.
 // Мир стенда — от середины дома: двор с забором и газом сдвинут так, чтобы дом оказался в нуле.
-const FRONT = 5, ASIDE = 5;
+const ATTACHED = 0.6, PALISADE = [1.5, 2.5], ASIDE = 5;
 let house = null, yard = null, layout = null;
 const label = document.getElementById('seed');
 function rebuild(seed) {
   if (house) scene.remove(house, yard);
   const plan = planHouse(seed);
   house = buildHouse(plan);
+  const rnd = generator(seed + 13);
+  const attached = rnd() < ATTACHED, front = attached ? 0 : PALISADE[0] + rnd() * (PALISADE[1] - PALISADE[0]);
   const door = plan.openings.find((o) => o.kind === 'door').wall === 'right' ? 1 : -1;
-  const at = { x: GATES.at - door * (plan.w / 2 + ASIDE), z: YARD.d / 2 - FRONT - plan.d / 2 };
+  // Брёвна фасада — вровень с линией забора: ось фасадной стены на R внутри двора.
+  const at = { x: GATES.at - door * (plan.w / 2 + ASIDE), z: YARD.d / 2 - front - R - plan.d / 2 };
+  const corner = plan.w / 2 + OVERHANG + R;
   const gas = planGas(plan, at, { fence: YARD.d / 2, gate: GATES.at });
-  yard = new THREE.Group().add(makeFence({ passes: [gas.branch.x] }), buildGas(gas));
+  yard = new THREE.Group().add(makeFence({ house: attached ? [at.x - corner, at.x + corner] : undefined }), buildGas(gas));
   yard.position.set(-at.x, 0, -at.z);
-  layout = { at, gas };
+  layout = { at, gas, attached };
   scene.add(house, yard);
-  label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов`;
+  label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов · ${attached ? 'фасад в линию забора' : `палисадник ${front.toFixed(1)} м`}`;
 }
 rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
 

@@ -83,7 +83,7 @@ function side(a, b) {
   return { length, place };
 }
 
-// Штакетник: столбы через 2,5 м, на них в каждом пролёте две прожилины, к ним прибиты доски ровным рядом.
+// Штакетник: столбы через 2,5 м (STEP), на них в каждом пролёте две прожилины, к ним прибиты доски ровным рядом.
 // Прожилины прибиты к столбам снаружи, доски — к прожилинам: чем толще столб, тем дальше они от его оси.
 // В каждом пролёте доски делят его поровну, и каждый столб приходится на середину щели: доски заходят
 // на него с обеих сторон одинаково. Столб срезан вровень с плечами досок — там, где начинается их угол.
@@ -96,18 +96,16 @@ function side(a, b) {
 // Проёмы openings — { at, width, leaves } вдоль стороны: калитка (одна створка) и ворота (две). По краям проёма
 // столбы толще и выше, створки — те же доски на прожилинах, ниже забора и приподняты над землёй, каждую держит
 // укосина из угла в угол (от нижнего угла у петель к верхнему у притвора). Створки ворот сходятся посередине без столба.
-// Сквозь забор проходит газовая труба (gas.js) в местах passes: там нет одной доски, а столб, если пришёлся
-// на трубу, поставлен в сторону.
 const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до земли, у створок — выше
 const DEG = Math.PI / 180;
-const STEP = 2.5, PASS = 0.2;      // м: шаг столбов; столб не ближе PASS к трубе
-function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, rnd, put, openings = [], passes = []) {
+const STEP = 2.5; // м: шаг столбов
+function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, rnd, put, openings = []) {
   const wobble = (size) => (rnd() + rnd() - 1) * size * age; // чаще около нуля, изредка до ±size
   const posts = [], seams = [], thick = new Map();
-  for (let s = 0; s <= length + 0.01; s += STEP) {
-    if (openings.some((o) => Math.abs(s - o.at) < o.width / 2 + 0.2)) continue;
-    const pipe = passes.find((p) => Math.abs(s - p) < PASS);
-    posts.push(pipe === undefined ? s : pipe + Math.sign(s - pipe || 1) * PASS);
+  const count = Math.ceil(length / STEP - 0.01); // столбы поровну, не реже STEP, и на обоих концах
+  for (let i = 0; i <= count; i++) {
+    const s = (length * i) / count;
+    if (!openings.some((o) => Math.abs(s - o.at) < o.width / 2 + 0.2)) posts.push(s);
   }
   for (const o of openings) {
     for (const s of [o.at - o.width / 2, o.at + o.width / 2]) {
@@ -143,7 +141,6 @@ function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, 
     const n = Math.max(1, Math.round(span / (boardWidth + gap))), step = span / n;
     for (let k = 0; k < n; k++) {
       const s = a + (k + 0.5) * step + wobble(0.006);
-      if (passes.some((p) => Math.abs(s - p) < step / 2)) continue;
       const h = (leaf ? height - 0.17 : height) + wobble(0.012);
       const y = (leaf ? GATE_LIFT : LIFT) + height0(s) + wobble(0.012);
       put('board', board(boardWidth, h, 0.022, rnd())
@@ -162,8 +159,8 @@ function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, 
 export const WICKET = { at: 8, width: 1.2, leaves: 1 };
 export const GATES = { at: 8.6 + 1.7, width: 3.4, leaves: 2 };
 
-// passes — где сквозь забор со стороны дороги проходит труба (x, как у ворот).
-export function makeFence({ passes = [] } = {}) {
+// house — [x от, x до]: дом стоит фасадом в линию забора к дороге, и забор примыкает к его углам.
+export function makeFence({ house } = {}) {
   const root = new THREE.Group();
   const rnd = generator(7);
   const parts = { board: [], post: [], rail: [] };
@@ -171,7 +168,12 @@ export function makeFence({ passes = [] } = {}) {
   const put = (name, geometry) => parts[name][Math.floor(rnd() * KINDS)].push(geometry);
   const x = YARD.w / 2, z = YARD.d / 2;
   // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
-  picket(side({ x: -x, z }, { x, z }), LOOK, rnd, put, [WICKET, GATES].map((o) => ({ ...o, at: o.at + x })), passes.map((p) => p + x));
+  // Сторона к дороге — одним куском или двумя по бокам дома; калитка и ворота — в том куске, где они есть.
+  const street = house ? [[-x, house[0]], [house[1], x]] : [[-x, x]];
+  for (const [from, to] of street) {
+    const openings = [WICKET, GATES].filter((o) => from < o.at && o.at < to).map((o) => ({ ...o, at: o.at - from }));
+    picket(side({ x: from, z }, { x: to, z }), LOOK, rnd, put, openings);
+  }
   picket(side({ x, z }, { x, z: -z }), LOOK, rnd, put);
   picket(side({ x, z: -z }, { x: -x, z: -z }), LOOK, rnd, put);
   picket(side({ x: -x, z: -z }, { x: -x, z }), LOOK, rnd, put);

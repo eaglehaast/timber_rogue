@@ -21,7 +21,7 @@ import { TRIM_ROOM, ABOVE_FRIEZE } from './carving.js';
 const LOG_ALONG = 1.5, LOG_AROUND = 0.8;
 export const R = 0.13;          // м — средний радиус бревна
 export const COURSE = 1.7 * R;  // м — шаг венцов: бревно лежит в пазу нижнего, венцы ниже двух радиусов
-const OVERHANG = 0.3;    // м — остаток бревна за углом, от оси поперечной стены
+export const OVERHANG = 0.3;    // м — остаток бревна за углом, от оси поперечной стены
 export const PLINTH = 0.45;     // м — высота цоколя
 export const THICKEST = 1.08;   // радиус бревна — от (2 − THICKEST)·R до THICKEST·R
 // Боковые стены лежат на цоколе, фасадные (front, back) — на полбревна ниже.
