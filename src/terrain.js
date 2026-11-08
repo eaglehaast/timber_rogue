@@ -13,10 +13,10 @@ const CALM = [0.8, 2];   // м от края ровной площадки: бл
 const EDGE = 2;          // м за краем участка, за которые мелкий рельеф сходит на нет
 const BUMPS = 30;        // кротовин и ямок на участке
 const FINE = 0.15, COARSE = 1; // м — шаг сетки земли на участке и за ним
-const ROW = 0.04;              // м — шаг рядов сетки в полосах rows (колея вдоль x): мельче, чем ленты по ней
+const CARVED = 0.04;           // м — шаг сетки в полосах rows и cols, где вдавлены следы: мельче, чем ленты по ним
 
 // noise — плавный шум −1..1 с ячейкой в единицу, свой у каждого рельефа; пока рельефа нет — null.
-let noise = null, area = { w: 0, d: 0 }, bumps = [], flats = [], dug = () => 0, rows = [];
+let noise = null, area = { w: 0, d: 0 }, bumps = [], flats = [], dug = () => 0, rows = [], cols = [];
 
 // Высота без ровных площадок у стволов.
 function raw(x, z) {
@@ -40,14 +40,14 @@ const away = (f, x, z) => Math.hypot(Math.max(Math.abs(x - f.x) - (f.w ?? 0) / 2
 
 // Новый рельеф участка w × d метров с центром в начале координат. level — ровные площадки { x, z, w, d }:
 // под стволом (w и d не нужны) и под домом. Высота площадки — высота земли в её середине.
-// carve — что вдавлено в землю: dug(x, z) — на сколько метров (колея, ямы луж), rows — полосы по z [от, до],
-// где у сетки земли частые ряды (там колея идёт вдоль x).
-export function shapeGround(seed, level, w, d, carve = { dug: () => 0, rows: [] }) {
+// carve — что вдавлено в землю: dug(x, z) — на сколько метров (колея, ямы луж); rows — полосы по z [от, до],
+// где у сетки земли частые ряды (там следы идут вдоль x), cols — полосы по x, где частые столбцы (следы поперёк).
+export function shapeGround(seed, level, w, d, carve = { dug: () => 0, rows: [], cols: [] }) {
   const rnd = generator(seed);
   const smooth = smoothNoise(rnd);
   noise = (x, z) => 2 * smooth(x, z) - 1;
   area = { w, d };
-  ({ dug, rows } = carve);
+  ({ dug, rows, cols } = carve);
   flats = [];
   bumps = [];
   while (bumps.length < BUMPS) {
@@ -75,22 +75,22 @@ export function normal(x, z, out = new THREE.Vector3()) {
   return out.set(height(x - E, z) - height(x + E, z), 2 * E, height(x, z - E) - height(x, z + E)).normalize();
 }
 
-// Сетка земли — квадрат со стороной size: на участке (и на EDGE за ним) шаг FINE, дальше COARSE, в полосах rows
-// ряды через ROW. Узлы по x и по z — общие для всех рядов: сетка из прямоугольников, частая там, где ходят.
+// Сетка земли — квадрат со стороной size: на участке (и на EDGE за ним) шаг FINE, дальше COARSE, в полосах bands
+// (rows по z, cols по x) — через CARVED. Узлы по x и по z — общие для всех рядов: сетка из прямоугольников,
+// частая там, где ходят.
 export function groundGeometry(size) {
-  const ticks = (half) => {
+  const ticks = (half, bands) => {
     const out = [];
     for (let s = -size / 2; s < -half; s += COARSE) out.push(s);
     for (let s = -half; s < half; s += FINE) out.push(s);
     for (let s = half; s < size / 2; s += COARSE) out.push(s);
     out.push(size / 2);
-    return out;
+    const steps = ([a, b]) => Math.round((b - a) / CARVED);
+    return [...out.filter((s) => !bands.some(([a, b]) => s >= a && s <= b)),
+      ...bands.flatMap((band) => Array.from({ length: steps(band) + 1 }, (_, i) => band[0] + ((band[1] - band[0]) * i) / steps(band)))]
+      .sort((a, b) => a - b);
   };
-  const inside = (z) => rows.some(([a, b]) => z >= a && z <= b);
-  const zs = [...ticks(area.d / 2 + EDGE).filter((z) => !inside(z)),
-    ...rows.flatMap(([a, b]) => Array.from({ length: Math.round((b - a) / ROW) + 1 }, (_, i) => a + ((b - a) * i) / Math.round((b - a) / ROW)))]
-    .sort((a, b) => a - b);
-  const xs = ticks(area.w / 2 + EDGE);
+  const zs = ticks(area.d / 2 + EDGE, rows), xs = ticks(area.w / 2 + EDGE, cols);
   const pos = new Float32Array(xs.length * zs.length * 3), uv = new Float32Array(xs.length * zs.length * 2), index = [];
   zs.forEach((z, j) => xs.forEach((x, i) => {
     const k = j * xs.length + i;
