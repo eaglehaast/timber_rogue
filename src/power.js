@@ -46,6 +46,9 @@ const NUMBER = { gap: 0.014, y: 2.0, row: [4096 * 0.0004, 512 * 0.0004] };
 const SIGN = { size: 0.23, above: 0.45, chance: 0.4 };
 const GLYPHS = await (await fetch('assets/textures/power-numbers.json')).json();
 const SIDE = 0.5;                                              // м: сторона плитки бока щита
+// Счётчик на опоре с отводом (Никита: так сейчас ставят — и он светится красным): ящик, на сколько ниже кронштейна;
+// огонёк учёта вспыхивает раз в blink секунд на flash.
+const METER = { w: 0.17, h: 0.3, d: 0.1, below: 0.25, blink: 1.3, flash: 0.12 };
 
 const paint = (hex, more = {}) => new THREE.MeshLambertMaterial({ color: hex, ...more });
 const [numbersMap, baseMap, signMap, doorMap, sideMap] = tiles(['power-numbers.webp', 'power-base.webp', 'power-sign.webp', 'power-door.jpg', 'power-side.jpg'].map((f) => `assets/textures/${f}`));
@@ -55,8 +58,11 @@ const MAT = {
   base: decal(baseMap), sign: decal(signMap), dark: decal(numbersMap, { color: 0x2c2823 }), light: decal(numbersMap, { color: 0xe6e0cf }),
   steel: paint(0x51595d), porcelain: paint(0xdfd9c9), wire: paint(0x303a41), sip: paint(0x20272c), clamp: paint(0x2b2f33),
   conduit: paint(0x1b1d1f), box: new THREE.MeshLambertMaterial({ map: sideMap }), door: new THREE.MeshLambertMaterial({ map: doorMap }),
-  rim: paint(0x818d91), glass: paint(0x171f27), lock: paint(0x929b9e),
+  rim: paint(0x818d91), glass: paint(0x171f27), lock: paint(0x929b9e), meter: paint(0xc5c8c3),
+  led: new THREE.MeshBasicMaterial({ color: 0x5a0a05, toneMapped: false }),
 };
+// Ореол огонька — пятно света, чтобы вспышка читалась издали.
+const GLOW = new THREE.SpriteMaterial({ map: halo(), color: 0xff3018, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, toneMapped: false });
 const DOORS = 4, SIDES = 2, BASES = 4, SIGNS = 3;
 
 // Где что: место щита и анкера на боку с газовым вводом (gas — planGas), опоры вдоль улицы. Всё в метрах двора:
@@ -254,12 +260,33 @@ export function buildPower({ seed, poles, feeder, hand, house }) {
   const rise = fromPole.far.y - toPole.far.y;
   bundle(sag(toPole.far, fromPole.far, Math.min(SIP.sag[0] + rnd() * (SIP.sag[1] - SIP.sag[0]), 0.2 * rise), 64));
 
-  // Хвост на опоре: петлёй вниз, к опоре и вверх по ней (сбоку от кронштейна) к двум проводам дворовой стороны;
+  // Счётчик под кронштейном лицом к дому, на планке и двух хомутах. Оба жгута входят в него снизу: к дому —
+  // петлёй от анкерного зажима сбоку от счётчика, от проводов — по опоре (сбоку от счётчика и кронштейна),
   // там жилы расходятся и прокалывающими зажимами садятся на провода в полуметре от изоляторов к дому.
-  const around = toHouse.clone().applyAxisAngle(UP, 0.6);
+  const ym = yb - METER.below - METER.h / 2, rm = radius(ym);
+  const meter = new THREE.Matrix4().compose(axis(ym).addScaledVector(toHouse, rm + 0.012 + METER.d / 2), new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), toHouse),
+    new THREE.Vector3(1, 1, 1)).premultiply(M);
+  put('meter', new THREE.BoxGeometry(METER.w, METER.h, METER.d), meter);
+  put('steel', new THREE.BoxGeometry(0.06, METER.h + 0.08, 0.012).translate(0, 0, -METER.d / 2 - 0.006), meter);
+  for (const dy of [-1, 1]) {
+    const y = ym + dy * (METER.h / 2 + 0.02);
+    put('steel', new THREE.CylinderGeometry(radius(y) + 0.003, radius(y) + 0.003, 0.02, 16, 1, true).translate(...axis(y).toArray()), M);
+  }
+  put('glass', new THREE.PlaneGeometry(0.09, 0.04).translate(-0.015, METER.h * 0.22, METER.d / 2 + 0.001), meter);
+  const led = new THREE.Vector3(0.055, METER.h * 0.22, METER.d / 2 + 0.0015);
+  put('led', new THREE.CircleGeometry(0.0055, 12).translate(...led.toArray()), meter);
+  const glow = new THREE.Sprite(GLOW);
+  glow.position.copy(led.applyMatrix4(meter));
+  glow.scale.setScalar(0.07);
+  const inlet = (x) => V(x, -METER.h / 2 - 0.012, 0).applyMatrix4(meter);
+  for (const x of [-0.045, 0.045]) put('clamp', new THREE.CylinderGeometry(0.012, 0.014, 0.024, 10).translate(x, -METER.h / 2 - 0.012, 0), meter);
+  const across = toHouse.clone().applyAxisAngle(UP, Math.PI / 2).transformDirection(M), down = (y) => V(0, -y, 0);
+  bundle(smooth([fromPole.near, fromPole.near.clone().add(down(0.15)).addScaledVector(across, -0.13), inlet(-0.045).add(down(0.2)).addScaledVector(across, -0.03),
+    inlet(-0.045).add(down(0.05)), inlet(-0.045)], 40));
+  const around = toHouse.clone().applyAxisAngle(UP, 1);
   const onPole = (y, gap = 0.014) => world(axis(y).addScaledVector(around, radius(y) + gap));
   const [upper, lower] = [1, 3], ya = top - HOOKS[lower].drop - 0.3, yb2 = top - HOOKS[upper].drop - 0.3;
-  bundle(smooth([fromPole.near, fromPole.near.clone().add(V(0, -0.14, 0)).lerp(onPole(yb), 0.4), onPole(yb - 0.1), onPole(yb + 0.25), onPole(ya)], 40));
+  bundle(smooth([inlet(0.045), inlet(0.045).add(down(0.06)), inlet(0.045).add(down(0.18)).addScaledVector(across, 0.05), onPole(ym - 0.1), onPole(ym + 0.1), onPole(yb), onPole(ya)], 50));
   const toward = Math.sign(house.anchor.x - poles[feeder].x);
   const span = spans[toward > 0 ? feeder : feeder - 1];
   const tap = (j, from) => {
@@ -327,7 +354,14 @@ export function buildPower({ seed, poles, feeder, hand, house }) {
   put('lock', new THREE.CylinderGeometry(0.011, 0.012, 0.008, 16).rotateX(Math.PI / 2).translate(lx, ly, BOX.d + 0.009), B);
   put('glass', new THREE.CircleGeometry(0.0035, 8).translate(lx, ly, BOX.d + 0.0131), B);
 
-  const group = new THREE.Group();
+  const group = new THREE.Group().add(glow);
+  let clock = 0;
+  group.tick = (dt) => {
+    clock = (clock + dt) % METER.blink;
+    const on = clock < METER.flash;
+    MAT.led.color.setHex(on ? 0xff2a14 : 0x5a0a05);
+    GLOW.opacity = on ? 1 : 0.2;
+  };
   for (const [name, list] of Object.entries(parts)) {
     if (!list.length) continue;
     const mesh = new THREE.Mesh(merge(list), MAT[name]);
@@ -341,6 +375,19 @@ export function buildPower({ seed, poles, feeder, hand, house }) {
 // Изолятор: профиль тела вращения (радиус, высота) — юбка, шейка под вязку, головка с желобком под провод.
 const INSULATOR = [[0.008, 0], [0.024, 0], [0.036, 0.012], [0.036, 0.02], [0.026, 0.03], [0.023, 0.045], [0.03, 0.055], [0.03, 0.062],
   [0.022, 0.07], [0.024, 0.08], [0.016, 0.09], [0.006, 0.088]];
+
+// Пятно света: белое в середине, к краю прозрачное.
+function halo() {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 64;
+  const g = canvas.getContext('2d'), fill = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  fill.addColorStop(0, 'rgba(255,255,255,1)');
+  fill.addColorStop(0.25, 'rgba(255,255,255,0.5)');
+  fill.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = fill;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(canvas);
+}
 
 // Прямоугольник со скруглёнными углами вокруг нуля.
 function rounded(w, h, r) {

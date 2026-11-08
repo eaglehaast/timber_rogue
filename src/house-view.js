@@ -76,9 +76,9 @@ addEventListener('keydown', (e) => { if (e.code === 'KeyR') rebuild(1 + Math.flo
 
 const clock = new THREE.Clock();
 function frame() {
-  // Живые части дома (дым из трубы) двигаются во времени.
+  // Живые части дома и двора (дым из трубы, огонёк счётчика) двигаются во времени.
   const dt = Math.min(clock.getDelta(), 0.1);
-  house.traverse((o) => o.tick?.(dt));
+  for (const part of [house, yard]) part.traverse((o) => o.tick?.(dt));
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (canvas.width !== Math.floor(w * renderer.getPixelRatio())) {
     renderer.setSize(w, h, false);
