@@ -12,17 +12,19 @@ import { KIT, atlas, cell, repaint, strip } from './kit.js';
 // На ступенях и площадке тон истёрт посередине — там, где ходят, а к краям остаётся.
 // Дверь в дом — картинка Никиты: обитая дверь с ручкой, 4 рисунка под перекраску, крашеная кодом в цвет обивки. У перил — балясины, картинки на прозрачном
 // (5 рисунков), две крест-накрест, чтобы точёная балясина была объёмной, и столбы с шапками (5 рисунков).
-// Площадка — ширина вдоль стены и глубина от стены, м: открытая и под тамбуром (тамбур просторнее: в нём разуваются,
-// ставят вёдра и обувь).
-const LANDINGS = { open: [1.8, 1.1], tambour: [2.4, 1.8] };
-export const porchWidth = (tambour) => LANDINGS[tambour ? 'tambour' : 'open'][0];
+// Крыльцо бывает трёх видов (kind): открытое, под тамбуром и веранда. Площадка — ширина вдоль стены и глубина
+// от стены, м. Тамбур просторнее открытой (в нём разуваются, ставят вёдра и обувь). Веранда — летняя комната
+// из тех же остеклённых стенок, вдоль бока дома на длину length (её выбирает план), глубже тамбура; лестница
+// у неё обычной ширины.
+const LANDINGS = { open: [1.8, 1.1], tambour: [2.4, 1.8], veranda: [null, 2.4] };
+export const porchWidth = (kind, length) => LANDINGS[kind][0] ?? length;
 const STAIR = { width: 1.6, run: 0.3, rise: 0.18 }; // ширина, проступь, желаемая высота ступени
 const BOARD_W = 0.1, GAP = 0.006;              // доска и щель между досками
 const SIDE = { thick: 0.022, above: 0.05 };    // обшивка боков лестницы: толщина, выше носков ступеней на
 const POST = 0.11, RAIL = { height: 0.9, size: 0.06, both: 0.12 }; // столб; перила, доля крылец с перилами с двух сторон
-const BALUSTER = 0.2;
-const ROOF_BOARD = 0.14;
-const DUSK = 0.06; // сумрак сеней — от внутренней стороны стенок тамбура, за тюлем                       // м — доска тёса на крыше тамбура                         // м — шаг балясин
+const BALUSTER = 0.2;                         // м — шаг балясин
+const ROOF_BOARD = 0.14;                      // м — доска тёса на крыше тамбура
+const DUSK = 0.06;                            // сумрак сеней — от внутренней стороны стенок тамбура, за тюлем
 const DOOR_INSET = 0.08;                      // м — дверь утоплена в проём от лица стены
 // Обналичка двери: ширина боковых досок и верхней, заход за край проёма, отступ от лица стены (поверх брёвен).
 const TRIM = { side: 0.12, top: 0.15, overlap: 0.05, out: 0.02 };
@@ -54,7 +56,9 @@ const verandaMaterials = TRIM_PAINTS.map((paint) => {
 });
 
 // Крыльцо и дверь для проёма door. walls — как в house.js; base — верх цоколя; face — лицо стены от её оси.
-export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim: trimPaint }) {
+// kind — вид крыльца; ширина площадки — door.porch.
+export function buildPorch(seed, door, wall, { base, face, kind, tulle, trim: trimPaint }) {
+  const tambour = kind !== 'open'; // тамбур или веранда: площадка внутри остеклённых стенок
   const rnd = generator(seed + 3);
   const paint = PAINTS[Math.floor(rnd() * PAINTS.length)];
   const side = Math.sign(wall.at);
@@ -81,11 +85,11 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim:
   };
 
   // Площадка вровень с порогом (верх нижнего бревна под дверью); доски вдоль стены.
-  const [width, L] = LANDINGS[tambour ? 'tambour' : 'open'], top = base + door.bottom, W = width / 2;
+  const [, L] = LANDINGS[kind], top = base + door.bottom, W = door.porch / 2;
   row(worn, plane(P(0, 0, top - 0.022), s, n), up, -W, W, 0, L, true);
 
   // Лестница: ступени от площадки наружу, проступь из досок, подступёнки из двух досок.
-  const steps = Math.max(2, Math.round(top / STAIR.rise)), rise = top / steps, w = tambour ? W : STAIR.width / 2, run = STAIR.run;
+  const steps = Math.max(2, Math.round(top / STAIR.rise)), rise = top / steps, w = kind === 'tambour' ? W : STAIR.width / 2, run = STAIR.run;
   for (let k = 1; k <= steps; k++) {
     const q = L + (k - 1) * run, y = top - k * rise;
     if (k < steps) row(worn, plane(P(0, q, y - 0.022), s, n), up, -w, w, 0, run, true);
@@ -101,9 +105,11 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim:
       painted.add([[q0, 0], [q1, 0], [q1, nose(q1) + SIDE.above], [q0, nose(q0) + SIDE.above]], plane(P(a, 0, 0), n, up), s, [0, 1], wd - GAP, rnd);
     }
   }
-  // Обшивка площадки снизу: по бокам и спереди по обе стороны лестницы.
+  // Обшивка площадки снизу: по бокам и спереди по обе стороны лестницы. У тамбура и веранды бока зашиты их
+  // стенками, а перед — продолжение передней стенки вниз: в её плоскости и до её низа.
   if (!tambour) for (const a of [-W, W - 0.022]) row(painted, plane(P(a, 0, 0), n, up), s, 0, top - 0.03, 0.05, L, false);
-  for (const [a0, a1] of [[-W, -w - SIDE.thick], [w + SIDE.thick, W]]) if (a1 - a0 > 0.05) row(painted, plane(P(0, L - 0.03, 0), s, up), n, 0, top - 0.03, a0, a1, false);
+  const [skirtAt, skirtTop] = tambour ? [L, top] : [L - 0.03, top - 0.03];
+  for (const [a0, a1] of [[-W, -w - SIDE.thick], [w + SIDE.thick, W]]) if (a1 - a0 > 0.05) row(painted, plane(P(0, skirtAt, 0), s, up), n, 0, skirtTop, a0, a1, false);
 
   // Перила — у каждого крыльца (в таких домах живут старики): обычно с одной стороны, изредка с двух.
   // Столбы у края площадки и внизу лестницы, брус по площадке от стены и по лестнице вниз, между ними балясины.
