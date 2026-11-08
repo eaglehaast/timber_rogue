@@ -65,8 +65,7 @@ export class Faces {
 
 // Окна дома. walls — как в house.js (along, at); base — высота, от которой считаются низ и верх проёмов;
 // out — плоскость наличника от оси стены наружу (чуть впереди брёвен), проём картинки совпадает с проёмом окна.
-// trim: false — окно без наличника и обсады (в кирпичной кладке, откосы кладёт она сама).
-export function buildWindows({ openings, windows: { pattern, paint, tulle } }, walls, { base, out, trim = true }) {
+export function buildWindows({ openings, windows: { pattern, paint, tulle } }, walls, { base, out }) {
   const trims = new Faces(), sash = new Faces(), glass = new Faces(), tulles = new Faces();
   // Пиксель картинки → место на окне (a вправо от середины проёма, y вверх от его низа) и в атласе.
   const place = (x, y) => [m(x - (OX0 + OX1) / 2, 0), m(OY1 - y, 1)];
@@ -75,10 +74,10 @@ export function buildWindows({ openings, windows: { pattern, paint, tulle } }, w
   const flat = KIT.outlines[pattern], outline = [];
   for (let i = 0; i < flat.length; i += 2) outline.push([flat[i], flat[i + 1]]);
   const turn = Math.sign(outline.reduce((sum, [x, y], i) => { const [x2, y2] = outline[(i + 1) % outline.length]; return sum + x * y2 - x2 * y; }, 0));
+  const [w, h] = PANE;
   const lining = new Faces(), edges = new Faces();
   for (const o of openings) {
     if (o.kind !== 'window') continue;
-    const [w, h] = [o.width, o.top - o.bottom];
     const wall = walls[o.wall], side = Math.sign(wall.at);
     // Середина низа проёма на оси стены; наружу n, вправо s (для того, кто смотрит на стену снаружи), вверх.
     // Точка окна: a — вправо от середины, y — вверх от низа проёма, d — внутрь от плоскости наличника.
@@ -87,27 +86,25 @@ export function buildWindows({ openings, windows: { pattern, paint, tulle } }, w
     const s = wall.along === 'x' ? [side, 0, 0] : [0, 0, -side];
     const at = (a, y, d) => [0, 1, 2].map((k) => c[k] + n[k] * (out - d) + s[k] * a + (k === 1 ? y : 0));
     const rect = (faces, a0, a1, y0, y1, d, uvs) => faces.face([at(a0, y0, d), at(a1, y0, d), at(a1, y1, d), at(a0, y1, d)], n, uvs);
-    if (trim) {
-      const corner = (x, y) => [...place(x, y), ...texel(x, y)];
-      const [a0, y0, u0, v0] = corner(FX0, FY1), [a1, y1, u1, v1] = corner(FX1, FY0);
-      rect(trims, a0, a1, y0, y1, 0, [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
-      // Торцы рамы по силуэту: от лица наличника внутрь на THICK. Краска — с пикселя чуть внутри силуэта
-      // (на самом краю картинки — контур пером), растянутая по толщине.
-      outline.forEach(([x, y], i) => {
-        const [x2, y2] = outline[(i + 1) % outline.length];
-        const len = Math.hypot(x2 - x, y2 - y), nx = (turn * (y2 - y)) / len, ny = (turn * -(x2 - x)) / len; // наружу, в пикселях (y вниз)
-        const [pa, py] = place(x, y), [qa, qy] = place(x2, y2);
-        const tp = texel(x - nx * 8, y - ny * 8), tq = texel(x2 - nx * 8, y2 - ny * 8);
-        const normal = [0, 1, 2].map((k) => s[k] * nx - (k === 1 ? ny : 0));
-        edges.face([at(pa, py, 0), at(qa, qy, 0), at(qa, qy, THICK), at(pa, py, THICK)], normal, [tp, tq, tq, tp]);
-      });
-      // Обсада — доски по краям проёма от лица наличника до тюля: закрывают щель между наличником и рамой.
-      const inward = (dir) => dir.map((k) => -k);
-      lining.face([at(-w / 2, 0, 0), at(-w / 2, h, 0), at(-w / 2, h, TULLE), at(-w / 2, 0, TULLE)], s);
-      lining.face([at(w / 2, 0, 0), at(w / 2, h, 0), at(w / 2, h, TULLE), at(w / 2, 0, TULLE)], inward(s));
-      lining.face([at(-w / 2, 0, 0), at(w / 2, 0, 0), at(w / 2, 0, TULLE), at(-w / 2, 0, TULLE)], [0, 1, 0]);
-      lining.face([at(-w / 2, h, 0), at(w / 2, h, 0), at(w / 2, h, TULLE), at(-w / 2, h, TULLE)], [0, -1, 0]);
-    }
+    const corner = (x, y) => [...place(x, y), ...texel(x, y)];
+    const [a0, y0, u0, v0] = corner(FX0, FY1), [a1, y1, u1, v1] = corner(FX1, FY0);
+    rect(trims, a0, a1, y0, y1, 0, [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
+    // Торцы рамы по силуэту: от лица наличника внутрь на THICK. Краска — с пикселя чуть внутри силуэта
+    // (на самом краю картинки — контур пером), растянутая по толщине.
+    outline.forEach(([x, y], i) => {
+      const [x2, y2] = outline[(i + 1) % outline.length];
+      const len = Math.hypot(x2 - x, y2 - y), nx = (turn * (y2 - y)) / len, ny = (turn * -(x2 - x)) / len; // наружу, в пикселях (y вниз)
+      const [pa, py] = place(x, y), [qa, qy] = place(x2, y2);
+      const tp = texel(x - nx * 8, y - ny * 8), tq = texel(x2 - nx * 8, y2 - ny * 8);
+      const normal = [0, 1, 2].map((k) => s[k] * nx - (k === 1 ? ny : 0));
+      edges.face([at(pa, py, 0), at(qa, qy, 0), at(qa, qy, THICK), at(pa, py, THICK)], normal, [tp, tq, tq, tp]);
+    });
+    // Обсада — доски по краям проёма от лица наличника до тюля: закрывают щель между наличником и рамой.
+    const inward = (dir) => dir.map((k) => -k);
+    lining.face([at(-w / 2, 0, 0), at(-w / 2, h, 0), at(-w / 2, h, TULLE), at(-w / 2, 0, TULLE)], s);
+    lining.face([at(w / 2, 0, 0), at(w / 2, h, 0), at(w / 2, h, TULLE), at(w / 2, 0, TULLE)], inward(s));
+    lining.face([at(-w / 2, 0, 0), at(w / 2, 0, 0), at(w / 2, 0, TULLE), at(-w / 2, 0, TULLE)], [0, 1, 0]);
+    lining.face([at(-w / 2, h, 0), at(w / 2, h, 0), at(w / 2, h, TULLE), at(-w / 2, h, TULLE)], [0, -1, 0]);
     rect(tulles, -w / 2, w / 2, 0, h, TULLE, [[tulle / TULLES, 0], [(tulle + 1) / TULLES, 0], [(tulle + 1) / TULLES, 1], [tulle / TULLES, 1]]);
     rect(glass, -w / 2, w / 2, 0, h, GLASS);
     // Брус переплёта — коробка от a0 до a1 и от y0 до y1; задняя грань не видна.

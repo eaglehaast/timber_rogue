@@ -44,10 +44,9 @@ const TAMBOUR_CHANCE = 0.4;
 // Пятистенок — сруб длиннее, внутри пятая рубленая стена поперёк; снаружи видны её выпуски — колонна торцов
 // посередине боков, как на углу. Окна бока — по обе стороны от неё, не ближе MIDDLE_GAP к её оси.
 const FIVE_WALL_CHANCE = 0.35, MIDDLE_GAP = 0.65;
-// Двухэтажный дом — редкий: первый этаж кирпичный (кирпич трубы), на нём сруб. Внизу дверь с крыльцом и окна
-// под окнами сруба, без наличников, утоплены в кладку. STONE: высота этажа, проёмы — от земли.
-const TWO_STOREY_CHANCE = 0.07;
-const STONE = { height: 2.5, door: { bottom: 0.3, top: 2.25 }, window: { bottom: 0.9, top: 2.0 }, out: R - 0.1, reveal: 0.3 };
+// Высокий сруб: над окнами ещё KNEE венцов, крыша поднята на 1,1–1,5 м — наверху жилая комната под скатами
+// с подрезанным потолком (вместо чердака). Окна остаются внизу, на прежней высоте.
+const HIGH_CHANCE = 0.25, KNEE = [5, 7];
 const SINK = 0.05, DAMP = 0.6;
 
 const [logMap, endMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-chinking.jpg']);
@@ -79,9 +78,9 @@ export function planHouse(seed) {
   const w = pick([5, 6, 6, 6.5]), five = rnd() < FIVE_WALL_CHANCE, d = five ? pick([8, 9, 9.5]) : pick([5, 6, 6]);
   // Пятая стена делит сруб примерно пополам.
   const middle = five ? Math.round((rnd() - 0.5) * 8) / 10 : null;
-  const stone = rnd() < TWO_STOREY_CHANCE;
   // Над окнами — не меньше трёх венцов: под фронтоном висит резной фриз, наличник не должен в него упираться.
-  const courses = 12 + Math.floor(rnd() * 3);
+  const high = rnd() < HIGH_CHANCE;
+  const courses = 12 + Math.floor(rnd() * 3) + (high ? KNEE[0] + Math.floor(rnd() * (KNEE[1] - KNEE[0] + 1)) : 0);
   const pitch = THREE.MathUtils.degToRad(38 + 8 * rnd());
   // Низ окна — 0,95 м над цоколем, а в низком срубе ниже: кокошник наличника не должен доставать до резного фриза
   // под фронтоном (carving.js: TRIM_ROOM — сколько оставить под верхом фасадной стены).
@@ -95,26 +94,25 @@ export function planHouse(seed) {
   const row = (wall, a, b, n) => Array.from({ length: n }, (_, i) => window(wall, a + ((i + 0.5) * (b - a)) / n));
   const front = w < 5.5 ? 2 : 3;
   const door = pick(['left', 'right']), other = door === 'left' ? 'right' : 'left';
-  // Остеклённый тамбур на крыльце (porch.js) — у части домов; площадка под ним шире. У двухэтажного крыльцо низкое,
-  // и крыша тамбура упёрлась бы в отлив над кирпичным этажом — тамбура нет.
-  const tambour = !stone && rnd() < TAMBOUR_CHANCE, porch = porchWidth(tambour);
+  // Остеклённый тамбур на крыльце (porch.js) — у части домов; площадка под ним шире.
+  const tambour = rnd() < TAMBOUR_CHANCE, porch = porchWidth(tambour);
   // Дверь на боку. У избы — ближе к улице, но крыльцо (с тамбуром — шире) не заходит на остатки брёвен соседней
   // стены за углом. У пятистенка — в заднюю половину, крыльцо вплотную к выпускам пятой стены.
   const doorAt = five ? middle - R - 0.1 - porch / 2 : Math.min(d / 4, d / 2 - 2 * R - porch / 2);
   // Окна боков. У избы: у двери — одно ближе к заду, на другом боку — одно-два. У пятистенка — в каждой половине
   // свои: спереди по два, сзади у двери одно (если между крыльцом и углом хватает места), напротив — одно-два.
-  // В двухэтажном доме дверь внизу, и наверху бок с дверью — как другой.
-  const edge = d / 2 - 0.5, behind = stone ? middle - MIDDLE_GAP : doorAt - porch / 2 - 0.1;
+  const edge = d / 2 - 0.5, behind = doorAt - porch / 2 - 0.1;
   const sides = five
     ? [...row(door, middle + MIDDLE_GAP, edge, 2), ...row(door, -edge, behind, behind + edge > 1.2 ? 1 : 0),
       ...row(other, middle + MIDDLE_GAP, edge, 2), ...row(other, -edge, middle - MIDDLE_GAP, 1 + Math.floor(rnd() * 2))]
-    : [...(stone ? row(door, -d / 2, d / 2, 2) : [window(door, -d / 5)]), ...row(other, -d / 2, d / 2, 1 + Math.floor(rnd() * 2))];
-  // Дверь в срубе: нижнее бревно под ней остаётся порогом, верх — у стыка венцов около 2 м: бревно над ней цело.
-  const doorway = { kind: 'door', wall: door, at: doorAt, width: 0.9, porch,
-    ...(stone ? STONE.door : { bottom: onCourse(door, 0), top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015 }) };
-  const openings = [...row('front', -w / 2, w / 2, front), ...row('back', -w / 2, w / 2, 1 + Math.floor(rnd() * 2)), ...(stone ? [] : [doorway]), ...sides];
-  // Кирпичный этаж: дверь и окна под окнами сруба — кроме тех, что над крыльцом.
-  const ground = stone && [doorway, ...openings.filter((o) => o.wall !== door || Math.abs(o.at - doorAt) > porch / 2 + 0.5).map((o) => ({ ...o, ...STONE.window }))];
+    : [window(door, -d / 5), ...row(other, -d / 2, d / 2, 1 + Math.floor(rnd() * 2))];
+  const openings = [
+    ...row('front', -w / 2, w / 2, front),
+    ...row('back', -w / 2, w / 2, 1 + Math.floor(rnd() * 2)),
+    // Нижнее бревно под дверью остаётся порогом, верх двери — у стыка венцов около 2 м: бревно над ней цело.
+    { kind: 'door', wall: door, at: doorAt, width: 0.9, bottom: onCourse(door, 0), top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015, porch },
+    ...sides,
+  ];
   const windows = { pattern: Math.floor(rnd() * PATTERNS), paint: weighted(PAINT_ODDS, rnd()), tulle: Math.floor(rnd() * TULLES) };
   // Кровля: чаще шифер, потом зелёное железо, реже рубероид и старый тёс. Зелёное железо не сочетают
   // с голубыми и синими наличниками (Никита, 2026-11-07) — у таких домов его нет.
@@ -124,17 +122,16 @@ export function planHouse(seed) {
   const attic = Math.floor(rnd() * KIT.attic.count);
   const plinth = Object.keys(PLINTHS)[weighted(Object.values(PLINTHS), rnd())];
   return {
-    seed, w, d, middle, ground, courses, pitch, openings, windows, parts: PARTS,
+    seed, w, d, middle, courses, pitch, openings, windows, parts: PARTS,
     roof: PARTS.has('roof') ? roof : 'tes', carving: PARTS.has('carving') ? carving : null,
-    attic: PARTS.has('attic') ? attic : null, plinth: stone ? null : plinth, tambour,
+    attic: PARTS.has('attic') ? attic : null, plinth, tambour,
   };
 }
 
 // Дом по плану: сруб (бок и торцы брёвен — две группы граней со своими материалами), цоколь,
 // а над срубом и у цоколя — дощатые части (attic.js).
 export function buildHouse(plan) {
-  const { seed, w, d, courses, openings, ground } = plan;
-  const base = ground ? STONE.height : PLINTH; // низ сруба: верх цоколя или кирпичного этажа
+  const { seed, w, d, courses, openings } = plan;
   const rnd = generator(seed + 1);
   const parts = { pos: [], normal: [], uv: [], side: [], end: [] };
   const walls = {
@@ -166,8 +163,8 @@ export function buildHouse(plan) {
         pieces = pieces.flatMap(([p, q]) => [[p, Math.min(q, a)], [Math.max(p, b), q]].filter(([u, v]) => v - u > 0.05));
       }
       const look = { r, butt, reach, sag: 0.005 + 0.01 * rnd(), wobble: rnd() * 100, u: rnd() * 10, v: rnd() * 10 };
-      for (const [from, to] of pieces) log(parts, wall, base, y + base, from, to, look, rnd);
-      const course = { y: y + base, pieces, ...look };
+      for (const [from, to] of pieces) log(parts, wall, y + PLINTH, from, to, look, rnd);
+      const course = { y: y + PLINTH, pieces, ...look };
       if (below && plan.parts.has('chinking')) chinking(chink, wall, below, course);
       below = course;
     }
@@ -187,74 +184,37 @@ export function buildHouse(plan) {
   const chinks = new THREE.Mesh(chinkGeometry, chinkMaterial);
   chinks.receiveShadow = true;
 
-  const top = base + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
-  const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: base, r: R, reach: w / 2 + OVERHANG });
+  const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
+  const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
   // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
-  const windows = buildWindows(plan, walls, { base, out: 1.13 * R + 0.005 });
-  // Дверь с крыльцом — в срубе или в кирпичном этаже (там проёмы считаются от земли).
-  const door = (ground || openings).find((o) => o.kind === 'door');
-  const porch = buildPorch(seed, door, walls[door.wall], { base: ground ? 0 : PLINTH, face: R, tambour: plan.tambour, tulle: plan.windows.tulle, trim: plan.windows.paint });
+  const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
+  const door = openings.find((o) => o.kind === 'door');
+  const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, tambour: plan.tambour, tulle: plan.windows.tulle, trim: plan.windows.paint });
   const house = new THREE.Group().add(srub, chinks, boards, windows, porch);
-  // Кирпичный цоколь или кирпичный этаж: кладка в лицо брёвнам, окна этажа — без наличников, утоплены в кладку.
-  if (plan.plinth === 'brick' || ground) {
-    const brick = new THREE.Mesh(brickWalls(w / 2 + R, d / 2 + R, base, ground || [], rnd), plinthBrick);
+  if (plan.plinth === 'brick') {
+    const brick = new THREE.Mesh(brickPlinth(w / 2 + R, d / 2 + R, rnd), plinthBrick);
     brick.castShadow = brick.receiveShadow = true;
     house.add(brick);
   }
-  if (ground) house.add(buildWindows({ ...plan, openings: ground }, walls, { base: 0, out: STONE.out, trim: false }));
   return house;
 }
 
-// Кирпичная коробка с полуразмерами hx, hz и высотой height: четыре стенки от SINK под землёй до верха, в них
-// проёмы holes (как проёмы плана: wall, at, width, bottom, top — от земли). Окна утоплены: откосы кладки уходят
-// от лица стены внутрь на STONE.reveal; у двери откосы — обсада крыльца. Кирпич ложится в метрах обхода — на углах
-// ряды не рвутся; к земле, до высоты цоколя, темнее (цвет вершин). Крышки нет: сверху лежат брёвна.
-// Цоколь избы — такая же коробка высотой PLINTH без проёмов.
-function brickWalls(hx, hz, height, holes, rnd) {
-  const corners = [[-hx, -hz, 'back'], [hx, -hz, 'right'], [hx, hz, 'front'], [-hx, hz, 'left']];
+// Кирпичный цоколь с полуразмерами hx, hz: четыре стенки от SINK под землёй до верха. Кирпич ложится в метрах
+// обхода — на углах ряды не рвутся; к земле темнее (цвет вершин). Крышки нет: сверху лежат брёвна.
+function brickPlinth(hx, hz, rnd) {
+  const corners = [[-hx, -hz], [hx, -hz], [hx, hz], [-hx, hz]];
   const pos = [], normal = [], uv = [], color = [], index = [];
-  const damp = (y) => (y >= PLINTH ? 1 : DAMP + ((1 - DAMP) * (y + SINK)) / (PLINTH + SINK));
-  // Четырёхугольник по углам [точка, u, v] лицом к n (обход подбирается по нормали, как в Faces); v — по высоте,
-  // если не задан.
-  const quad = (corners4, n) => {
-    const start = pos.length / 3, [a, b, c] = corners4.map(([p]) => new THREE.Vector3(...p));
-    for (const [[x, y, z], u, v = y] of corners4) {
-      pos.push(x, y, z); normal.push(...n); color.push(damp(y), damp(y), damp(y));
-      uv.push(u / BRICK_TILE[0], v / BRICK_TILE[1]);
-    }
-    const flip = b.sub(a).cross(c.sub(a)).dot(new THREE.Vector3(...n)) < 0;
-    index.push(...(flip ? [0, 2, 1, 0, 3, 2] : [0, 1, 2, 0, 2, 3]).map((k) => start + k));
-  };
   let u = rnd() * 10;
-  corners.forEach(([ax, az, name], k) => {
-    const [bx, bz] = corners[(k + 1) % 4], length = Math.hypot(bx - ax, bz - az);
-    const [dx, dz] = [(bx - ax) / length, (bz - az) / length], n = [dz, 0, -dx];
-    // Точка стены: t — от её начала вдоль, y — вверх, depth — внутрь от лица.
-    const P = (t, y, depth = 0) => [ax + dx * t - n[0] * depth, y, az + dz * t - n[2] * depth];
-    // Проёмы стены в её координатах: [t0, t1, низ, верх, окно ли].
-    const cut = holes.filter((o) => o.wall === name).map((o) => {
-      const t = (name === 'front' || name === 'back' ? o.at - ax : o.at - az) * (dx + dz);
-      return [t - o.width / 2, t + o.width / 2, o.bottom, o.top, o.kind === 'window'];
-    });
-    // Стенку режем по краям проёмов на столбцы, столбец — по их низам и верхам на ряды; ряды внутри проёма пропускаем.
-    const ts = [...new Set([0, length, ...cut.flatMap(([t0, t1]) => [t0, t1])])].sort((p, q) => p - q);
-    for (let i = 0; i + 1 < ts.length; i++) {
-      const [t0, t1] = [ts[i], ts[i + 1]], inside = cut.filter(([c0, c1]) => c0 <= t0 && t1 <= c1);
-      const ys = [...new Set([-SINK, PLINTH, height, ...inside.flatMap(([, , y0, y1]) => [y0, y1])])].sort((p, q) => p - q);
-      for (let j = 0; j + 1 < ys.length; j++) {
-        const [y0, y1] = [ys[j], ys[j + 1]];
-        if (inside.some(([, , b, c]) => b <= y0 && y1 <= c)) continue;
-        quad([[P(t0, y0), u + t0], [P(t1, y0), u + t1], [P(t1, y1), u + t1], [P(t0, y1), u + t0]], n);
+  corners.forEach(([ax, az], k) => {
+    const [bx, bz] = corners[(k + 1) % 4], length = Math.hypot(bx - ax, bz - az), start = pos.length / 3;
+    for (const [x, z, along] of [[ax, az, 0], [bx, bz, length]]) {
+      for (const y of [-SINK, PLINTH]) {
+        const damp = y < 0 ? DAMP : 1;
+        pos.push(x, y, z); normal.push((bz - az) / length, 0, -(bx - ax) / length); color.push(damp, damp, damp);
+        uv.push((u + along) / BRICK_TILE[0], y / BRICK_TILE[1]);
       }
     }
-    // Откосы окон: бока, низ и верх проёма от лица стены внутрь.
-    const deep = STONE.reveal, back = n.map((c) => -c);
-    for (const [t0, t1, y0, y1] of cut.filter((c) => c[4])) {
-      quad([[P(t0, y0), u + t0, y0], [P(t0, y0, deep), u + t0 + deep, y0], [P(t0, y1, deep), u + t0 + deep, y1], [P(t0, y1), u + t0, y1]], [dx, 0, dz]);
-      quad([[P(t1, y0), u + t1, y0], [P(t1, y1), u + t1, y1], [P(t1, y1, deep), u + t1 - deep, y1], [P(t1, y0, deep), u + t1 - deep, y0]], [-dx, 0, -dz]);
-      quad([[P(t0, y0), u + t0, 0], [P(t1, y0), u + t1, 0], [P(t1, y0, deep), u + t1, deep], [P(t0, y0, deep), u + t0, deep]], [0, 1, 0]);
-      quad([[P(t0, y1), u + t0, 0], [P(t0, y1, deep), u + t0, deep], [P(t1, y1, deep), u + t1, deep], [P(t1, y1), u + t1, 0]], [0, -1, 0]);
-    }
+    index.push(start, start + 1, start + 2, start + 1, start + 3, start + 2);
     u += length;
   });
   const geometry = new THREE.BufferGeometry();
@@ -301,9 +261,9 @@ function chinking(chink, wall, below, above) {
 // Кусок бревна стены wall от from до to вдоль неё, ось на высоте y. look — общее у всех кусков одного бревна:
 // радиус, с какого конца комель, провис, неровность обвода и сдвиг узора, — так перерезанное проёмом бревно
 // остаётся одним бревном.
-function log(parts, wall, base, y, from, to, { r, butt, reach, sag: depth, wobble, u, v }, rnd) {
-  // Ниже низа сруба (верха цоколя) бревно стёсано: точка обвода не опускается под него.
-  const hewn = (s, x, h) => [x, Math.max(h, base - (y - drop(s)))];
+function log(parts, wall, y, from, to, { r, butt, reach, sag: depth, wobble, u, v }, rnd) {
+  // Ниже верха цоколя бревно стёсано: точка обвода не опускается под него.
+  const hewn = (s, x, h) => [x, Math.max(h, PLINTH - (y - drop(s)))];
   // Точка бревна: s вдоль стены, x поперёк неё (наружу дома — по знаку wall.at), h — высота; turn — тот же поворот без сдвига.
   const turn = (s, x, h) => (wall.along === 'x' ? [s, h, x] : [x, h, s]);
   const place = (s, x, h) => turn(s, x + wall.at, h);
