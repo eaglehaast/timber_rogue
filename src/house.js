@@ -25,7 +25,8 @@ const OVERHANG = 0.3;    // м — остаток бревна за углом, 
 const PLINTH = 0.45;     // м — высота цоколя
 const THICKEST = 1.08;   // радиус бревна — от (2 − THICKEST)·R до THICKEST·R
 // Боковые стены лежат на цоколе, фасадные (front, back) — на полбревна ниже.
-const LIFT = { front: -COURSE / 2, back: -COURSE / 2, left: 0, right: 0 };
+// Пятая стена пятистенка (middle) — поперечная, рублена заодно с фасадом: на его высоте.
+const LIFT = { front: -COURSE / 2, back: -COURSE / 2, middle: -COURSE / 2, left: 0, right: 0 };
 // Низ проёма, стоящего на венце k стены wall: над самым толстым бревном, какое может выпасть в этом венце,
 // и над обсадой. Так бревно под проёмом остаётся целым, пропил начинается сразу над ним, и щель между ними
 // закрывает низ наличника (у фасада и боков венцы на разной высоте — у каждой стены свой).
@@ -40,6 +41,9 @@ const STEP = 0.25;       // м — шаг колец вдоль бревна
 // Обмазанный бут убран (Никита, 2026-11-07: «некрасиво»). Кирпич уходит в землю на SINK, у земли темнее в DAMP раз.
 const PLINTHS = { boards: 1.2, brick: 0.8 };
 const TAMBOUR_CHANCE = 0.4;
+// Пятистенок — сруб длиннее, внутри пятая рубленая стена поперёк; снаружи видны её выпуски — колонна торцов
+// посередине боков, как на углу. Окна бока — по обе стороны от неё, не ближе MIDDLE_GAP к её оси.
+const FIVE_WALL_CHANCE = 1 / 6, MIDDLE_GAP = 0.65;
 const SINK = 0.05, DAMP = 0.6;
 
 const [logMap, endMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-chinking.jpg']);
@@ -68,7 +72,9 @@ const weighted = (odds, u) => {
 export function planHouse(seed) {
   const rnd = generator(seed);
   const pick = (list) => list[Math.floor(rnd() * list.length)];
-  const w = pick([5, 6, 6, 6.5]), d = pick([5, 6, 6]);
+  const w = pick([5, 6, 6, 6.5]), five = rnd() < FIVE_WALL_CHANCE, d = five ? pick([8, 9, 9.5]) : pick([5, 6, 6]);
+  // Пятая стена делит сруб примерно пополам.
+  const middle = five ? Math.round((rnd() - 0.5) * 8) / 10 : null;
   // Над окнами — не меньше трёх венцов: под фронтоном висит резной фриз, наличник не должен в него упираться.
   const courses = 12 + Math.floor(rnd() * 3);
   const pitch = THREE.MathUtils.degToRad(38 + 8 * rnd());
@@ -80,20 +86,28 @@ export function planHouse(seed) {
     const bottom = onCourse(wall, Math.floor((sill - onCourse(wall, 0)) / COURSE));
     return { kind: 'window', wall, at, width: PANE[0], bottom, top: bottom + PANE[1] };
   };
-  const row = (wall, length, n) => Array.from({ length: n }, (_, i) => window(wall, (i - (n - 1) / 2) * (length / n)));
+  // n окон поровну по отрезку стены [a, b] (от её середины).
+  const row = (wall, a, b, n) => Array.from({ length: n }, (_, i) => window(wall, a + ((i + 0.5) * (b - a)) / n));
   const front = w < 5.5 ? 2 : 3;
-  const door = pick(['left', 'right']);
+  const door = pick(['left', 'right']), other = door === 'left' ? 'right' : 'left';
   // Остеклённый тамбур на крыльце (porch.js) — у части домов; площадка под ним шире.
-  const tambour = rnd() < TAMBOUR_CHANCE;
+  const tambour = rnd() < TAMBOUR_CHANCE, porch = porchWidth(tambour);
+  // Дверь на боку. У избы — ближе к улице, но крыльцо (с тамбуром — шире) не заходит на остатки брёвен соседней
+  // стены за углом. У пятистенка — в заднюю половину, крыльцо вплотную к выпускам пятой стены.
+  const doorAt = five ? middle - R - 0.1 - porch / 2 : Math.min(d / 4, d / 2 - 2 * R - porch / 2);
+  // Окна боков. У избы: у двери — одно ближе к заду, на другом боку — одно-два. У пятистенка — в каждой половине
+  // свои: спереди по два, сзади у двери одно (если между крыльцом и углом хватает места), напротив — одно-два.
+  const edge = d / 2 - 0.5, behind = doorAt - porch / 2 - 0.1;
+  const sides = five
+    ? [...row(door, middle + MIDDLE_GAP, edge, 2), ...row(door, -edge, behind, behind + edge > 1.2 ? 1 : 0),
+      ...row(other, middle + MIDDLE_GAP, edge, 2), ...row(other, -edge, middle - MIDDLE_GAP, 1 + Math.floor(rnd() * 2))]
+    : [window(door, -d / 5), ...row(other, -d / 2, d / 2, 1 + Math.floor(rnd() * 2))];
   const openings = [
-    ...row('front', w, front),
-    ...row('back', w, 1 + Math.floor(rnd() * 2)),
-    // У двери на боку — одно окно ближе к заду, дверь ближе к улице; на другом боку — одно-два окна.
-    // Крыльцо (с тамбуром — шире) не заходит на остатки брёвен соседней стены за углом.
+    ...row('front', -w / 2, w / 2, front),
+    ...row('back', -w / 2, w / 2, 1 + Math.floor(rnd() * 2)),
     // Нижнее бревно под дверью остаётся порогом, верх двери — у стыка венцов около 2 м: бревно над ней цело.
-    { kind: 'door', wall: door, at: Math.min(d / 4, d / 2 - 2 * R - porchWidth(tambour) / 2), width: 0.9, bottom: onCourse(door, 0), top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015, porch: porchWidth(tambour) },
-    window(door, -d / 5),
-    ...row(door === 'left' ? 'right' : 'left', d, 1 + Math.floor(rnd() * 2)),
+    { kind: 'door', wall: door, at: doorAt, width: 0.9, bottom: onCourse(door, 0), top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015, porch },
+    ...sides,
   ];
   const windows = { pattern: Math.floor(rnd() * PATTERNS), paint: weighted(PAINT_ODDS, rnd()), tulle: Math.floor(rnd() * TULLES) };
   // Кровля: чаще шифер, потом зелёное железо, реже рубероид и старый тёс. Зелёное железо не сочетают
@@ -104,7 +118,7 @@ export function planHouse(seed) {
   const attic = Math.floor(rnd() * KIT.attic.count);
   const plinth = Object.keys(PLINTHS)[weighted(Object.values(PLINTHS), rnd())];
   return {
-    seed, w, d, courses, pitch, openings, windows, parts: PARTS,
+    seed, w, d, middle, courses, pitch, openings, windows, parts: PARTS,
     roof: PARTS.has('roof') ? roof : 'tes', carving: PARTS.has('carving') ? carving : null,
     attic: PARTS.has('attic') ? attic : null, plinth, tambour,
   };
@@ -121,6 +135,7 @@ export function buildHouse(plan) {
     back: { along: 'x', at: -d / 2, half: w / 2 },
     left: { along: 'z', at: -w / 2, half: d / 2 },
     right: { along: 'z', at: w / 2, half: d / 2 },
+    ...(plan.middle === null ? {} : { middle: { along: 'x', at: plan.middle, half: w / 2, inner: true } }),
   };
   const chink = { pos: [], normal: [], uv: [], index: [] };
   for (const [name, wall] of Object.entries(walls)) {
@@ -134,7 +149,9 @@ export function buildHouse(plan) {
       const r = R * (2 - THICKEST + 2 * (THICKEST - 1) * rnd());
       const butt = k % 2 ? 1 : -1; // комель — то с одного конца, то с другого
       // Бревно перерезано проёмами, сквозь которые проходит его ось.
-      let pieces = [[-reach - (rnd() - 0.5) * 0.06, reach]];
+      // У пятой стены внутри дома брёвна не видны — строим только выпуски за боковыми стенами.
+      const start = -reach - (rnd() - 0.5) * 0.06;
+      let pieces = wall.inner ? [[start, -wall.half + R], [wall.half - R, reach]] : [[start, reach]];
       for (const o of holes) {
         // Проём пропилен по всем брёвнам, которые задевает, и шире на обсаду.
         if (y + r <= o.bottom - LINING || y - r >= o.top + LINING) continue;
