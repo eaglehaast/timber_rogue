@@ -40,9 +40,7 @@ const STEP = 0.25;       // м — шаг колец вдоль бревна
 // Цоколь — кирпичный (кирпич трубы, roof.js) или обшитый досками стоймя (attic.js); PLINTHS — как часто.
 // Обмазанный бут убран (Никита, 2026-11-07: «некрасиво»). Кирпич уходит в землю на SINK, у земли темнее в DAMP раз.
 const PLINTHS = { boards: 1.2, brick: 0.8 };
-// Крыльцо: открытое, под тамбуром или веранда (porch.js) — веса; веранда тянется вдоль бока на VERANDA м,
-// но не дальше, чем позволяют углы (и выпуски пятой стены).
-const PORCHES = { open: 0.45, tambour: 0.3, veranda: 0.25 }, VERANDA = [3.6, 5];
+const TAMBOUR_CHANCE = 0.4;
 // Пятистенок — сруб длиннее, внутри пятая рубленая стена поперёк; снаружи видны её выпуски — колонна торцов
 // посередине боков, как на углу. Окна бока — по обе стороны от неё, не ближе MIDDLE_GAP к её оси.
 const FIVE_WALL_CHANCE = 0.35, MIDDLE_GAP = 0.65;
@@ -100,20 +98,18 @@ export function planHouse(seed) {
   const row = (wall, a, b, n) => Array.from({ length: n }, (_, i) => window(wall, a + ((i + 0.5) * (b - a)) / n));
   const front = w < 5.5 ? 2 : 3;
   const door = pick(['left', 'right']), other = door === 'left' ? 'right' : 'left';
-  // Крыльцо и дверь на боку. Крыльцо не заходит на остатки брёвен соседней стены за углом, у пятистенка — стоит
-  // в задней половине, вплотную к выпускам пятой стены. У избы дверь ближе к улице; веранда — у ближнего
-  // к улице края свободного места, дверь по её середине.
-  const kind = Object.keys(PORCHES)[weighted(Object.values(PORCHES), rnd())];
-  const room = five ? middle - R - 0.1 : d / 2 - 2 * R, length = Math.min(VERANDA[0] + rnd() * (VERANDA[1] - VERANDA[0]), room + d / 2 - 2 * R);
-  const porch = porchWidth(kind, length);
-  const doorAt = five || kind === 'veranda' ? room - porch / 2 : Math.min(d / 4, room - porch / 2);
+  // Остеклённый тамбур на крыльце (porch.js) — у части домов; площадка под ним шире.
+  const tambour = rnd() < TAMBOUR_CHANCE, porch = porchWidth(tambour);
+  // Дверь на боку. У избы — ближе к улице, но крыльцо (с тамбуром — шире) не заходит на остатки брёвен соседней
+  // стены за углом. У пятистенка — в заднюю половину, крыльцо вплотную к выпускам пятой стены.
+  const doorAt = five ? middle - R - 0.1 - porch / 2 : Math.min(d / 4, d / 2 - 2 * R - porch / 2);
   // Окна боков. У избы: у двери — одно ближе к заду, на другом боку — одно-два. У пятистенка — в каждой половине
   // свои: спереди по два, сзади у двери одно (если между крыльцом и углом хватает места), напротив — одно-два.
   const edge = d / 2 - 0.5, behind = doorAt - porch / 2 - 0.1;
   const sides = five
     ? [...row(door, middle + MIDDLE_GAP, edge, 2), ...row(door, -edge, behind, behind + edge > 1.2 ? 1 : 0),
       ...row(other, middle + MIDDLE_GAP, edge, 2), ...row(other, -edge, middle - MIDDLE_GAP, 1 + Math.floor(rnd() * 2))]
-    : [...(kind === 'veranda' ? [] : [window(door, -d / 5)]), ...row(other, -d / 2, d / 2, 1 + Math.floor(rnd() * 2))];
+    : [window(door, -d / 5), ...row(other, -d / 2, d / 2, 1 + Math.floor(rnd() * 2))];
   const openings = [
     ...row('front', -w / 2, w / 2, front),
     ...row('back', -w / 2, w / 2, 1 + Math.floor(rnd() * 2)),
@@ -137,7 +133,7 @@ export function planHouse(seed) {
   return {
     seed, w, d, middle, courses, knee, pitch, openings, windows, parts: PARTS,
     roof: PARTS.has('roof') ? roof : 'tes', carving: PARTS.has('carving') ? carving : null,
-    attic: PARTS.has('attic') && !high ? attic : null, plinth, porch: kind,
+    attic: PARTS.has('attic') && !high ? attic : null, plinth, tambour,
   };
 }
 
@@ -204,7 +200,7 @@ export function buildHouse(plan) {
   // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
   const door = openings.find((o) => o.kind === 'door');
-  const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, kind: plan.porch, tulle: plan.windows.tulle, trim: plan.windows.paint });
+  const porch = buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, tambour: plan.tambour, tulle: plan.windows.tulle, trim: plan.windows.paint });
   const house = new THREE.Group().add(srub, chinks, boards, windows, porch);
   if (plan.plinth === 'brick') {
     const brick = new THREE.Mesh(brickPlinth(w / 2 + R, d / 2 + R, rnd), plinthBrick);
