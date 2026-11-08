@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { generator } from './random.js';
-import { Planks, boardMaterials, TONES } from './attic.js';
+import { Planks, boardMaterials, TONES, GLOOM } from './attic.js';
 import { Faces, TULLES, tulleMaterial, PAINTS as TRIM_PAINTS } from './window.js';
 import { trimColor } from './carving.js';
 import { buildCover } from './roof.js';
@@ -21,7 +21,8 @@ const BOARD_W = 0.1, GAP = 0.006;              // доска и щель меж�
 const SIDE = { thick: 0.022, above: 0.05 };    // обшивка боков лестницы: толщина, выше носков ступеней на
 const POST = 0.11, RAIL = { height: 0.9, size: 0.06, both: 0.12 }; // столб; перила, доля крылец с перилами с двух сторон
 const BALUSTER = 0.2;
-const ROOF_BOARD = 0.14;                       // м — доска тёса на крыше тамбура                         // м — шаг балясин
+const ROOF_BOARD = 0.14;
+const DUSK = 0.06; // сумрак сеней — от внутренней стороны стенок тамбура, за тюлем                       // м — доска тёса на крыше тамбура                         // м — шаг балясин
 const DOOR_INSET = 0.08;                      // м — дверь утоплена в проём от лица стены
 // Обналичка двери: ширина боковых досок и верхней, заход за край проёма, отступ от лица стены (поверх брёвен).
 const TRIM = { side: 0.12, top: 0.15, overlap: 0.05, out: 0.02 };
@@ -106,25 +107,25 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim:
 
   // Перила — у каждого крыльца (в таких домах живут старики): обычно с одной стороны, изредка с двух.
   // Столбы у края площадки и внизу лестницы, брус по площадке от стены и по лестнице вниз, между ними балясины.
+  // Столбы, брус и балясины заподлицо снаружи с обшивкой бока лестницы (и со стенкой тамбура), брус по лестнице
+  // параллелен носкам ступеней.
   // С тамбуром площадка внутри, перила — только у лестницы, с обеих сторон: первый столб у передней стенки тамбура.
   const sides = tambour || rnd() < RAIL.both ? [-1, 1] : [rnd() < 0.5 ? -1 : 1];
   const [u0, v0, u1, v1] = cell('baluster', Math.floor(rnd() * KIT.baluster.count)), uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
   const newel = Math.floor(rnd() * KIT.newel.count);
   const floor = (q) => (q < L ? top : nose(q) + SIDE.above);
-  const railTop = top + RAIL.height, railLow = nose(qLow) + RAIL.height, r = RAIL.size;
+  const railAt = (q) => nose(q) + RAIL.height, railTop = railAt(L), railLow = railAt(qLow), r = RAIL.size;
   for (const sign of sides) {
-    const a = sign * (w + SIDE.thick + POST / 2);
+    const edge = w + SIDE.thick, a = sign * (edge - r / 2);
     const first = tambour ? L + THICK + POST / 2 : L - POST / 2;
-    const railAt = (q) => railTop + ((q - L + POST) / (qLow - L + POST)) * (railLow - railTop);
-    newelPost(posts, newel, P(a, first, 0), s, n, railAt(first) + 0.12);
-    newelPost(posts, newel, P(a, qLow, 0), s, n, railLow + 0.12);
+    for (const q of [first, qLow]) newelPost(posts, newel, P(sign * (edge - POST / 2), q, 0), s, n, railAt(q) + 0.12);
     const frame = plane(P(a - r / 2, 0, 0), n, up), from = tambour ? first : L - POST;
     if (!tambour) rails.add(rect(0, L - POST, railTop - r, railTop), frame, s, [1, 0], r, rnd);
-    rails.add([[from, railAt(from)], [qLow, railLow], [qLow, railLow - r], [from, railAt(from) - r]], frame, s, dir(qLow - L + POST, railLow - railTop), r, rnd);
+    rails.add([[from, railAt(from)], [qLow, railLow], [qLow, railLow - r], [from, railAt(from) - r]], frame, s, dir(qLow - L, railLow - railTop), r, rnd);
     // Балясины от настила (на лестнице — от обшивки бока) до бруса: две картинки крест-накрест, ширина — четверть высоты.
     for (let q = (tambour ? first : 0) + BALUSTER; q < qLow - POST; q += BALUSTER) {
       if (Math.abs(q - first) < POST) continue; // столб
-      const y0 = floor(q), y1 = (q < L ? railTop : nose(q) + RAIL.height) - r, half = (y1 - y0) / 8;
+      const y0 = floor(q), y1 = (q < L ? railTop : railAt(q)) - r, half = (y1 - y0) / 8;
       balusters.face([P(a - half, q, y0), P(a + half, q, y0), P(a + half, q, y1), P(a - half, q, y1)].map((p) => p.toArray()), n.toArray(), uv);
       balusters.face([P(a, q - half, y0), P(a, q + half, y0), P(a, q + half, y1), P(a, q - half, y1)].map((p) => p.toArray()), s.toArray(), uv);
     }
@@ -135,7 +136,7 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim:
     const { skirt, glaze, rise, over } = TAMBOUR, high = top + TAMBOUR.top, band = [top + skirt, top + skirt + glaze];
     const front = L, depth = front + THICK, slope = rise / depth;
     const roofAt = (q) => high + rise - q * slope;
-    const glass = new Faces(), curtains = new Faces();
+    const glass = new Faces(), curtains = new Faces(), gloom = new Faces();
     const kind = Math.floor(rnd() * KIT.veranda.count), [x, y, cw, ch, pw, ph] = KIT.veranda.rects[kind];
     const [cu0, cv0, cu1, cv1] = cell('veranda', kind), size = 768;
     const win = [cu0 + (x / size) * (cu1 - cu0), cv1 - ((y + ch) / size) * (cv1 - cv0), cu0 + ((x + cw) / size) * (cu1 - cu0), cv1 - (y / size) * (cv1 - cv0)];
@@ -160,6 +161,9 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim:
         painted.add([[q0, band[1]], [q1, band[1]], [q1, roofAt(q1)], [q0, roofAt(q0)]], frame, out, [0, 1], wd - GAP, rnd);
       }
       glazing(depth, (t, h, d) => P(sign * (W + THICK + d), t, band[0] + h * glaze), out);
+      // Сумрак сеней за тюлем: в щелях между досками и за стеклом — темнота, как в окнах дома.
+      const g = sign * (W - DUSK);
+      gloom.face([P(g, 0, 0), P(g, depth, 0), P(g, depth, roofAt(depth)), P(g, 0, roofAt(0))].map((p) => p.toArray()), out.toArray());
     }
     // Передняя стенка: доски шире на толщину с каждого края — закрывают торцы боковых; в середине дверь.
     const face = plane(P(0, front, 0), s, up), half = TAMBOUR.door / 2, edge = W + THICK;
@@ -168,6 +172,7 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim:
       glazing(a1 - a0, (t, h, d) => P(a0 + t, front + THICK + d, band[0] + h * glaze), n);
     }
     row(painted, face, n, band[1], high, -edge, edge, false);
+    gloom.face([P(-W, front - DUSK, top), P(W, front - DUSK, top), P(W, front - DUSK, high), P(-W, front - DUSK, high)].map((p) => p.toArray()), n.toArray());
     kitDoor(front - 0.01, -half, half, top, band[1]);
     // Крыша — тёс вдоль ската, от стены дома до свеса над передней стенкой, по нему шифер (roof.js, один скат).
     const roof = new Planks(boardMaterials(TONES.roof)), length = (depth + over) * Math.hypot(1, slope);
@@ -181,7 +186,7 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim:
     const slate = buildCover('slate', { ridge: roofAt(0), pitch: Math.atan(slope), length, zEnd: reach, sides: [1] }, rnd);
     slate.matrix.makeBasis(n, up, n.clone().cross(up)).setPosition(P(0, 0, 0));
     slate.matrixAutoUpdate = false;
-    return [...roof.meshes(), slate, glass.mesh(verandaMaterials[trimPaint]), curtains.mesh(tulleMaterial)];
+    return [...roof.meshes(), slate, glass.mesh(verandaMaterials[trimPaint]), curtains.mesh(tulleMaterial), gloom.mesh(GLOOM)];
   }
 
   // Дверь утоплена в проём; обсада проёма от лица стены до двери.

@@ -19,7 +19,7 @@ export const TONES = {                          // линейные цвета �
   roof: new THREE.Color(0.2, 0.19, 0.18),     // тёс крыши — серый, выбеленный солнцем и дождём
 };
 // Чердак внутри — сумрак: за досками фронтона тёмная плоскость, чтобы в щелях между досками было темно, а не небо.
-const GLOOM = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.012, 0.01, 0.009) });
+export const GLOOM = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.012, 0.01, 0.009) });
 const GABLE_ANGLE = Math.PI / 4;         // доски фронтона идут под 45° и сходятся «ёлочкой» на середине
 const EAVE = 0.45, GABLE_OVER = 0.2;     // м — свес крыши за боковые стены и за фронтоны
 const ROOF_BOARD = 0.14, BARGE = 0.2;    // м — ширина доски тёса и причелины
