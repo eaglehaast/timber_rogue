@@ -17,6 +17,7 @@ const m = (px, axis) => (px / KIT.px[axis]) * SIZE[axis];
 export const PANE = [m(OX1 - OX0, 0), m(OY1 - OY0, 1)];
 export const TRIM_ABOVE = m(OY0 - FY0, 1); // рама над проёмом (кокошник)
 export const TRIM_BELOW = m(FY1 - OY1, 1); // рама под проёмом
+export const TRIM_WIDTH = m(FX1 - FX0, 0);  // рама во всю ширину
 
 // Краски наличников: голубая, синяя, красная, светло-жёлтая и белая; PAINT_ODDS — как часто каждая выпадает.
 // Голубая как на референсе — чаще всего; белая — редко: рамы окон и так белые (Никита, 2026-11-07).

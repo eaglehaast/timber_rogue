@@ -19,11 +19,11 @@ import { TRIM_ROOM, ABOVE_FRIEZE } from './carving.js';
 // Торцы — круги из набора house-endgrain.jpg (20 штук 5 × 4); где в клетке центр круга и его радиус,
 // записано в house-endgrain.json.
 const LOG_ALONG = 1.5, LOG_AROUND = 0.8;
-const R = 0.13;          // м — средний радиус бревна
-const COURSE = 1.7 * R;  // м — шаг венцов: бревно лежит в пазу нижнего, венцы ниже двух радиусов
+export const R = 0.13;          // м — средний радиус бревна
+export const COURSE = 1.7 * R;  // м — шаг венцов: бревно лежит в пазу нижнего, венцы ниже двух радиусов
 const OVERHANG = 0.3;    // м — остаток бревна за углом, от оси поперечной стены
-const PLINTH = 0.45;     // м — высота цоколя
-const THICKEST = 1.08;   // радиус бревна — от (2 − THICKEST)·R до THICKEST·R
+export const PLINTH = 0.45;     // м — высота цоколя
+export const THICKEST = 1.08;   // радиус бревна — от (2 − THICKEST)·R до THICKEST·R
 // Боковые стены лежат на цоколе, фасадные (front, back) — на полбревна ниже.
 // Пятая стена пятистенка (middle) — поперечная, рублена заодно с фасадом: на его высоте.
 const LIFT = { front: -COURSE / 2, back: -COURSE / 2, middle: -COURSE / 2, left: 0, right: 0 };

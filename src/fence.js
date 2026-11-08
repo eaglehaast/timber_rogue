@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { tiles } from './surface.js';
+import { tiles, merge } from './surface.js';
 import { generator } from './random.js';
 
 // Забор по периметру участка W × D метров с центром в начале координат: штакетник со всех сторон,
-// к дороге (z = +D/2) — с калиткой. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
+// к дороге (z = +D/2) — с калиткой и воротами. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
 // чуть видно улицу, а солнце кладёт полосы на траву. Столбы — бруски, крашеные так же.
 // Вид забора Никита подобрал на глаз клавишами (2026-11-01) и пока живёт с ним: высота 1,8 м, щели 3 см,
 // доски и столбы по 10 см, забор ветхий, краска как тёмное бревно, тень лёгкая.
@@ -70,19 +70,6 @@ function block(sx, sy, sz, [along, up]) {
 // Столб — брусок со стороной w; картинка доски ложится на грань в том же масштабе, что на доску.
 const post = (w, h) => block(w, h, w, [w / BOARD, h / BOARD_SPAN]);
 
-// Детали одной картинки сливаем в одну геометрию: тысяча досок — один вызов отрисовки.
-function merge(parts) {
-  parts = parts.map((g) => (g.index ? g.toNonIndexed() : g));
-  const merged = new THREE.BufferGeometry();
-  for (const name of ['position', 'normal', 'uv']) {
-    const arrays = parts.map((g) => g.attributes[name].array);
-    const data = new Float32Array(arrays.reduce((n, a) => n + a.length, 0));
-    arrays.reduce((at, a) => (data.set(a, at), at + a.length), 0);
-    merged.setAttribute(name, new THREE.BufferAttribute(data, parts[0].attributes[name].itemSize));
-  }
-  return merged;
-}
-
 // Сторона забора — отрезок от a до b по земле; деталь ставим по координате s вдоль него,
 // со сдвигом off наружу участка и наклоном tilt вдоль стороны.
 function side(a, b) {
@@ -105,50 +92,78 @@ function side(a, b) {
 // прожилины легли между ними под уклон, а доски на прожилинах повторяют этот уклон и крен. Сами доски
 // прибиты не по линейке: чуть вкось, чуть выше-ниже, чуть разной длины. Угловые столбы держат две стороны
 // и стоят ровно. Всё это — доли градуса и сантиметры, умноженные на возраст age: при нуле забор как новый.
-const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до земли, у калитки — выше
+//
+// Проёмы openings — { at, width, leaves } вдоль стороны: калитка (одна створка) и ворота (две). По краям проёма
+// столбы толще и выше, створки — те же доски на прожилинах, ниже забора и приподняты над землёй, каждую держит
+// укосина из угла в угол (от нижнего угла у петель к верхнему у притвора). Створки ворот сходятся посередине без столба.
+// Сквозь забор проходит газовая труба (gas.js) в местах passes: там нет одной доски, а столб, если пришёлся
+// на трубу, поставлен в сторону.
+const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до земли, у створок — выше
 const DEG = Math.PI / 180;
-function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, rnd, put, gate) {
+const STEP = 2.5, PASS = 0.2;      // м: шаг столбов; столб не ближе PASS к трубе
+function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, rnd, put, openings = [], passes = []) {
   const wobble = (size) => (rnd() + rnd() - 1) * size * age; // чаще около нуля, изредка до ±size
-  const posts = [];
-  for (let s = 0; s <= length + 0.01; s += 2.5) if (gate === undefined || Math.abs(s - gate) >= 0.8) posts.push(s);
-  if (gate !== undefined) posts.push(gate - 0.6, gate + 0.6);
+  const posts = [], seams = [], thick = new Map();
+  for (let s = 0; s <= length + 0.01; s += STEP) {
+    if (openings.some((o) => Math.abs(s - o.at) < o.width / 2 + 0.2)) continue;
+    const pipe = passes.find((p) => Math.abs(s - p) < PASS);
+    posts.push(pipe === undefined ? s : pipe + Math.sign(s - pipe || 1) * PASS);
+  }
+  for (const o of openings) {
+    for (const s of [o.at - o.width / 2, o.at + o.width / 2]) {
+      if (!posts.some((p) => Math.abs(p - s) < 0.01)) posts.push(s);
+      thick.set(Math.round(s * 100), Math.max(thick.get(Math.round(s * 100)) ?? 0, o.leaves > 1 ? 1.5 : 1.2));
+    }
+    if (o.leaves > 1) seams.push(o.at), posts.push(o.at);
+  }
   posts.sort((a, b) => a - b);
   const corner = (s) => s < 0.01 || s > length - 0.01;
-  const sag = posts.map((s) => (corner(s) ? 0 : wobble(0.04)));       // м: просел (−) или выперло (+)
-  const lean = posts.map((s) => (corner(s) ? 0 : wobble(2.5 * DEG)));  // крен поперёк забора
+  const fixed = (s) => corner(s) || seams.includes(s);
+  const sag = posts.map((s) => (fixed(s) ? 0 : wobble(0.04)));       // м: просел (−) или выперло (+)
+  const lean = posts.map((s) => (fixed(s) ? 0 : wobble(2.5 * DEG)));  // крен поперёк забора
   const r = postWidth / 2, rails = r + 0.026, front = rails + 0.037;
   const shoulder = LIFT + height - boardWidth / 2;
   posts.forEach((s, i) => {
-    const atGate = gate !== undefined && Math.abs(s - gate) < 0.7;
-    const geometry = atGate ? post(postWidth * 1.2, shoulder + 0.25) : post(postWidth, shoulder);
+    if (seams.includes(s)) return;
+    const scale = thick.get(Math.round(s * 100));
+    const geometry = scale ? post(postWidth * scale, shoulder + 0.25) : post(postWidth, shoulder);
     put('post', geometry.applyMatrix4(place(s, 0, sag[i], wobble(1.5 * DEG), lean[i])));
   });
   for (let i = 1; i < posts.length; i++) {
-    const a = posts[i - 1], span = posts[i] - a, inGate = gate !== undefined && a < gate && gate < posts[i];
+    const a = posts[i - 1], span = posts[i] - a, mid = a + span / 2;
+    const leaf = openings.find((o) => Math.abs(mid - o.at) < o.width / 2);
     const slope = (sag[i] - sag[i - 1]) / span, tilt = Math.atan(slope);
     const height0 = (s) => sag[i - 1] + slope * (s - a); // насколько сдвинулся пролёт у места s
     const lean0 = (s) => lean[i - 1] + (lean[i] - lean[i - 1]) * (s - a) / span;
     // Прожилину крепят к столбу на высоте y — с креном столба она уходит наружу на y·крен.
     for (const y of [0.3, height - 0.45]) {
-      const mid = a + span / 2, tip = lean0(mid);
+      const tip = lean0(mid);
       put('rail', block(span, 0.08, 0.05, [span / RAIL_SPAN, 1]).applyMatrix4(place(mid, rails + y * tip, y + height0(mid), tilt, tip)));
     }
     const n = Math.max(1, Math.round(span / (boardWidth + gap))), step = span / n;
     for (let k = 0; k < n; k++) {
       const s = a + (k + 0.5) * step + wobble(0.006);
-      const h = (inGate ? height - 0.17 : height) + wobble(0.012);
-      const y = (inGate ? GATE_LIFT : LIFT) + height0(s) + wobble(0.012);
+      if (passes.some((p) => Math.abs(s - p) < step / 2)) continue;
+      const h = (leaf ? height - 0.17 : height) + wobble(0.012);
+      const y = (leaf ? GATE_LIFT : LIFT) + height0(s) + wobble(0.012);
       put('board', board(boardWidth, h, 0.022, rnd())
         .applyMatrix4(place(s, front, y, tilt + wobble(1.2 * DEG), lean0(s) + wobble(0.6 * DEG))));
     }
+    if (!leaf) continue;
+    // Укосина створки: у правой створки ворот петли справа — укосина зеркальна.
+    const across = span - 0.3, up = height - 0.8, hand = mid > leaf.at + 0.01 ? -1 : 1;
+    put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1])
+      .applyMatrix4(place(mid - hand * across / 2, rails, 0.34 + height0(mid), -hand * Math.atan2(across, up))));
   }
-  if (gate === undefined) return;
-  // Доски калитки держит укосина из угла в угол.
-  const across = 0.9, up = height - 0.8;
-  put('rail', block(0.05, Math.hypot(across, up), 0.08, [1, 1]).applyMatrix4(place(gate - across / 2, rails, 0.34, -Math.atan2(across, up))));
 }
 
-export function makeFence() {
+// Калитка и ворота — со стороны дороги, x вдоль неё (от середины двора). Ворота — две створки по 1,7 м
+// (Никита, 2026-11-08: въезд предусматривают и без машины — трактор впустить), рядом с калиткой, на общем столбе.
+export const WICKET = { at: 8, width: 1.2, leaves: 1 };
+export const GATES = { at: 8.6 + 1.7, width: 3.4, leaves: 2 };
+
+// passes — где сквозь забор со стороны дороги проходит труба (x, как у ворот).
+export function makeFence({ passes = [] } = {}) {
   const root = new THREE.Group();
   const rnd = generator(7);
   const parts = { board: [], post: [], rail: [] };
@@ -156,7 +171,7 @@ export function makeFence() {
   const put = (name, geometry) => parts[name][Math.floor(rnd() * KINDS)].push(geometry);
   const x = YARD.w / 2, z = YARD.d / 2;
   // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
-  picket(side({ x: -x, z }, { x, z }), LOOK, rnd, put, x + 8);
+  picket(side({ x: -x, z }, { x, z }), LOOK, rnd, put, [WICKET, GATES].map((o) => ({ ...o, at: o.at + x })), passes.map((p) => p + x));
   picket(side({ x, z }, { x, z: -z }), LOOK, rnd, put);
   picket(side({ x, z: -z }, { x: -x, z: -z }), LOOK, rnd, put);
   picket(side({ x: -x, z: -z }, { x: -x, z }), LOOK, rnd, put);

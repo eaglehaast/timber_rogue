@@ -81,3 +81,16 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
   material.customProgramCacheKey = () => key;
   return material;
 }
+
+// Детали одной картинки сливаем в одну геометрию: тысяча досок — один вызов отрисовки.
+export function merge(parts) {
+  parts = parts.map((g) => (g.index ? g.toNonIndexed() : g));
+  const merged = new THREE.BufferGeometry();
+  for (const name of ['position', 'normal', 'uv']) {
+    const arrays = parts.map((g) => g.attributes[name].array);
+    const data = new Float32Array(arrays.reduce((n, a) => n + a.length, 0));
+    arrays.reduce((at, a) => (data.set(a, at), at + a.length), 0);
+    merged.setAttribute(name, new THREE.BufferAttribute(data, parts[0].attributes[name].itemSize));
+  }
+  return merged;
+}

@@ -1,8 +1,11 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { planHouse, buildHouse } from './house.js';
+import { makeFence, YARD, GATES } from './fence.js';
+import { planGas, buildGas } from './gas.js';
+import { castShadows } from './sky.js';
 
-// Стенд дома отдельно от игры: сруб на лужайке, солнце, камера крутится мышью вокруг дома.
+// Стенд дома отдельно от игры: сруб во дворе за забором, газовая труба с улицы, солнце; камера крутится мышью вокруг дома.
 // R — новый дом (новое зерно), колесо — ближе и дальше.
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
@@ -16,29 +19,38 @@ const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 300);
 
 scene.add(new THREE.HemisphereLight(0xb4ccec, 0x8f8a66, 1.7));
 const sun = new THREE.DirectionalLight(0xffe2b8, 2.2);
-sun.position.set(-8, 14, 10);
+sun.position.set(-12, 21, 15);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -10, right: 10, top: 10, bottom: -10, near: 1, far: 40 });
+Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, near: 1, far: 60 });
 sun.shadow.bias = -0.0005;
 scene.add(sun);
 
 // Лужайка — та же акварельная трава, что в игре (20 плиток по 2 м).
 const [grass] = tiles(['assets/textures/grass-clover.jpg']);
-grass.repeat.set(30, 30);
-const lawn = new THREE.Mesh(new THREE.PlaneGeometry(60, 60).rotateX(-Math.PI / 2), soften(new THREE.MeshLambertMaterial({ map: grass }), {
+grass.repeat.set(80, 80);
+const lawn = new THREE.Mesh(new THREE.PlaneGeometry(160, 160).rotateX(-Math.PI / 2), soften(new THREE.MeshLambertMaterial({ map: grass }), {
   contrast: 0.85, saturation: 0.65, scales: [0.13, 0.5], low: [0.8, 0.84, 0.82], high: [0.98, 0.98, 0.95], cells: [5, 4],
 }));
 lawn.receiveShadow = true;
 scene.add(lawn);
 
-let house = null;
+// Дом стоит в дворе фасадом к улице, в FRONT от забора, боком с крыльцом к воротам — в ASIDE от них.
+// Мир стенда — от середины дома: двор с забором и газом сдвинут так, чтобы дом оказался в нуле.
+const FRONT = 5, ASIDE = 5;
+let house = null, yard = null, layout = null;
 const label = document.getElementById('seed');
 function rebuild(seed) {
-  if (house) scene.remove(house);
+  if (house) scene.remove(house, yard);
   const plan = planHouse(seed);
   house = buildHouse(plan);
-  scene.add(house);
+  const door = plan.openings.find((o) => o.kind === 'door').wall === 'right' ? 1 : -1;
+  const at = { x: GATES.at - door * (plan.w / 2 + ASIDE), z: YARD.d / 2 - FRONT - plan.d / 2 };
+  const gas = planGas(plan, at, { fence: YARD.d / 2, gate: GATES.at });
+  yard = new THREE.Group().add(makeFence({ passes: [gas.branch.x] }), buildGas(gas));
+  yard.position.set(-at.x, 0, -at.z);
+  layout = { at, gas };
+  scene.add(house, yard);
   label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов`;
 }
 rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
@@ -71,8 +83,9 @@ function frame() {
   camera.position.set(Math.sin(view.yaw) * Math.cos(view.pitch), Math.sin(view.pitch), Math.cos(view.yaw) * Math.cos(view.pitch))
     .multiplyScalar(view.dist).add(view.target);
   camera.lookAt(view.target);
+  castShadows(renderer); // свет облаков: облаков на стенде нет — солнце чистое
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
 frame();
-window.stand = { view, rebuild, renderer };
+window.stand = { view, rebuild, renderer, get layout() { return layout; } };
