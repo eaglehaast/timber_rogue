@@ -6,23 +6,22 @@ import { height } from './terrain.js';
 
 // Грунтовая улица перед двором по каталогу ChatGPT «Грунтовая улица» (R01–R06, R09; 2026-11-08):
 // одна полоса утрамбованной земли вдоль забора с воротами — за опорами и обочиной, — в поперечнике чуть выпуклая.
-// Край не резкий: на полосе EDGE вокруг края земля рвано тает в траву по маске. По полотну местами две слабые
-// колеи. Перед воротами край улицы раскрывается веером съезда, сбоку к калитке подходит узкая тропка.
+// Край не резкий: на полосе EDGE вокруг края земля рвано тает в траву по маске. По полотну две колеи. Перед воротами край улицы раскрывается веером съезда, сбоку к калитке подходит узкая тропка.
 // Канава с трубой под съездом, мокрая земля и лужи — следующие шаги.
 //
-// Картинки (заказ ChatGPT, tools/road.py): road-base — грунт, плитка BASE метров; road-edge — маска края:
-// вдоль EDGE_ALONG метров, поперёк — полоса EDGE, снизу земля (белое), сверху трава (чёрное); road-rut — маска следа
-// поперёк RUT.width. Пока на их местах заглушки тех же форматов.
+// Картинки — чернозём ChatGPT (tools/road.py): road-base — 8 плиток грунта по BASE метров с общими краями, каждая
+// клетка полотна берёт свою; road-edge — маска края: вдоль EDGE_ALONG метров, поперёк — полоса EDGE, снизу земля
+// (белое), сверху трава (чёрное); road-rut — маска следа: вдоль RUT.along метров, поперёк RUT.width.
 const ROAD = {
   near: 2.8,       // м от забора до ближнего края: опоры на 2,2 м и обочина
   width: 3.5,      // м утрамбованной полосы
   crown: 0.04,     // м подъёма к середине
   reach: 60,       // м улицы в обе стороны от середины двора
 };
-const EDGE = 1, EDGE_ALONG = 4, BASE = 4;   // м: полоса тающего края; длина маски края; сторона плитки грунта
+const EDGE = 1, EDGE_ALONG = 16, BASE = 4;  // м: полоса тающего края; длина маски края; сторона плитки грунта
 const LIFT = 0.01;                          // м над землёй, чтобы не мерцать с ней
 const MESH = 0.15;                          // м: шаг вершин поперёк ленты — как у сетки земли, чтобы лента шла по кочкам
-const RUT = { gauge: 1.45, width: 0.5, strength: [1, 0.6] }; // колея: между следами; полоса маски; сила следов
+const RUT = { gauge: 1.45, width: 0.5, along: 12, shift: 5 }; // колея: между следами; полоса и длина маски; второй след сдвинут по ней
 // Съезд: шире ворот на margin с каждой стороны, к улице раскрывается ещё на flare; заходит во двор на inside.
 const DRIVE = { margin: 0.3, flare: 1, inside: 0.5 };
 const PATH = { half: 0.4, edge: 0.5 };      // тропка к калитке: полуширина, полоса края
@@ -35,15 +34,15 @@ for (const mask of [edge, rut]) {
 }
 const flat = { transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 };
 const ground = soften(new THREE.MeshLambertMaterial({ map: base, alphaMap: edge, ...flat }), {
-  contrast: 0.9, saturation: 0.8, scales: [0.13, 0.5], low: [0.92, 0.92, 0.9], high: [1.02, 1.02, 1], cells: [1, 1],
+  contrast: 0.9, saturation: 0.8, scales: [0.13, 0.5], low: [0.92, 0.92, 0.9], high: [1.02, 1.02, 1], cells: [4, 2],
 });
-const track = new THREE.MeshLambertMaterial({ color: 0x5a5046, alphaMap: rut, vertexColors: true, ...flat });
+const track = new THREE.MeshLambertMaterial({ color: 0x3f362f, alphaMap: rut, ...flat });
 
 // Лента по земле вдоль середины points ({x, z} через равные шаги): полотно полуширины half(i), высота — surface(x, z).
 // По краю — полоса band: в ней маска идёт от земли к траве (uv1.y от 0 до 1), внутри полотна — земля целиком.
-// across — маска поперёк всей ленты (колея). alpha(s) — сила по длине (колея местами слабее и рвётся).
-function ribbon(points, half, surface, { band, across = false, alpha }) {
-  const pos = [], uv = [], uv1 = [], color = [], index = [];
+// across — маска поперёк всей ленты (колея). Вдоль маска идёт по along метров, начиная с места from на ней.
+function ribbon(points, half, surface, { band, across = false, along = EDGE_ALONG, from = 0 }) {
+  const pos = [], uv = [], uv1 = [], index = [];
   const inside = Math.max(5, Math.ceil((2 * Math.max(...points.map((_, i) => half(i))) - band) / MESH) + 1);
   let s = 0;
   points.forEach((p, i) => {
@@ -58,8 +57,7 @@ function ribbon(points, half, surface, { band, across = false, alpha }) {
       const x = p.x + n.x * d, z = p.z + n.y * d;
       pos.push(x, surface(x, z), z);
       uv.push(x / BASE, z / BASE);
-      uv1.push(s / EDGE_ALONG, across ? (d + outer) / (2 * outer) : (Math.abs(d) - inner) / band);
-      color.push(1, 1, 1, alpha ? alpha(s) : 1);
+      uv1.push((from + s) / along, across ? (d + outer) / (2 * outer) : (Math.abs(d) - inner) / band);
     });
     if (!i) return;
     const k = offsets.length, a0 = (i - 1) * k, a1 = i * k;
@@ -69,7 +67,6 @@ function ribbon(points, half, surface, { band, across = false, alpha }) {
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geometry.setAttribute('uv1', new THREE.Float32BufferAttribute(uv1, 2));
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(color, 4));
   geometry.setIndex(index);
   geometry.computeVertexNormals();
   return geometry;
@@ -122,12 +119,13 @@ export function buildRoad({ seed, fence }) {
   const surface = (x, z) => height(x, z) + LIFT + ROAD.crown * Math.max(0, 1 - ((z - center) / half) ** 2);
   add(ribbon(along(-ROAD.reach, ROAD.reach, 0.5, (x) => ({ x, z: center })), () => half, surface, { band: EDGE }), ground, 1);
 
-  // Колея: два следа по RUT.gauge, видны местами — сила плавно гуляет по длине и рвётся; второй след слабее.
-  RUT.strength.forEach((strength, k) => {
-    const phase = [rnd() * 10, rnd() * 10, rnd() * 10];
-    const alpha = (s) => strength * THREE.MathUtils.clamp(0.55 + 0.45 * Math.sin(s / 6.5 + phase[0]) + 0.35 * Math.sin(s / 2.1 + phase[1]) + 0.2 * Math.sin(s / 0.9 + phase[2]), 0, 1);
-    const z = center + (k ? 1 : -1) * RUT.gauge / 2;
-    add(ribbon(along(-ROAD.reach, ROAD.reach, 0.5, (x) => ({ x, z })), () => RUT.width / 2, (x, z) => surface(x, z) + 0.002, { band: 0, across: true, alpha }), track, 2);
+  // Колея: два следа по RUT.gauge; где след ярче, где бледнее и где рвётся — нарисовано в маске, у второго следа
+  // она сдвинута, чтобы следы не повторяли друг друга. С какого места маски начать — своё у каждой улицы.
+  const start = rnd() * RUT.along;
+  [-1, 1].forEach((side, k) => {
+    const z = center + side * RUT.gauge / 2;
+    add(ribbon(along(-ROAD.reach, ROAD.reach, 0.5, (x) => ({ x, z })), () => RUT.width / 2, (x, z) => surface(x, z) + 0.002,
+      { band: 0, across: true, along: RUT.along, from: start + k * RUT.shift }), track, 2);
   });
 
   const drive = along(from, center, MESH, (z) => ({ x: GATES.at, z }));
