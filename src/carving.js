@@ -16,6 +16,8 @@ const TILE = 4 * HEIGHT;
 // Подзор бока вешаем, только если он тоже не доходит до наличников этой стены на GAP.
 const FRIEZE_UP = 0.1, GAP = 0.06;
 export const TRIM_ROOM = HEIGHT - FRIEZE_UP + GAP;
+// Окно во фронтоне начинается (низом наличника) не ниже чем на ABOVE_FRIEZE над низом фронтона.
+export const ABOVE_FRIEZE = FRIEZE_UP + GAP;
 const SHAPES = await (await fetch('assets/textures/house-carving.json')).json();
 // Чердачное окно — по центру фронтона, серединой на RISE высоты фронтона (как на избах-образцах: чуть ниже
 // середины), но не выше чем на UNDER под причелинами над его углами и не ниже SILL над фасадной стеной.

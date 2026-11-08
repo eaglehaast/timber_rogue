@@ -5,8 +5,8 @@ import { KIT } from './kit.js';
 import { buildBoards } from './attic.js';
 import { brickMaterial, BRICK_TILE } from './roof.js';
 import { buildPorch, porchWidth } from './porch.js';
-import { PANE, TRIM_ABOVE, PAINT_ODDS, BLUES, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
-import { TRIM_ROOM } from './carving.js';
+import { PANE, TRIM_ABOVE, TRIM_BELOW, PAINT_ODDS, BLUES, PATTERNS, TULLES, LINING, buildWindows } from './window.js';
+import { TRIM_ROOM, ABOVE_FRIEZE } from './carving.js';
 
 // Сруб избы. Брёвна лежат венцами: продольные стены (фасад и зад) и поперечные (бока) чередуются,
 // фасадные сидят на полбревна ниже боковых. На углах брёвна врублены «в чашу с остатком»: каждое выходит за угол
@@ -44,8 +44,10 @@ const TAMBOUR_CHANCE = 0.4;
 // Пятистенок — сруб длиннее, внутри пятая рубленая стена поперёк; снаружи видны её выпуски — колонна торцов
 // посередине боков, как на углу. Окна бока — по обе стороны от неё, не ближе MIDDLE_GAP к её оси.
 const FIVE_WALL_CHANCE = 0.35, MIDDLE_GAP = 0.65;
-// Высокий сруб: над окнами ещё KNEE венцов, крыша поднята на 1,1–1,5 м — наверху жилая комната под скатами
-// с подрезанным потолком (вместо чердака). Окна остаются внизу, на прежней высоте.
+// Высокий сруб: боковые стены выше на KNEE венцов, крыша поднята на 1,1–1,5 м — наверху жилая комната под
+// скатами с подрезанным потолком. Фасад и зад рублены во всю ширину только до прежнего верха: выше от них
+// остаются лишь углы, а между углами — дощатый фронтон, опущенный до самого фриза. В нём обычное окно
+// с наличником (вместо чердачного), и фриз — перемычка между брёвнами и досками.
 const HIGH_CHANCE = 0.25, KNEE = [5, 7];
 const SINK = 0.05, DAMP = 0.6;
 
@@ -80,11 +82,12 @@ export function planHouse(seed) {
   const middle = five ? Math.round((rnd() - 0.5) * 8) / 10 : null;
   // Над окнами — не меньше трёх венцов: под фронтоном висит резной фриз, наличник не должен в него упираться.
   const high = rnd() < HIGH_CHANCE;
-  const courses = 12 + Math.floor(rnd() * 3) + (high ? KNEE[0] + Math.floor(rnd() * (KNEE[1] - KNEE[0] + 1)) : 0);
+  const low = 12 + Math.floor(rnd() * 3), knee = high ? KNEE[0] + Math.floor(rnd() * (KNEE[1] - KNEE[0] + 1)) : 0;
+  const courses = low + knee, gable = 2 * R + (low - 1) * COURSE - COURSE / 2; // низ фронтона над цоколем
   const pitch = THREE.MathUtils.degToRad(38 + 8 * rnd());
   // Низ окна — 0,95 м над цоколем, а в низком срубе ниже: кокошник наличника не должен доставать до резного фриза
   // под фронтоном (carving.js: TRIM_ROOM — сколько оставить под верхом фасадной стены).
-  const sill = Math.min(0.95, 2 * R + (courses - 1) * COURSE - COURSE / 2 - TRIM_ROOM - TRIM_ABOVE - PANE[1]);
+  const sill = Math.min(0.95, gable - TRIM_ROOM - TRIM_ABOVE - PANE[1]);
   // Окно садится на ближайший венец не выше sill.
   const window = (wall, at) => {
     const bottom = onCourse(wall, Math.floor((sill - onCourse(wall, 0)) / COURSE));
@@ -112,6 +115,11 @@ export function planHouse(seed) {
     // Нижнее бревно под дверью остаётся порогом, верх двери — у стыка венцов около 2 м: бревно над ней цело.
     { kind: 'door', wall: door, at: doorAt, width: 0.9, bottom: onCourse(door, 0), top: Math.round((2.0 + LINING) / COURSE) * COURSE - LINING - 0.015, porch },
     ...sides,
+    // Окна верхней комнаты высокого сруба — во фронтонах, над фризом.
+    ...(high ? ['front', 'back'].map((wall) => {
+      const bottom = gable + ABOVE_FRIEZE + TRIM_BELOW;
+      return { kind: 'window', wall, at: 0, width: PANE[0], bottom, top: bottom + PANE[1] };
+    }) : []),
   ];
   const windows = { pattern: Math.floor(rnd() * PATTERNS), paint: weighted(PAINT_ODDS, rnd()), tulle: Math.floor(rnd() * TULLES) };
   // Кровля: чаще шифер, потом зелёное железо, реже рубероид и старый тёс. Зелёное железо не сочетают
@@ -122,9 +130,9 @@ export function planHouse(seed) {
   const attic = Math.floor(rnd() * KIT.attic.count);
   const plinth = Object.keys(PLINTHS)[weighted(Object.values(PLINTHS), rnd())];
   return {
-    seed, w, d, middle, courses, pitch, openings, windows, parts: PARTS,
+    seed, w, d, middle, courses, knee, pitch, openings, windows, parts: PARTS,
     roof: PARTS.has('roof') ? roof : 'tes', carving: PARTS.has('carving') ? carving : null,
-    attic: PARTS.has('attic') ? attic : null, plinth, tambour,
+    attic: PARTS.has('attic') && !high ? attic : null, plinth, tambour,
   };
 }
 
@@ -155,7 +163,9 @@ export function buildHouse(plan) {
       // Бревно перерезано проёмами, сквозь которые проходит его ось.
       // У пятой стены внутри дома брёвна не видны — строим только выпуски за боковыми стенами.
       const start = -reach - (rnd() - 0.5) * 0.06;
-      let pieces = wall.inner ? [[start, -wall.half + R], [wall.half - R, reach]] : [[start, reach]];
+      // У фасада и зада высокого сруба выше прежнего верха — только углы, между ними фронтон.
+      const corners = wall.inner || (wall.along === 'x' && k >= courses - plan.knee);
+      let pieces = corners ? [[start, -wall.half + R], [wall.half - R, reach]] : [[start, reach]];
       for (const o of holes) {
         // Проём пропилен по всем брёвнам, которые задевает, и шире на обсаду.
         if (y + r <= o.bottom - LINING || y - r >= o.top + LINING) continue;
@@ -185,7 +195,7 @@ export function buildHouse(plan) {
   chinks.receiveShadow = true;
 
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
-  const boards = buildBoards(plan, { front: top - COURSE / 2, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
+  const boards = buildBoards(plan, { front: top - COURSE / 2, low: top - COURSE / 2 - plan.knee * COURSE, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
   // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
   const door = openings.find((o) => o.kind === 'door');

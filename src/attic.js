@@ -4,7 +4,7 @@ import { generator } from './random.js';
 import { KINDS, BOARD, BOARD_SPAN, PAINT } from './fence.js';
 import { buildCover, buildChimney } from './roof.js';
 import { buildCarving, trimColor } from './carving.js';
-import { TRIM_ABOVE, PAINTS } from './window.js';
+import { TRIM_ABOVE, PAINTS, LINING } from './window.js';
 
 // Дощатые части избы — из тех же досок, что забор: фронтоны чердака (доски «ёлочкой»), тесовая крыша
 // с коньком и причелинами, отлив над цоколем. Тёс — сам кровля или обрешётка под шифером, железом, рубероидом (roof.js). Доска — призма толщиной T по многоугольнику в своей плоскости:
@@ -160,9 +160,10 @@ function triangle(target, vertices, want) {
 }
 
 // Чердак, крыша и отлив дома plan. Высоты от сруба: front — верх фасадных стен, side — верх боковых
-// (на них лежит крыша), plinth — верх цоколя, r — радиус бревна (насколько стена выступает от оси),
-// reach — докуда от середины дома торчат остатки брёвен фасада за углом.
-export function buildBoards(plan, { front, side, plinth, r, reach }) {
+// (на них лежит крыша), low — верх фасада во всю ширину (у высокого сруба ниже front: выше только углы),
+// plinth — верх цоколя, r — радиус бревна (насколько стена выступает от оси), reach — докуда от середины
+// дома торчат остатки брёвен фасада за углом.
+export function buildBoards(plan, { front, low, side, plinth, r, reach }) {
   const { seed, w, d, pitch, openings, roof: cover, carving } = plan;
   const rnd = generator(seed + 2);
   const tan = Math.tan(pitch), hx = w / 2 + r;
@@ -174,25 +175,41 @@ export function buildBoards(plan, { front, side, plinth, r, reach }) {
   // Отлив крашен в цвет наличников: лишний цвет у цоколя не нужен (Никита, 2026-11-07).
   const drip = new Planks(boardMaterials(TONES.roof, { color: trimColor(PAINTS[plan.windows.paint]) }));
 
-  // Фронтоны спереди и сзади: треугольник от верха фасадной стены до ската, доски ёлочкой.
-  const base = [[-hx, front - 0.06], [hx, front - 0.06], [hx, ridge], [-hx, ridge]];
+  // Фронтоны спереди и сзади: от верха фасадной стены до ската, доски ёлочкой. У высокого сруба фронтон
+  // опущен до low: между углами (их брёвна — до front) ещё полоса досок. Сквозь окна фронтона досок нет.
   const under = [[tan, 1, ridge - 0.004], [-tan, 1, ridge - 0.004]]; // y ± x·tan ≤ конёк: под скатами
-  const gloom = new THREE.ShapeGeometry(new THREE.Shape(under.reduce(clip, base).map(([x, y]) => new THREE.Vector2(x, y))));
+  const span = w / 2 - r;
+  const parts = [under.reduce(clip, [[-hx, front - 0.06], [hx, front - 0.06], [hx, ridge], [-hx, ridge]])];
+  if (low < front) parts.push([[-span, low - 0.06], [span, low - 0.06], [span, front - 0.06], [-span, front - 0.06]]);
+  // Сумрак чердака (или комнаты) — за тюлем окон фронтона, у оси стены.
+  const glooms = parts.map((part) => new THREE.ShapeGeometry(new THREE.Shape(part.map(([x, y]) => new THREE.Vector2(x, y)))));
   const extras = [];
   for (const face of [1, -1]) {
     const frame = { o: new THREE.Vector3(0, 0, face * (d / 2 + 0.55 * r)), X: new THREE.Vector3(1, 0, 0), Y: new THREE.Vector3(0, 1, 0) };
     const n = new THREE.Vector3(0, 0, face);
-    const back = new THREE.Mesh(gloom, GLOOM);
-    back.position.z = face * (d / 2 + 0.55 * r - 0.01);
-    back.rotation.y = face > 0 ? 0 : Math.PI; // лицом наружу
-    extras.push(back);
-    for (const half of [-1, 1]) {
-      const shape = [...under, [-half, 0, 0]].reduce(clip, base);
-      const along = [half * Math.cos(GABLE_ANGLE), Math.sin(GABLE_ANGLE)], across = [-along[1], along[0]];
-      const spans = shape.map(([x, y]) => x * across[0] + y * across[1]);
-      for (let c = Math.min(...spans); c < Math.max(...spans); c += BOARD + 0.004) {
-        const strip = [[-across[0], -across[1], -c], [across[0], across[1], c + BOARD]].reduce(clip, shape);
-        if (strip.length > 2 && area(strip) > 1e-4) gable.add(strip, frame, n, along, BOARD, rnd);
+    for (const gloom of glooms) {
+      const back = new THREE.Mesh(gloom, GLOOM);
+      back.position.z = face * (d / 2 - 0.02);
+      back.rotation.y = face > 0 ? 0 : Math.PI; // лицом наружу
+      extras.push(back);
+    }
+    // Проёмы окон фронтона (в координатах frame: x по X, y — высота) и вокруг каждого — четыре выпуклые
+    // области, где доски есть: слева, справа, под и над проёмом.
+    const holes = openings.filter((o) => o.wall === (face > 0 ? 'front' : 'back') && o.kind === 'window' && plinth + o.bottom > low)
+      .map((o) => [face * o.at - o.width / 2 - LINING, face * o.at + o.width / 2 + LINING, plinth + o.bottom - LINING, plinth + o.top + LINING]);
+    const around = ([x0, x1, y0, y1]) => [[[1, 0, x0]], [[-1, 0, -x1]], [[-1, 0, -x0], [1, 0, x1], [0, 1, y0]], [[-1, 0, -x0], [1, 0, x1], [0, -1, -y1]]];
+    for (const part of parts) {
+      for (const half of [-1, 1]) {
+        const shape = clip(part, [-half, 0, 0]);
+        const along = [half * Math.cos(GABLE_ANGLE), Math.sin(GABLE_ANGLE)], across = [-along[1], along[0]];
+        const spans = shape.map(([x, y]) => x * across[0] + y * across[1]);
+        // Доски по общей сетке: у частей фронтона высокого сруба они продолжают друг друга без шва.
+        const step = BOARD + 0.004;
+        for (let c = Math.floor(Math.min(...spans) / step) * step; c < Math.max(...spans); c += step) {
+          let strips = [[[-across[0], -across[1], -c], [across[0], across[1], c + BOARD]].reduce(clip, shape)];
+          for (const hole of holes) strips = strips.flatMap((strip) => around(hole).map((region) => region.reduce(clip, strip)));
+          for (const strip of strips) if (strip.length > 2 && area(strip) > 1e-4) gable.add(strip, frame, n, along, BOARD, rnd);
+        }
       }
     }
     // Причелины — широкие доски по краю скатов, под свесом крыши; резные — в carving.js.
@@ -224,7 +241,7 @@ export function buildBoards(plan, { front, side, plinth, r, reach }) {
   const top = generator(seed + 4), shape = { ridge, pitch, length, zEnd };
   extras.push(buildCarving(plan, {
     ridge, pitch, reach: hx + EAVE, gable: d / 2 + 0.55 * r + T, barge: d / 2 + r + GABLE_OVER - 0.03,
-    front, out: d / 2 + 1.13 * r + 0.01, span: w / 2 - r - 0.02, zEnd,
+    front: low, out: d / 2 + 1.13 * r + 0.01, span: w / 2 - r - 0.02, zEnd,
     trims: Object.fromEntries([['left', -1], ['right', 1]].map(([wall, face]) => [face, Math.max(...openings
       .filter((o) => o.wall === wall && o.kind === 'window').map((o) => plinth + o.top + TRIM_ABOVE))])),
   }));
