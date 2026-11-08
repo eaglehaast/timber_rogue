@@ -67,7 +67,8 @@ const GLOW = new THREE.SpriteMaterial({ map: halo(), color: 0xff3018, blending: 
 const DOORS = 4, SIDES = 2, BASES = 4, SIGNS = 3;
 
 // Где что: место щита и анкера на боку с газовым вводом (gas — planGas), опоры вдоль улицы. Всё в метрах двора:
-// fence — забор со стороны улицы (z), keep — калитка и ворота { at, width } (x), перед ними опор нет.
+// fence — забор со стороны улицы (z), keep — калитка, ворота и место, где машины подъезжали к забору,
+// { at, width } (x): там опор нет.
 export function planPower(plan, at, gas, { fence, keep }) {
   const rnd = generator(plan.seed + 29);
   const { wallX, out } = gas.branch, wall = out > 0 ? 'right' : 'left', g = gas.branch.z - at.z;

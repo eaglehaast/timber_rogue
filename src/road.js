@@ -2,14 +2,14 @@ import * as THREE from 'three';
 import { generator, smoothNoise } from './random.js';
 import { tiles, soften } from './surface.js';
 import { YARD, GATES } from './fence.js';
-import { height } from './terrain.js';
+import { height, groundAt } from './terrain.js';
 import { brickMaterial, BRICK_TILE } from './roof.js';
 
 // Улица перед двором — колея среди травы (Никита, 2026-11-08: «два рельефных следа шин, кое-где глубокие лужи,
 // в лужи можно пихнуть кирпичи, между колеями трава, с невысокими травами»). Полосы грунта нет.
 // Следы вдавлены в саму землю (dug — для terrain.js): по краям выдавлен валик грязи, кое-где след проседает ямой,
-// в яме стоит вода, в воде — обломки кирпича. К воротам машины сворачивали с улицы с обеих сторон: из каждого
-// уличного следа дугой выходит свой, как рельсы на трамвайном перекрёстке, и у ворот дуги сходятся в съезд.
+// в яме стоит вода, в воде — обломки кирпича. Перед воротами — следы многих подъездов (Никита: «по чуть разным
+// траекториям: подъехали к воротам; подъехали и поставили машину параллельно воротам»), старые мельче и заросли.
 // Участок брошен: тропки к калитке не осталось.
 // Трава: на следах её нет, между ними и рядом — только низкая (trodden — для world.js).
 //
@@ -24,8 +24,12 @@ const RUT = { gauge: 1.5, width: 0.42, depth: [0.06, 0.13], wander: 0.12, berm: 
 // лужа шире следа во сколько раз, в какой доле луж кирпичи.
 const PUDDLE = { count: 8, length: [1.2, 3.4], deep: [0.07, 0.16], wide: 1.35, bricks: 0.6 };
 const BRICK = [0.25, 0.065, 0.12];          // м: кирпич
-// Поворот в ворота: радиус дуги середины машины; на сколько съезд заходит во двор; глубина — доля самой глубокой уличной.
-const TURN = { radius: 4, inside: 1, depth: 0.6 };
+// Подъезды: сколько заездов в ворота (или выездов — след тот же) и стоянок у забора; радиус поворота середины машины;
+// на сколько заезд уходит во двор; где стоит середина машины у забора (за стойками газовой трубы, в метре от забора);
+// глубина свежего следа — доля самой глубокой уличной.
+const VISITS = { gate: 6, parked: 3, radius: [3, 4.5], inside: [0.5, 2], beside: [2.1, 2.5], depth: 0.6 };
+const STEP = 0.05;                          // м: шаг точек по пути машины
+const CELL = 0.025;                         // м: клетка растра следов перед воротами
 const EDGE_ALONG = 16, BASE = 4;            // м: длина маски края; сторона плитки грунта
 const LIFT = 0.006;                         // м над землёй, чтобы не мерцать с ней
 
@@ -37,7 +41,7 @@ for (const mask of [edge]) {
 }
 const flat = { transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 };
 const look = { contrast: 0.9, saturation: 0.8, scales: [0.13, 0.5], low: [0.92, 0.92, 0.9], high: [1.02, 1.02, 1], cells: [4, 2] };
-const mud = soften(new THREE.MeshLambertMaterial({ map: base, alphaMap: edge, ...flat }), look);
+const mud = soften(new THREE.MeshLambertMaterial({ map: base, alphaMap: edge, vertexColors: true, ...flat }), look);
 const WATER = puddleWater();
 const BRICKS = brickMaterial();
 
@@ -68,27 +72,10 @@ export function planRoad({ seed, fence }) {
     z: (x) => center + (side * RUT.gauge) / 2 + RUT.wander * Math.sin(x / 7 + phase + k * 0.6),
     depth: (x) => RUT.depth[0] + (RUT.depth[1] - RUT.depth[0]) * wave(x / 6, k * 3),
   }));
-  // Поворот: машина шла серединой улицы и сворачивала к воротам по четверти круга радиуса TURN.radius — колёса по
-  // кругам на полколеи меньше и больше. Каждая дуга начинается на уличном следе по касательной, а кончается
-  // на z = turn над своим следом съезда; дальше съезд идёт прямо в ворота.
-  // from — откуда ехали: −1 со стороны −x, 1 со стороны +x. Дуга: радиус, off — как далеко от неё, at — точка по углу 0..π/2.
-  const turn = center - TURN.radius, deep = TURN.depth * RUT.depth[1];
-  // В своей ли четверти круга точка и как далеко она от круга радиуса r.
-  const quarter = (from, cx, r) => (x, z) => (from * (x - cx) <= 0 && z >= turn ? Math.abs(Math.hypot(x - cx, z - turn) - r) : Infinity);
-  const arcs = [-1, 1].flatMap((from) => [-1, 1].map((side) => {
-    const cx = GATES.at + from * TURN.radius, r = TURN.radius + (side * RUT.gauge) / 2;
-    return { r, off: quarter(from, cx, r), at: (a) => ({ x: cx - from * r * Math.sin(a), z: turn + r * Math.cos(a) }) };
-  }));
-  const gate = [-1, 1].map((side) => GATES.at + (side * RUT.gauge) / 2);
-  // Все следы — расстояние от оси следа (Infinity — не здесь) и глубина. Дуга — только в своей четверти круга.
-  const tracks = [
-    ...lines.map((line) => ({ off: (x, z) => Math.abs(z - line.z(x)), depth: line.depth })),
-    ...arcs.map(({ off }) => ({ off, depth: () => deep })),
-    ...gate.map((gx) => ({
-      off: (x, z) => (z >= fence - TURN.inside && z <= turn ? Math.abs(x - gx) : Infinity),
-      depth: (x, z) => deep * THREE.MathUtils.smoothstep(z, fence - TURN.inside, fence - TURN.inside + 1),
-    })),
-  ];
+  // Подъезды и их колёса; следы колёс и середины машин — в растре перед воротами.
+  const visits = approaches(rnd, GATES.at, fence, center);
+  const wheels = visits.flatMap((visit) => [-1, 1].map((side) => ({ ...visit, points: beside(visit.points, (side * RUT.gauge) / 2) })));
+  const front = raster(fence, center, wheels, visits);
   // Лужи — ямы в следах улицы у двора: { line, x, length, deep }.
   const puddles = Array.from({ length: PUDDLE.count }, () => {
     const lerp = (r) => r[0] + rnd() * (r[1] - r[0]);
@@ -97,10 +84,10 @@ export function planRoad({ seed, fence }) {
 
   // Где следы сходятся, земля — по самому глубокому месту: след прорезает валик соседнего, а не складывается с ним.
   const dug = (x, z) => {
-    let d = -Infinity;
-    for (const track of tracks) {
-      const t = track.off(x, z) / half;
-      if (t < 1.6) d = Math.max(d, track.depth(x, z) * profile(t));
+    let d = front.near(x, z) ? front.dug(x, z) : -Infinity;
+    for (const line of lines) {
+      const t = Math.abs(z - line.z(x)) / half;
+      if (t < 1.6) d = Math.max(d, line.depth(x) * profile(t));
     }
     if (d === -Infinity) d = 0;
     for (const p of puddles) {
@@ -109,25 +96,104 @@ export function planRoad({ seed, fence }) {
     }
     return d;
   };
-  // Где сетка земли частая: ряды — вдоль улицы и на повороте, столбцы — на повороте.
-  const rows = [[fence - TURN.inside, center + RUT.gauge / 2 + RUT.width]];
-  const cols = [[GATES.at - TURN.radius - RUT.gauge, GATES.at + TURN.radius + RUT.gauge]];
+  // Где сетка земли частая: ряды вдоль улицы и перед воротами.
+  const rows = [[front.box.z0, front.box.z1]];
 
-  // Трава: на следах нет; на улице и там, где машина сворачивала, топчут — там она низкая.
+  // Трава: на следах нет, на старых — проросла; на улице и там, где ездили, топчут — там она низкая.
   const s = THREE.MathUtils.smoothstep;
-  const grass = (x, z) => Math.min(...tracks.map((track) => s(track.off(x, z) / half, 0.8, 1.2)));
-  // Середина машины: улица, два поворота, съезд.
-  const middle = [(x, z) => Math.abs(z - center), ...[-1, 1].map((from) => quarter(from, GATES.at + from * TURN.radius, TURN.radius)),
-    (x, z) => (z >= fence - TURN.inside && z <= turn ? Math.abs(x - GATES.at) : Infinity)];
-  const trodden = (x, z) => 1 - s(Math.min(...middle.map((off) => off(x, z))), RUT.gauge / 2 + 0.3, RUT.gauge / 2 + 1.2);
-  return { seed, lines, arcs, gate, fence, turn, puddles, dug, rows, cols, grass, trodden };
+  const grass = (x, z) => Math.min(1 - front.bare(x, z), ...lines.map((line) => s(Math.abs(z - line.z(x)) / half, 0.8, 1.2)));
+  const trodden = (x, z) => Math.max(front.trodden(x, z), 1 - s(Math.abs(z - center), RUT.gauge / 2 + 0.3, RUT.gauge / 2 + 1.2));
+  // Где машины съезжали с улицы к забору — там не ставить опор (power.js): { at, width } по x.
+  const off = visits.flatMap((v) => v.points).filter((p) => p.z < center - RUT.gauge / 2).map((p) => p.x);
+  const keep = { at: (Math.min(...off) + Math.max(...off)) / 2, width: Math.max(...off) - Math.min(...off) };
+  return { seed, lines, wheels, puddles, dug, rows, grass, trodden, keep };
+}
+
+// Подъезды к воротам gx от улицы с серединой center; fence — z забора. Каждый — путь середины машины (точки через
+// STEP, сплайн через опорные точки) и свежесть 0..1: старый след мельче и зарос.
+// Заезд в ворота: машина шла улицей (чуть в стороне от середины) и сворачивала к забору по четверти круга, заканчивая
+// поворот над воротами (чуть вбок); выезд оставляет тот же след. Стоянка: машина ушла с улицы к забору, встала
+// вдоль него перед воротами и потом уехала вперёд обратно на улицу или задним ходом тем же следом.
+function approaches(rnd, gx, fence, center) {
+  const lerp = ([a, b]) => a + rnd() * (b - a), dir = () => (rnd() < 0.5 ? -1 : 1);
+  const path = (points) => {
+    const curve = new THREE.CatmullRomCurve3(points.map(([x, z]) => new THREE.Vector3(x, 0, z)));
+    return { points: curve.getSpacedPoints(Math.ceil(curve.getLength() / STEP)).map(({ x, z }) => ({ x, z })), fresh: 0.35 + 0.65 * rnd() };
+  };
+  const visits = [];
+  for (let n = 0; n < VISITS.gate; n++) {
+    // d — куда ехали по улице; круг поворота — с серединой (x − d·r, z − r), сорок пять градусов — посередине дуги.
+    const d = dir(), r = lerp(VISITS.radius), x = gx + (rnd() - 0.5) * 0.8, z = center + (rnd() - 0.5) * 0.5;
+    const cx = x - d * r, cz = z - r, k = Math.SQRT1_2;
+    visits.push(path([[cx - d * 6, z], [cx, z], [cx + d * r * k, cz + r * k], [x, cz], [x, fence - lerp(VISITS.inside)]]));
+  }
+  for (let n = 0; n < VISITS.parked; n++) {
+    const d = dir(), x = gx + (rnd() - 0.5) * 3, z = fence + lerp(VISITS.beside);
+    const stand = [[x - d * 13, center], [x - d * 7, center], [x - d * 3, z + 0.25], [x - d * 0.5, z], [x + d * 1.5, z]];
+    visits.push(path(rnd() < 0.5 ? stand : [...stand, [x + d * 5, z + 0.4], [x + d * 9, center], [x + d * 14, center]]));
+  }
+  return visits;
+}
+
+// Путь points, сдвинутый вбок на off (влево по ходу — плюс): след колеса.
+function beside(points, off) {
+  return points.map((p, i) => {
+    const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)], l = Math.hypot(b.x - a.x, b.z - a.z);
+    return { x: p.x - (off * (b.z - a.z)) / l, z: p.z + (off * (b.x - a.x)) / l };
+  });
+}
+
+// Растр перед воротами: клетки по CELL на прямоугольнике box, где ездили. В каждой клетке — сколько вдавлено
+// (по самому глубокому следу), насколько голо (свежий след — совсем) и насколько топчут (около середины машины).
+// Точки путей идут через STEP, этого хватает: под каждой точкой отпечаток профиля следа.
+function raster(fence, center, wheels, visits) {
+  const all = visits.flatMap((v) => v.points);
+  const box = {
+    x0: Math.min(...all.map((p) => p.x)) - 2, x1: Math.max(...all.map((p) => p.x)) + 2,
+    z0: Math.min(fence, ...all.map((p) => p.z)) - 2, z1: center + RUT.gauge / 2 + 2 * RUT.width,
+  };
+  const nx = Math.ceil((box.x1 - box.x0) / CELL) + 1, nz = Math.ceil((box.z1 - box.z0) / CELL) + 1;
+  const dug = new Float32Array(nx * nz), touched = new Uint8Array(nx * nz), bare = new Float32Array(nx * nz), trodden = new Float32Array(nx * nz);
+  // Отпечаток в радиусе reach вокруг (x, z): mark(k, расстояние) для каждой клетки.
+  const stamp = (x, z, reach, mark) => {
+    const i0 = Math.max(0, Math.floor((x - reach - box.x0) / CELL)), i1 = Math.min(nx - 1, Math.ceil((x + reach - box.x0) / CELL));
+    const j0 = Math.max(0, Math.floor((z - reach - box.z0) / CELL)), j1 = Math.min(nz - 1, Math.ceil((z + reach - box.z0) / CELL));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const r = Math.hypot(box.x0 + i * CELL - x, box.z0 + j * CELL - z);
+      if (r < reach) mark(j * nx + i, r);
+    }
+  };
+  const half = RUT.width / 2, deep = VISITS.depth * RUT.depth[1], s = THREE.MathUtils.smoothstep;
+  for (const { points, fresh } of wheels) {
+    for (const p of points) stamp(p.x, p.z, 1.6 * half, (k, r) => {
+      const v = fresh * deep * profile(r / half);
+      dug[k] = touched[k] ? Math.max(dug[k], v) : v;
+      touched[k] = 1;
+      bare[k] = Math.max(bare[k], fresh * (1 - s(r / half, 0.8, 1.2)));
+    });
+  }
+  const wide = RUT.gauge / 2 + 1.2;
+  for (const { points, fresh } of visits) {
+    for (let i = 0; i < points.length; i += 4) {
+      stamp(points[i].x, points[i].z, wide, (k, r) => { trodden[k] = Math.max(trodden[k], fresh * (1 - s(r, RUT.gauge / 2 + 0.3, wide))); });
+    }
+  }
+  // Значение слоя в точке — по четырём клеткам вокруг; вне растра — ноль.
+  const at = (layer) => (x, z) => {
+    const u = (x - box.x0) / CELL, v = (z - box.z0) / CELL;
+    if (u < 0 || v < 0 || u >= nx - 1 || v >= nz - 1) return 0;
+    const i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j, k = j * nx + i;
+    return (layer[k] * (1 - fu) + layer[k + 1] * fu) * (1 - fv) + (layer[k + nx] * (1 - fu) + layer[k + nx + 1] * fu) * fv;
+  };
+  return { box, dug: at(dug), bare: at(bare), trodden: at(trodden), near: (x, z) => at(touched)(x, z) > 0 };
 }
 
 // Лента по земле вдоль середины points ({x, z} через равные шаги): полуширина half(i), высота — surface(x, z).
 // По краю — полоса band (её середина — на half), где маска идёт от земли к траве. Вдоль маска идёт по EDGE_ALONG
 // метров, начиная с места from на ней. Поперёк точки через step, чтобы лента повторяла впадину и валик.
-function ribbon(points, half, surface, { band, from = 0, step = 0.04 }) {
-  const pos = [], uv = [], uv1 = [], index = [];
+// alpha — насколько лента видна вся (у старого заросшего следа меньше).
+function ribbon(points, half, surface, { band, from = 0, step = 0.04, alpha = 1 }) {
+  const pos = [], uv = [], uv1 = [], color = [], index = [];
   const n = Math.ceil((2 * Math.max(...points.map((_, i) => half(i))) + band) / step) + 1; // точек поперёк — у всех рядов поровну
   let s = 0;
   points.forEach((p, i) => {
@@ -141,6 +207,7 @@ function ribbon(points, half, surface, { band, from = 0, step = 0.04 }) {
       pos.push(x, surface(x, z), z);
       uv.push(x / BASE, z / BASE);
       uv1.push((from + s) / EDGE_ALONG, Math.max(0, Math.abs(d) - inner) / band);
+      color.push(1, 1, 1, alpha);
     });
     if (!i) return;
     const k = n, a0 = (i - 1) * k, a1 = i * k;
@@ -150,13 +217,14 @@ function ribbon(points, half, surface, { band, from = 0, step = 0.04 }) {
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geometry.setAttribute('uv1', new THREE.Float32BufferAttribute(uv1, 2));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(color, 4));
   geometry.setIndex(index);
   geometry.computeVertexNormals();
   return geometry;
 }
 
 // Строить после shapeGround(…, planRoad): следы уже вдавлены в землю, здесь — их дно, вода и кирпичи.
-export function buildRoad({ seed, lines, arcs, gate, fence, turn, puddles }) {
+export function buildRoad({ seed, lines, wheels, puddles }) {
   const rnd = generator(seed + 41);
   const group = new THREE.Group();
   const add = (geometry, material, order = 0) => {
@@ -165,7 +233,7 @@ export function buildRoad({ seed, lines, arcs, gate, fence, turn, puddles }) {
     mesh.renderOrder = order;
     return group.add(mesh);
   };
-  const surface = (x, z) => height(x, z) + LIFT;
+  const surface = (x, z) => groundAt(x, z) + LIFT;
   const along = (from, to, step, at) => Array.from({ length: Math.round((to - from) / step) + 1 }, (_, i) => at(from + i * step));
 
   // Дно следов — грунт, рвано тающий в траву; у каждого следа своё место на маске края, чтобы следы не повторяли друг друга.
@@ -176,9 +244,10 @@ export function buildRoad({ seed, lines, arcs, gate, fence, turn, puddles }) {
       .map((p) => 1 - (Math.abs(points[i].x - p.x) / (p.length / 2)) ** 2)));
     add(ribbon(points, half, surface, { band: RUT.band, from: rnd() * EDGE_ALONG }), mud, 2);
   });
-  const track = (points) => add(ribbon(points, () => RUT.width / 2, surface, { band: RUT.band, from: rnd() * EDGE_ALONG }), mud, 2);
-  for (const { r, at } of arcs) track(along(0, Math.PI / 2, 0.15 / r, at));
-  for (const x of gate) track(along(fence - TURN.inside, turn, 0.15, (z) => ({ x, z })));
+  // Ленте хватает точки через три шага пути.
+  for (const { points, fresh } of wheels) {
+    add(ribbon(points.filter((_, i) => i % 3 === 0), () => RUT.width / 2, surface, { band: RUT.band, from: rnd() * EDGE_ALONG, alpha: fresh }), mud, 2);
+  }
 
   // Лужи: вода ровно на уровне, где яма выходит на дно следа (по краям лужи), — заполняет яму.
   // Кирпичи — обломки, брошенные в лужу: лежат вкривь, наполовину в воде.

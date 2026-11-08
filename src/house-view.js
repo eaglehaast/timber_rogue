@@ -56,7 +56,7 @@ function rebuild(seed) {
     : OUTSIDE * (1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), MEADOW / 2 - 8, MEADOW / 2)));
   const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) ? 0 : road.grass(x, z) * lawn(x, z));
   const gas = planGas(plan, at, { fence, gate: GATES.at });
-  const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES] });
+  const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
   yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, road.trodden), makeFence(), buildGas(gas), buildPower(power), buildRoad(road));
   layout = { at, gas, power, road };
   scene.add(house, yard);
