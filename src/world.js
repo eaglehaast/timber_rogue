@@ -70,13 +70,16 @@ const clover = (x, z) => lawn(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + 2
 // Тысячелистник расползается корневищами редкими широкими пятнами, по всему двору, а не только в низкой траве.
 const yarrow = (x, z) => THREE.MathUtils.smoothstep(noise(x / 12 + 190, z / 12), 0.45, 0.8);
 // Число пучков — на 1000 м² там, где трава густая; высокие сорняки (tall) там, где топчут, не растут.
-const PLANTS = [[grassTufts, 11000, () => 1], [mugwortTufts, 1700, colonies(40), true], [nettleTufts, 1700, colonies(90), true],
-  [tansyTufts, 1100, colonies(140), true], [dandelionTufts, 1700, lawn], [cloverTufts, 5500, clover], [yarrowTufts, 1200, yarrow]];
+// lush — как сочная трава меняет густоту: злаков вдвое больше, сорняки и большинство цветов она глушит,
+// одуванчик растёт и в ней.
+const PLANTS = [[grassTufts, 22000, () => 0.5, false, 1], [mugwortTufts, 1700, colonies(40), true, -1], [nettleTufts, 1700, colonies(90), true, -1],
+  [tansyTufts, 1100, colonies(140), true, -1], [dandelionTufts, 1700, lawn, false, 0], [cloverTufts, 5500, clover, false, -0.6], [yarrowTufts, 1200, yarrow, false, -0.6]];
 
 // Земля со стороной ground метров и трава на квадрате со стороной size. grass(x, z) — сколько здесь травы, 0..1:
-// у ствола, под домом, на дороге её нет. trodden(x, z) — насколько здесь топчут, 0..1: там трава низкая.
-// Строить после shapeGround: и земля, и пучки встают по рельефу.
-export function makeMeadow(grass, size, ground = 200, trodden = () => 0) {
-  return new THREE.Group().add(makeGround(ground), ...PLANTS.map(([atlas, perThousand, kind, tall]) => makeTufts(atlas,
-    Math.round(perThousand * size * size / 1000), size, (x, z) => grass(x, z) * kind(x, z) * (tall ? 1 - trodden(x, z) : 1), trodden)));
+// у ствола, под домом, на дороге её нет. trodden(x, z) — насколько здесь топчут, 0..1: там трава низкая;
+// lush(x, z) — насколько трава сочная, 0..1 (в лесополосе). Строить после shapeGround: и земля, и пучки встают по рельефу.
+export function makeMeadow(grass, size, ground = 200, { trodden = () => 0, lush = () => 0 } = {}) {
+  return new THREE.Group().add(makeGround(ground), ...PLANTS.map(([atlas, perThousand, kind, tall, rich]) => makeTufts(atlas,
+    Math.round(perThousand * size * size / 1000), size,
+    (x, z) => grass(x, z) * kind(x, z) * (1 + rich * lush(x, z)) * (tall ? 1 - trodden(x, z) : 1), { trodden, lush })));
 }
