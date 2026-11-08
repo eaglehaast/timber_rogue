@@ -37,8 +37,9 @@ const sootMaterial = new THREE.MeshLambertMaterial({ map: atlas('soot'), transpa
 const flueMaterial = new THREE.MeshLambertMaterial({ color: 0x141211 });
 
 // Кровля kind на двускатной крыше: ridge — высота конька (линия скатов), pitch — уклон, length — длина ската
-// от конька до свеса, zEnd — полудлина крыши вдоль конька.
-export function buildCover(kind, { ridge, pitch, length, zEnd }, rnd) {
+// от конька до свеса, zEnd — полудлина крыши вдоль конька. sides — какие скаты класть (−1 к −x, 1 к +x):
+// у односкатной крыши (тамбур) один, от стены вниз, и конька нет.
+export function buildCover(kind, { ridge, pitch, length, zEnd, sides = [-1, 1] }, rnd) {
   const { tile, lift, wave, ridge: caps } = COVERS[kind];
   const group = new THREE.Group();
   const Z = new THREE.Vector3(0, 0, 1);
@@ -48,12 +49,12 @@ export function buildCover(kind, { ridge, pitch, length, zEnd }, rnd) {
   const dh = (z) => (wave ? -wave.height * k * Math.sin(k * z - phase) : 0);
   const step = wave ? tile[0] / wave.count / 8 : 2 * zEnd;
   const z0 = -zEnd - 0.02, z1 = zEnd + 0.02, u0 = rnd() * 10, v0 = rnd() * 10;
-  for (const s of [-1, 1]) {
+  for (const s of sides) {
     const X = new THREE.Vector3(s * Math.cos(pitch), -Math.sin(pitch), 0);
     const n = new THREE.Vector3(s * Math.sin(pitch), Math.cos(pitch), 0);
     const O = new THREE.Vector3(0, ridge, 0);
     // Скаты сходятся на гребне без щели: лист начинается там, где его плоскость встречает плоскость другого ската.
-    const x0 = -lift * Math.tan(pitch), x1 = length + 0.04;
+    const x0 = sides.length > 1 ? -lift * Math.tan(pitch) : 0, x1 = length + 0.04;
     const at = (x, z, up = 0) => O.clone().addScaledVector(X, x).addScaledVector(Z, z).addScaledVector(n, lift + h(z) + up);
     const pos = [], normal = [], uv = [], index = [];
     const cols = Math.ceil((z1 - z0) / step);
@@ -88,7 +89,7 @@ export function buildCover(kind, { ridge, pitch, length, zEnd }, rnd) {
     group.add(sheet, edges.mesh(coverMaterials[kind]));
   }
   // Конёк — согнутая лента вдоль гребня: картинка поперёк ленты, сгиб — на середине её высоты.
-  if (caps) {
+  if (caps && sides.length > 1) {
     const row = caps[Math.floor(rnd() * caps.length)], [u0c, v0c, u1c, v1c] = cell('ridge', row), mid = (v0c + v1c) / 2;
     const top = ridge + lift / Math.cos(pitch) + (wave?.height ?? 0) + CAP.rise;
     const faces = new Faces();

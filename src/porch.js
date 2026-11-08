@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { generator } from './random.js';
 import { Planks, boardMaterials, TONES } from './attic.js';
-import { Faces, TULLES, tulleMaterial } from './window.js';
+import { Faces, TULLES, tulleMaterial, PAINTS as TRIM_PAINTS } from './window.js';
+import { trimColor } from './carving.js';
+import { buildCover } from './roof.js';
 import { KIT, atlas, cell, repaint, strip } from './kit.js';
 
 // Крыльцо у двери и обналичка двери — из тех же досок забора (attic.js: Planks), только крашеные.
@@ -30,17 +32,28 @@ const PAINTS = [[0.18, 0.12, 0.1], [0.13, 0.085, 0.065], [0.2, 0.15, 0.12]];
 // Обивка двери — дерматин: коричневый, бордовый, чёрный (зелёный выбивался из дома). Картинка двери — без прозрачной каймы (INSET).
 const DOOR_PAINTS = [[0.14, 0.08, 0.05], [0.12, 0.035, 0.03], [0.09, 0.085, 0.08]]; // чёрный чуть светлее: иначе дверь читается как пустой проём
 const INSET = [4 / 512, 4 / 1024];
-const iron = new THREE.MeshLambertMaterial({ color: 0x1d1b1a });
 // Тамбур — остеклённые холодные сени на площадке крыльца: чтобы холод не шёл в дом сразу с улицы. Стенки
 // из досок стоймя: внизу глухие на skirt, выше полоса окон высотой glaze (картинки окон веранды, рамы белые,
-// стекло полупрозрачное), за стеклом тюль на тёмных сенях, над окнами доски до односкатной крыши. Крыша — тёс,
-// у стены дома выше на rise, свес over; в передней стенке дощатая дверь шириной door, высотой до верха окон.
+// стекло полупрозрачное), за стеклом тюль на тёмных сенях, над окнами доски до односкатной крыши. Крыша — шифер
+// по тёсу, у стены дома выше на rise, свес over; в передней стенке дверь из набора шириной door, высотой до верха окон.
+// Лестница — во всю ширину тамбура, перила с обеих сторон (Никита, 2026-11-08: там они скорее для красоты).
 const TAMBOUR = { skirt: 0.85, glaze: 1.0, top: 2.05, rise: 0.3, over: 0.25, door: 0.8, tulle: 0.6 };
 const THICK = 0.022;                           // м — доска
-const verandaMaterial = new THREE.MeshLambertMaterial({ map: atlas('veranda'), transparent: true, alphaTest: 0.01 });
+// Рамы окон тамбура — в цвет наличников (как резьба: средний цвет рамы — краска наличника); стекло не крашено.
+const verandaMaterials = TRIM_PAINTS.map((paint) => {
+  const material = new THREE.MeshLambertMaterial({ map: atlas('veranda'), color: repaint('veranda', trimColor(paint)), transparent: true, alphaTest: 0.01 });
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      #ifdef USE_MAP
+        diffuseColor.rgb = mix(sampledDiffuseColor.rgb, diffuseColor.rgb, step(0.75, sampledDiffuseColor.a));
+      #endif`);
+  };
+  material.customProgramCacheKey = () => 'veranda glass';
+  return material;
+});
 
 // Крыльцо и дверь для проёма door. walls — как в house.js; base — верх цоколя; face — лицо стены от её оси.
-export function buildPorch(seed, door, wall, { base, face, tambour, tulle }) {
+export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim: trimPaint }) {
   const rnd = generator(seed + 3);
   const paint = PAINTS[Math.floor(rnd() * PAINTS.length)];
   const side = Math.sign(wall.at);
@@ -71,7 +84,7 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle }) {
   row(worn, plane(P(0, 0, top - 0.022), s, n), up, -W, W, 0, L, true);
 
   // Лестница: ступени от площадки наружу, проступь из досок, подступёнки из двух досок.
-  const steps = Math.max(2, Math.round(top / STAIR.rise)), rise = top / steps, w = STAIR.width / 2, run = STAIR.run;
+  const steps = Math.max(2, Math.round(top / STAIR.rise)), rise = top / steps, w = tambour ? W : STAIR.width / 2, run = STAIR.run;
   for (let k = 1; k <= steps; k++) {
     const q = L + (k - 1) * run, y = top - k * rise;
     if (k < steps) row(worn, plane(P(0, q, y - 0.022), s, n), up, -w, w, 0, run, true);
@@ -89,12 +102,12 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle }) {
   }
   // Обшивка площадки снизу: по бокам и спереди по обе стороны лестницы.
   if (!tambour) for (const a of [-W, W - 0.022]) row(painted, plane(P(a, 0, 0), n, up), s, 0, top - 0.03, 0.05, L, false);
-  for (const [a0, a1] of [[-W, -w - SIDE.thick], [w + SIDE.thick, W]]) row(painted, plane(P(0, L - 0.03, 0), s, up), n, 0, top - 0.03, a0, a1, false);
+  for (const [a0, a1] of [[-W, -w - SIDE.thick], [w + SIDE.thick, W]]) if (a1 - a0 > 0.05) row(painted, plane(P(0, L - 0.03, 0), s, up), n, 0, top - 0.03, a0, a1, false);
 
   // Перила — у каждого крыльца (в таких домах живут старики): обычно с одной стороны, изредка с двух.
   // Столбы у края площадки и внизу лестницы, брус по площадке от стены и по лестнице вниз, между ними балясины.
-  // С тамбуром площадка внутри, перила — только у лестницы: первый столб у передней стенки тамбура.
-  const sides = rnd() < RAIL.both ? [-1, 1] : [rnd() < 0.5 ? -1 : 1];
+  // С тамбуром площадка внутри, перила — только у лестницы, с обеих сторон: первый столб у передней стенки тамбура.
+  const sides = tambour || rnd() < RAIL.both ? [-1, 1] : [rnd() < 0.5 ? -1 : 1];
   const [u0, v0, u1, v1] = cell('baluster', Math.floor(rnd() * KIT.baluster.count)), uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
   const newel = Math.floor(rnd() * KIT.newel.count);
   const floor = (q) => (q < L ? top : nose(q) + SIDE.above);
@@ -155,41 +168,34 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle }) {
       glazing(a1 - a0, (t, h, d) => P(a0 + t, front + THICK + d, band[0] + h * glaze), n);
     }
     row(painted, face, n, band[1], high, -edge, edge, false);
-    plankDoor(front - 0.01, -half, half, top, band[1]);
-    // Крыша — тёс вдоль ската, от стены дома до свеса над передней стенкой.
+    kitDoor(front - 0.01, -half, half, top, band[1]);
+    // Крыша — тёс вдоль ската, от стены дома до свеса над передней стенкой, по нему шифер (roof.js, один скат).
     const roof = new Planks(boardMaterials(TONES.roof)), length = (depth + over) * Math.hypot(1, slope);
     const X = n.clone().addScaledVector(up, -slope).normalize(), normal = up.clone().addScaledVector(n, slope).normalize();
     const reach = edge + over / 2;
     for (let b = -reach; b < reach - 0.01; b += ROOF_BOARD) {
       roof.add(rect(0, length, b, Math.min(b + ROOF_BOARD + 0.01, reach)), { o: P(0, 0, roofAt(0)), X, Y: s }, normal, [1, 0], ROOF_BOARD, rnd);
     }
-    return [...roof.meshes(), glass.mesh(verandaMaterial), curtains.mesh(tulleMaterial)];
+    // Шифер строится в своих осях (x — вниз по скату, z — вдоль стены, гребень на высоте ridge над x = 0);
+    // переносим их на крыльцо: x → от стены, z — вдоль неё, начало — лицо стены у земли.
+    const slate = buildCover('slate', { ridge: roofAt(0), pitch: Math.atan(slope), length, zEnd: reach, sides: [1] }, rnd);
+    slate.matrix.makeBasis(n, up, n.clone().cross(up)).setPosition(P(0, 0, 0));
+    slate.matrixAutoUpdate = false;
+    return [...roof.meshes(), slate, glass.mesh(verandaMaterials[trimPaint]), curtains.mesh(tulleMaterial)];
   }
 
   // Дверь утоплена в проём; обсада проёма от лица стены до двери.
   const dw = door.width / 2, dTop = base + door.top;
   const at = (a, q, y) => P(a, q, y).toArray();
-  const door3d = new THREE.Group();
-  // Дощатая дверь (у тамбура): доски стоймя в плоскости q от лица стены, от a0 до a1 и от y0 до y1;
-  // железные петли-полосы слева и скоба-ручка справа.
-  const plankDoor = (q, a0, a1, y0, y1) => {
-    row(painted, plane(P(0, q, 0), s, up), n, y0, y1, a0, a1, false);
-    const box = (b0, b1, z0, z1, d0, d1) => {
-      const [p, p2] = [P(b0, d0, z0), P(b1, d1, z1)];
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(p2.x - p.x), z1 - z0, Math.abs(p2.z - p.z)), iron);
-      mesh.position.copy(p).add(p2).multiplyScalar(0.5);
-      mesh.castShadow = true;
-      door3d.add(mesh);
-    };
-    const face0 = q + THICK;
-    for (const yy of [y0 + 0.3, y1 - 0.3]) box(a0 + 0.02, a0 + 0.45, yy - 0.02, yy + 0.02, face0, face0 + 0.006);
-    box(a1 - 0.14, a1 - 0.11, y0 + 0.85, y0 + 1.05, face0, face0 + 0.05);
+  // Дверь из набора — обитая, в цвет обивки: в плоскости q от лица стены, от a0 до a1 и от y0 до y1. У дома и у тамбура
+  // обивка одна, рисунок у каждой двери свой.
+  const cover = DOOR_PAINTS[Math.floor(rnd() * DOOR_PAINTS.length)], leaves = new Faces();
+  const kitDoor = (q, a0, a1, y0, y1) => {
+    const [du0, dv0, du1, dv1] = cell('door', Math.floor(rnd() * KIT.door.count)), [iu, iv] = INSET;
+    leaves.face([at(a0, q, y0), at(a1, q, y0), at(a1, q, y1), at(a0, q, y1)], n.toArray(),
+      [[du0 + iu, dv0 + iv], [du1 - iu, dv0 + iv], [du1 - iu, dv1 - iv], [du0 + iu, dv1 - iv]]);
   };
-  const cover = DOOR_PAINTS[Math.floor(rnd() * DOOR_PAINTS.length)], leaf = new Faces();
-  const [du0, dv0, du1, dv1] = cell('door', Math.floor(rnd() * KIT.door.count)), [iu, iv] = INSET, dq = -DOOR_INSET;
-  leaf.face([at(-dw, dq, top), at(dw, dq, top), at(dw, dq, dTop), at(-dw, dq, dTop)], n.toArray(),
-    [[du0 + iu, dv0 + iv], [du1 - iu, dv0 + iv], [du1 - iu, dv1 - iv], [du0 + iu, dv1 - iv]]);
-  door3d.add(leaf.mesh(new THREE.MeshLambertMaterial({ map: atlas('door'), color: repaint('door', cover) })));
+  kitDoor(-DOOR_INSET, -dw, dw, top, dTop);
   const lining = new Faces();
   lining.face([at(-dw, 0, top), at(-dw, 0, dTop), at(-dw, -DOOR_INSET, dTop), at(-dw, -DOOR_INSET, top)], s.toArray());
   lining.face([at(dw, 0, top), at(dw, 0, dTop), at(dw, -DOOR_INSET, dTop), at(dw, -DOOR_INSET, top)], s.clone().negate().toArray());
@@ -204,8 +210,9 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle }) {
   }
   painted.add(rect(-edge, edge, dTop, dTop + TRIM.top), plane(P(0, TRIM.out + 0.022, 0), s, up), n, [1, 0], TRIM.top, rnd);
   const extras = tambour ? buildTambour() : [];
+  const doors = leaves.mesh(new THREE.MeshLambertMaterial({ map: atlas('door'), color: repaint('door', cover) }));
   const liningMesh = lining.mesh(new THREE.MeshLambertMaterial({ color: new THREE.Color(...paint).multiplyScalar(0.8) }));
-  return new THREE.Group().add(...worn.meshes(), ...painted.meshes(), ...rails.meshes(), liningMesh, door3d, ...extras,
+  return new THREE.Group().add(...worn.meshes(), ...painted.meshes(), ...rails.meshes(), liningMesh, doors, ...extras,
     balusters.mesh(new THREE.MeshLambertMaterial({ map: atlas('baluster'), color: repaint('baluster', paint), alphaTest: 0.5, side: THREE.DoubleSide })),
     posts.mesh(new THREE.MeshLambertMaterial({ map: atlas('newel'), color: repaint('newel', paint), alphaTest: 0.5 })));
 }
