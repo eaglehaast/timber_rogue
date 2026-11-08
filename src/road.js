@@ -35,7 +35,7 @@ const flat = { transparent: true, depthWrite: false, polygonOffset: true, polygo
 const ground = soften(new THREE.MeshLambertMaterial({ map: base, alphaMap: edge, ...flat }), {
   contrast: 0.9, saturation: 0.8, scales: [0.13, 0.5], low: [0.92, 0.92, 0.9], high: [1.02, 1.02, 1], cells: [1, 1],
 });
-const track = new THREE.MeshLambertMaterial({ color: 0x8a7763, alphaMap: rut, vertexColors: true, ...flat });
+const track = new THREE.MeshLambertMaterial({ color: 0x5a5046, alphaMap: rut, vertexColors: true, ...flat });
 
 // Лента по земле вдоль середины points ({x, z} через равные шаги): полотно полуширины half(i), высота — surface(x, z).
 // По краю — полоса band: в ней маска идёт от земли к траве (uv1.y от 0 до 1), внутри полотна — земля целиком.

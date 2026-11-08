@@ -72,14 +72,34 @@ canvas.addEventListener('pointermove', (e) => {
   view.pitch = THREE.MathUtils.clamp(view.pitch + (e.clientY - drag[1]) * 0.004, -0.05, 1.3);
   drag = [e.clientX, e.clientY];
 });
-canvas.addEventListener('wheel', (e) => { view.dist = THREE.MathUtils.clamp(view.dist * Math.exp(e.deltaY * 0.001), 2, 40); e.preventDefault(); }, { passive: false });
-addEventListener('keydown', (e) => { if (e.code === 'KeyR') rebuild(1 + Math.floor(Math.random() * 1e6)); });
+canvas.addEventListener('wheel', (e) => { view.dist = THREE.MathUtils.clamp(view.dist * Math.exp(e.deltaY * 0.001), 2, 60); e.preventDefault(); }, { passive: false });
+// Стрелки (или WASD) двигают точку, вокруг которой ходит камера: вперёд — куда смотришь, вбок — вбок;
+// с Shift — втрое быстрее. Q и E — точку ниже и выше.
+const held = new Set();
+const MOVE = { speed: 5, fast: 3, keys: { ArrowUp: [0, 1], KeyW: [0, 1], ArrowDown: [0, -1], KeyS: [0, -1], ArrowLeft: [-1, 0], KeyA: [-1, 0], ArrowRight: [1, 0], KeyD: [1, 0] } };
+addEventListener('keydown', (e) => {
+  if (e.code === 'KeyR') rebuild(1 + Math.floor(Math.random() * 1e6));
+  held.add(e.code);
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+});
+addEventListener('keyup', (e) => held.delete(e.code));
+addEventListener('blur', () => held.clear());
+function walk(dt) {
+  let side = 0, ahead = 0;
+  for (const code of held) [side, ahead] = [side + (MOVE.keys[code]?.[0] ?? 0), ahead + (MOVE.keys[code]?.[1] ?? 0)];
+  const step = MOVE.speed * dt * (held.has('ShiftLeft') || held.has('ShiftRight') ? MOVE.fast : 1);
+  // Камера смотрит из (sin yaw, cos yaw) на точку: вперёд — обратно этому направлению.
+  view.target.x += (-Math.sin(view.yaw) * ahead + Math.cos(view.yaw) * side) * step;
+  view.target.z += (-Math.cos(view.yaw) * ahead - Math.sin(view.yaw) * side) * step;
+  view.target.y = Math.max(0.2, view.target.y + ((held.has('KeyE') ? 1 : 0) - (held.has('KeyQ') ? 1 : 0)) * step);
+}
 
 const clock = new THREE.Clock();
 function frame() {
   // Живые части дома и двора (дым из трубы, огонёк счётчика) двигаются во времени.
   const dt = Math.min(clock.getDelta(), 0.1);
   for (const part of [house, yard]) part.traverse((o) => o.tick?.(dt));
+  walk(dt);
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (canvas.width !== Math.floor(w * renderer.getPixelRatio())) {
     renderer.setSize(w, h, false);
