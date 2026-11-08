@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { generator } from './random.js';
+import { height, normal } from './terrain.js';
 import { tiles, strips, decal, merge } from './surface.js';
 import { route, curve, tube } from './pipe.js';
 import { R, COURSE, PLINTH, THICKEST, OVERHANG, blind } from './house.js';
@@ -44,17 +45,17 @@ const MAT = {
 const FEET = 5; // картинок цемента в ряд
 
 // Где отвод входит в бок дома: глухой бок (без двери), ближнее к улице место между окнами, углами и выпусками
-// пятой стены. Всё — в метрах двора: дом стоит в at фасадом к улице (+z), fence — где забор со стороны улицы (z),
-// gate — середина ворот (x).
+// пятой стены. Всё — в метрах двора: дом стоит в at фасадом к улице (+z), at.y — земля под ним; fence — где забор
+// со стороны улицы (z), gate — середина ворот (x).
 export function planGas(plan, at, { fence, gate }) {
   const door = plan.openings.find((o) => o.kind === 'door').wall;
   const wall = door === 'left' ? 'right' : 'left', out = wall === 'right' ? 1 : -1;
   const [a, b] = blind(plan, wall, CLEAR).filter(([a, b]) => b - a >= ROOM).at(-1);
   const wallX = at.x + (out * plan.w) / 2;
-  return { seed: plan.seed, street: fence + STREET, gate, branch: { x: wallX + out * BRANCH.out, z: at.z + Math.max((a + b) / 2, b - 0.25), wallX, out } };
+  return { seed: plan.seed, floor: at.y, street: fence + STREET, gate, branch: { x: wallX + out * BRANCH.out, z: at.z + Math.max((a + b) / 2, b - 0.25), wallX, out } };
 }
 
-export function buildGas({ seed, street, gate, branch }) {
+export function buildGas({ seed, floor, street, gate, branch }) {
   const rnd = generator(seed + 7);
   const set = () => Math.floor(rnd() * 1000);
   const parts = Object.fromEntries(Object.keys(MAT).map((name) => [name, []]));
@@ -63,11 +64,12 @@ export function buildGas({ seed, street, gate, branch }) {
   // Трубка: развёртка на TILE метров у трубы улицы, у тонких — короче во столько раз, во сколько они тоньше.
   const pipe = (path, r) => tube(path, r, { set: set(), tile: (TILE * r) / MAIN.r, sides: SIDES });
   const line = (...points) => curve(points);
-  const H = MAIN.axis, z = street;
+  // Труба идёт ровно, на высоте ввода в дом; стойки под ней по земле — какой длины выйдут.
+  const H = floor + MAIN.axis, z = street;
 
   // Улица и арка над воротами. Рыжая — от начала нижних колен; перед ними по развёртке перехода краски в окись,
   // её жёлтый край снаружи (правая трубка перехода идёт к арке с другой стороны).
-  const left = gate - ARCH.w / 2 - MAIN.r, right = gate + ARCH.w / 2 + MAIN.r, top = ARCH.h + MAIN.r;
+  const left = gate - ARCH.w / 2 - MAIN.r, right = gate + ARCH.w / 2 + MAIN.r, top = floor + ARCH.h + MAIN.r;
   const a0 = left - ARCH.low, a1 = right + ARCH.low;
   put('yellow', pipe(line(V(-REACH, H, z), V(a0 - TILE, H, z)), MAIN.r));
   put('turn', pipe(line(V(a0 - TILE, H, z), V(a0, H, z)), MAIN.r));
@@ -76,17 +78,18 @@ export function buildGas({ seed, street, gate, branch }) {
   put('turn', pipe(line(V(a1 + TILE, H, z), V(a1, H, z)), MAIN.r));
   put('yellow', pipe(line(V(a1 + TILE, H, z), V(REACH, H, z)), MAIN.r));
 
-  // Цемент — картинка сверху на земле, стойка в её середине; какая из FEET и как повёрнута — наугад.
+  // Цемент — картинка сверху на земле (лежит по её скату), стойка в её середине; какая из FEET и как повёрнута — наугад.
   const feet = (x, zz) => {
     const k = Math.floor(rnd() * FEET), plane = new THREE.PlaneGeometry(FOOTING, FOOTING).rotateX(-Math.PI / 2).rotateY(rnd() * Math.PI * 2);
     const uv = plane.attributes.uv;
     for (let i = 0; i < uv.count; i++) uv.setX(i, (k + uv.getX(i)) / FEET);
-    put('footing', plane, new THREE.Matrix4().setPosition(x, 0.005, zz));
+    const slope = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal(x, zz));
+    put('footing', plane, new THREE.Matrix4().compose(V(x, height(x, zz) + 0.005, zz), slope, V(1, 1, 1)));
   };
   // Стойка: круглая труба от цемента до седла — гнутой полосы толщиной 4 мм, что подхватывает трубу радиуса held снизу на 200°.
   const stand = (x, zz, held, post, axis, y = H) => {
     const seat = y - held - 0.006;
-    put('post', pipe(line(V(x, -0.05, zz), V(x, seat, zz)), post));
+    put('post', pipe(line(V(x, height(x, zz) - 0.05, zz), V(x, seat, zz)), post));
     const saddle = new THREE.Shape().absarc(0, 0, held + 0.006, THREE.MathUtils.degToRad(170), THREE.MathUtils.degToRad(370), false)
       .absarc(0, 0, held + 0.002, THREE.MathUtils.degToRad(370), THREE.MathUtils.degToRad(170), true);
     put('iron', new THREE.ExtrudeGeometry(saddle, { depth: 0.06, bevelEnabled: false, curveSegments: 12 }).translate(0, 0, -0.03)

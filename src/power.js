@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { generator } from './random.js';
+import { height } from './terrain.js';
 import { tiles, strips, decal, merge } from './surface.js';
 import { route, curve, sag, resample, tube, twist } from './pipe.js';
 import { R, COURSE, PLINTH, THICKEST, OVERHANG, blind } from './house.js';
@@ -82,7 +83,7 @@ export function planPower(plan, at, gas, { fence, keep }) {
   const spot = roomy ?? spots.reduce((x, y) => (y.ahead - y.lo > x.ahead - x.lo ? y : x));
   const box = roomy ? spot.lo + rnd() * (spot.hi - spot.lo) : spot.lo, ahead = spot.ahead;
   const conduit = box + shift;
-  const anchor = new THREE.Vector3(wallX, ANCHOR.y, at.z + conduit);
+  const anchor = new THREE.Vector3(wallX, at.y + ANCHOR.y, at.z + conduit);
   // Опора с отводом — на улице сбоку от дома: пролёт уходит от стены под углом, при котором он минует всё,
   // что выступает впереди по стене (до него ahead − conduit).
   const z = fence + POLE.street, deep = z - anchor.z;
@@ -105,7 +106,7 @@ export function planPower(plan, at, gas, { fence, keep }) {
   // Номера идут по улице подряд, все одной рукой (почерк — строка атласа цифр); у опор ответвлений — «номер/ветка».
   const first = 1 + Math.floor(rnd() * 40), hand = Math.floor(rnd() * GLYPHS.glyphs.length);
   poles.forEach((p, i) => { p.number = `${first + i}${rnd() < 0.2 ? `/${1 + Math.floor(rnd() * 3)}` : ''}`; p.sign = rnd() < SIGN.chance; });
-  return { seed: plan.seed, poles, feeder, hand, house: { anchor, out, box: at.z + box, conduit: at.z + conduit } };
+  return { seed: plan.seed, poles, feeder, hand, house: { anchor, out, floor: at.y, box: at.z + box, conduit: at.z + conduit } };
 }
 
 export function buildPower({ seed, poles, feeder, hand, house }) {
@@ -141,7 +142,7 @@ export function buildPower({ seed, poles, feeder, hand, house }) {
     const axis = (y) => (kind === 'concrete' || y < 2.8 ? V(0, y, 0)
       : y < bend ? V(crook[0], 0, crook[1]).multiplyScalar((y - 2.8) / (bend - 2.8)).setY(y)
         : V(crook[0], 0, crook[1]).multiplyScalar((top - y) / (top - bend)).setY(y));
-    const M = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(lean[0], 0, lean[1])).setPosition(x, 0, z)
+    const M = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(lean[0], 0, lean[1])).setPosition(x, height(x, z), z)
       .multiply(new THREE.Matrix4().makeRotationY(-Math.PI / 2));
     // Бетон — восьмигранник гранью к улице: вершины трубки начинаются с +x, поворачиваем на полграни.
     const sides = kind === 'concrete' ? 8 : 12, facet = kind === 'concrete' ? Math.PI / 8 : 0;
@@ -207,10 +208,10 @@ export function buildPower({ seed, poles, feeder, hand, house }) {
     };
     // Цифры: атлас — три строки почерков сверху вниз, в строке знаки 0–9 и «/»; на бетоне краска тёмная, на дереве светлая.
     const y = kind === 'spur' ? SPUR.top + 0.3 : NUMBER.y, rows = GLYPHS.glyphs.length, marks = [...number].map((c) => GLYPHS.glyphs[hand][c === '/' ? 10 : Number(c)]);
-    const width = (m) => (m[1] - m[0]) * NUMBER.row[0], height = (GLYPHS.bottom - GLYPHS.top) * NUMBER.row[1];
+    const width = (m) => (m[1] - m[0]) * NUMBER.row[0], tall = (GLYPHS.bottom - GLYPHS.top) * NUMBER.row[1];
     let along = -(marks.reduce((s, m) => s + width(m), 0) + NUMBER.gap * (marks.length - 1)) / 2;
     for (const m of marks) {
-      paste(kind === 'concrete' ? 'dark' : 'light', along + width(m) / 2, [width(m), height], [m[0], m[1], 1 - (hand + GLYPHS.bottom) / rows, 1 - (hand + GLYPHS.top) / rows], y);
+      paste(kind === 'concrete' ? 'dark' : 'light', along + width(m) / 2, [width(m), tall], [m[0], m[1], 1 - (hand + GLYPHS.bottom) / rows, 1 - (hand + GLYPHS.top) / rows], y);
       along += width(m) + NUMBER.gap;
     }
     if (warn) {
@@ -310,7 +311,7 @@ export function buildPower({ seed, poles, feeder, hand, house }) {
   // Гофра: сверху «гусак» открытым концом вниз (хвост жгута входит в него снизу, вода не затекает), вниз по стене
   // на клипсах мимо щита, под щитом петлёй и снизу в сальник.
   const cx = face + out * (CONDUIT.r + 0.012), z = house.conduit, high = anchor.y - 0.32;
-  const bottom = BOX.y - BOX.h / 2, low = bottom - BOX.h * (CONDUIT.loop[0] + rnd() * (CONDUIT.loop[1] - CONDUIT.loop[0]));
+  const bottom = house.floor + BOX.y - BOX.h / 2, low = bottom - BOX.h * (CONDUIT.loop[0] + rnd() * (CONDUIT.loop[1] - CONDUIT.loop[0]));
   const gland = house.box + out * (BOX.w / 2 - 0.06), hood = cx + out * 0.1;
   const path = route([V(hood, high - 0.06, z), V(hood, high + 0.04, z), V(cx, high + 0.04, z), V(cx, low, z), V(cx, low, gland), V(cx, bottom - 0.012, gland)],
     (i) => (i < 3 ? 0.04 : Math.abs(z - gland) / 2 - 0.002));
@@ -327,7 +328,7 @@ export function buildPower({ seed, poles, feeder, hand, house }) {
 
   // Щит: корпус, верхняя кромка, дверца на тонком шве, окошко в ободке, круглый замок. Строим стоя дверцей к +z,
   // вдоль стены — x (слева от смотрящего — −x), и поворачиваем дверцей от стены.
-  const B = new THREE.Matrix4().makeRotationY((out * Math.PI) / 2).setPosition(face, BOX.y, house.box);
+  const B = new THREE.Matrix4().makeRotationY((out * Math.PI) / 2).setPosition(face, house.floor + BOX.y, house.box);
   // Бока — плитка SIDE метров, одна из SIDES для всего щита; дверца — одна из DOORS целиком.
   const shell = (w, h, d) => {
     const geometry = new THREE.BoxGeometry(w, h, d), uv = geometry.attributes.uv, k = Math.floor(rnd() * SIDES);

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { generator } from './random.js';
 import { tiles, soften } from './surface.js';
 import { WICKET, GATES } from './fence.js';
+import { height } from './terrain.js';
 
 // Грунтовая улица перед двором по каталогу ChatGPT «Грунтовая улица» (R01–R06, R09; 2026-11-08):
 // одна полоса утрамбованной земли вдоль забора с воротами — за опорами и обочиной, — в поперечнике чуть выпуклая.
@@ -19,7 +20,8 @@ const ROAD = {
   reach: 60,       // м улицы в обе стороны от середины двора
 };
 const EDGE = 1, EDGE_ALONG = 4, BASE = 4;   // м: полоса тающего края; длина маски края; сторона плитки грунта
-const LIFT = 0.01;                          // м над травой, чтобы не мерцать с ней
+const LIFT = 0.01;                          // м над землёй, чтобы не мерцать с ней
+const MESH = 0.15;                          // м: шаг вершин поперёк ленты — как у сетки земли, чтобы лента шла по кочкам
 const RUT = { gauge: 1.45, width: 0.5, strength: [1, 0.6] }; // колея: между следами; полоса маски; сила следов
 // Съезд: шире ворот на margin с каждой стороны, к улице раскрывается ещё на flare; заходит во двор на inside.
 const DRIVE = { margin: 0.3, flare: 1, inside: 0.5 };
@@ -42,6 +44,7 @@ const track = new THREE.MeshLambertMaterial({ color: 0x5a5046, alphaMap: rut, ve
 // across — маска поперёк всей ленты (колея). alpha(s) — сила по длине (колея местами слабее и рвётся).
 function ribbon(points, half, surface, { band, across = false, alpha }) {
   const pos = [], uv = [], uv1 = [], color = [], index = [];
+  const inside = Math.max(5, Math.ceil((2 * Math.max(...points.map((_, i) => half(i))) - band) / MESH) + 1);
   let s = 0;
   points.forEach((p, i) => {
     const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)];
@@ -50,7 +53,7 @@ function ribbon(points, half, surface, { band, across = false, alpha }) {
     const h = half(i), inner = h - band / 2, outer = h + band / 2;
     // Поперёк: края полосы маски — отдельными точками, чтобы маска шла по ним ровно; внутри — для выпуклости.
     const offsets = across ? [-outer, -h, 0, h, outer]
-      : [-outer, -inner, ...Array.from({ length: 5 }, (_, k) => inner * (k / 2 - 1)), inner, outer];
+      : [-outer, -inner, ...Array.from({ length: inside }, (_, k) => inner * ((2 * k) / (inside - 1) - 1)), inner, outer];
     offsets.forEach((d) => {
       const x = p.x + n.x * d, z = p.z + n.y * d;
       pos.push(x, surface(x, z), z);
@@ -72,10 +75,41 @@ function ribbon(points, half, surface, { band, across = false, alpha }) {
   return geometry;
 }
 
+// Где лежит улица, съезд и тропка — для дороги и для травы (на дороге её нет). fence — z забора со стороны улицы.
+function layout(fence) {
+  const center = fence + ROAD.near + ROAD.width / 2, half = ROAD.width / 2, edgeZ = fence + ROAD.near;
+  // Съезд: от середины улицы через обочину в ворота и чуть во двор. У ворот — их ширина и margin, к улице край
+  // плавно расходится веером ещё на flare с каждой стороны.
+  const gate = GATES.width / 2 + DRIVE.margin;
+  const fan = (z) => gate + DRIVE.flare * THREE.MathUtils.smoothstep(z, fence, edgeZ + 0.5);
+  // Тропка к калитке: от края улицы, огибая край съезда, в калитку и на полметра во двор.
+  const wicket = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(WICKET.at - 0.6, 0, edgeZ + 0.3), new THREE.Vector3(WICKET.at - 0.3, 0, fence + 1.2), new THREE.Vector3(WICKET.at, 0, fence - 0.5),
+  ]).getSpacedPoints(24);
+  return { center, half, fan, wicket, drive: [fence - DRIVE.inside, center] };
+}
+
+// Сколько в точке (x, z) дороги, 0..1: где больше половины, трава не растёт — край маски уже земля.
+export function roadCover(fence) {
+  const { center, half, fan, wicket, drive } = layout(fence);
+  const cover = (d, band) => 1 - THREE.MathUtils.smoothstep(d, -band / 4, band / 4);
+  const p = new THREE.Vector3(), q = new THREE.Vector3(), line = new THREE.Line3();
+  return (x, z) => {
+    let c = cover(Math.abs(z - center) - half, EDGE);
+    if (z > drive[0] && z < drive[1]) c = Math.max(c, cover(Math.abs(x - GATES.at) - fan(z), EDGE));
+    p.set(x, 0, z);
+    for (let i = 1; i < wicket.length; i++) {
+      const d = line.set(wicket[i - 1], wicket[i]).closestPointToPoint(p, true, q).distanceTo(p);
+      c = Math.max(c, cover(d - PATH.half, PATH.edge));
+    }
+    return c;
+  };
+}
+
 // Улица вдоль забора со стороны дороги (fence — его z), съезд к воротам и тропка к калитке — в метрах двора.
 export function buildRoad({ seed, fence }) {
   const rnd = generator(seed + 37);
-  const center = fence + ROAD.near + ROAD.width / 2, half = ROAD.width / 2;
+  const { center, half, fan, wicket, drive: [from] } = layout(fence);
   const along = (from, to, step, at) => Array.from({ length: Math.round((to - from) / step) + 1 }, (_, i) => at(from + i * step));
   const group = new THREE.Group();
   const add = (geometry, material, order) => {
@@ -84,8 +118,8 @@ export function buildRoad({ seed, fence }) {
     mesh.renderOrder = order;
     group.add(mesh);
   };
-  // Поверхность полотна: чуть над травой, к середине улицы выпуклая. По ней же ложатся съезд, тропка и колея.
-  const surface = (x, z) => LIFT + ROAD.crown * Math.max(0, 1 - ((z - center) / half) ** 2);
+  // Поверхность полотна: чуть над землёй, к середине улицы выпуклая. По ней же ложатся съезд, тропка и колея.
+  const surface = (x, z) => height(x, z) + LIFT + ROAD.crown * Math.max(0, 1 - ((z - center) / half) ** 2);
   add(ribbon(along(-ROAD.reach, ROAD.reach, 0.5, (x) => ({ x, z: center })), () => half, surface, { band: EDGE }), ground, 1);
 
   // Колея: два следа по RUT.gauge, видны местами — сила плавно гуляет по длине и рвётся; второй след слабее.
@@ -96,17 +130,8 @@ export function buildRoad({ seed, fence }) {
     add(ribbon(along(-ROAD.reach, ROAD.reach, 0.5, (x) => ({ x, z })), () => RUT.width / 2, (x, z) => surface(x, z) + 0.002, { band: 0, across: true, alpha }), track, 2);
   });
 
-  // Съезд: от середины улицы через обочину в ворота и чуть во двор. У ворот — их ширина и margin, к улице край
-  // плавно расходится веером ещё на flare с каждой стороны.
-  const gate = GATES.width / 2 + DRIVE.margin, edgeZ = fence + ROAD.near;
-  const drive = along(fence - DRIVE.inside, center, 0.25, (z) => ({ x: GATES.at, z }));
-  const fan = (z) => gate + DRIVE.flare * THREE.MathUtils.smoothstep(z, fence, edgeZ + 0.5);
+  const drive = along(from, center, MESH, (z) => ({ x: GATES.at, z }));
   add(ribbon(drive, (i) => fan(drive[i].z), surface, { band: EDGE }), ground, 1);
-
-  // Тропка к калитке: от края улицы, огибая край съезда, в калитку и на полметра во двор.
-  const wicket = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(WICKET.at - 0.6, 0, edgeZ + 0.3), new THREE.Vector3(WICKET.at - 0.3, 0, fence + 1.2), new THREE.Vector3(WICKET.at, 0, fence - 0.5),
-  ]).getSpacedPoints(24);
   add(ribbon(wicket, () => PATH.half, surface, { band: PATH.edge }), ground, 1);
   return group;
 }

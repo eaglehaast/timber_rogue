@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { tiles, merge } from './surface.js';
 import { generator } from './random.js';
+import { height } from './terrain.js';
 
 // Забор по периметру участка W × D метров с центром в начале координат: штакетник со всех сторон,
 // к дороге (z = +D/2) — с калиткой и воротами. Доски крашеные, ровные, верх углом, между ними сквозные щели: сквозь них
@@ -80,7 +81,9 @@ function side(a, b) {
   const place = (s, off, y, tilt = 0, lean = 0) => new THREE.Matrix4().compose(
     new THREE.Vector3(a.x + dir.x * s - dir.y * off, y, a.z + dir.y * s + dir.x * off),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(lean, yaw, tilt, 'YXZ')), new THREE.Vector3(1, 1, 1));
-  return { length, place };
+  // Земля под точкой s стороны: столбы стоят на ней, а пролёты тянутся от столба к столбу.
+  const floor = (s) => height(a.x + dir.x * s, a.z + dir.y * s);
+  return { length, place, floor };
 }
 
 // Штакетник: столбы через 2,5 м (STEP), на них в каждом пролёте две прожилины, к ним прибиты доски ровным рядом.
@@ -99,7 +102,7 @@ function side(a, b) {
 const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до земли, у створок — выше
 const DEG = Math.PI / 180;
 const STEP = 2.5; // м: шаг столбов
-function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, rnd, put, openings = []) {
+function picket({ length, place, floor }, { height, gap, boardWidth, postWidth, age }, rnd, put, openings = []) {
   const wobble = (size) => (rnd() + rnd() - 1) * size * age; // чаще около нуля, изредка до ±size
   const posts = [], seams = [], thick = new Map();
   const count = Math.ceil(length / STEP - 0.01); // столбы поровну, не реже STEP, и на обоих концах
@@ -117,7 +120,7 @@ function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, 
   posts.sort((a, b) => a - b);
   const corner = (s) => s < 0.01 || s > length - 0.01;
   const fixed = (s) => corner(s) || seams.includes(s);
-  const sag = posts.map((s) => (fixed(s) ? 0 : wobble(0.04)));       // м: просел (−) или выперло (+)
+  const sag = posts.map((s) => (fixed(s) ? 0 : wobble(0.04)) + floor(s)); // м: земля под столбом; просел (−) или выперло (+)
   const lean = posts.map((s) => (fixed(s) ? 0 : wobble(2.5 * DEG)));  // крен поперёк забора
   const r = postWidth / 2, rails = r + 0.026, front = rails + 0.037;
   const shoulder = LIFT + height - boardWidth / 2;
