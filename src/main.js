@@ -6,7 +6,7 @@ import {
 import { struck, wreck, pushOut } from './yard.js';
 import { makeFence, YARD } from './fence.js';
 import { driftClouds } from './sky.js';
-import { makeWorld, makeMeadow, EYE } from './world.js';
+import { makeWorld, makeMeadow, fenced, EYE } from './world.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
@@ -103,7 +103,8 @@ let inspecting = false;
 // Мир вокруг двора — свет, небо, панорамы, земля и трава (world.js). Трава не растёт у стволов и там, где игрок встаёт на старте.
 const world = await makeWorld(renderer, scene);
 const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 });
-scene.add(makeMeadow((x, z) => (clear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r) ? 0 : 1)), makeFence());
+// Растения сажаем в квадрате 76 м: весь двор и полоса за забором.
+scene.add(makeMeadow((x, z) => (clear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r) ? 0 : fenced(x, z)), 76), makeFence());
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 // Плоскость единичная: под длину шины и толщину ствола её растягивает scale.

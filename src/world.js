@@ -17,9 +17,14 @@ export const EYE = 1.7; // м: глаза стоя — на этой высот�
 const SUN_POWER = 2.2, MEADOW = new THREE.Color(0x8f8a66);
 const SUN = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 22), THREE.MathUtils.degToRad(180 - 80));
 
-// Свет, небо и панорамы — в scene. Возвращает лучи солнца (рисуются поверх кадра) и light(camera):
+// Окружение локации — два кольца внутри неба: средний план (луг, стога, сараи) сразу за полосой травы
+// за забором и горы за ним. Самое красивое место гор — перед игроком на старте.
+// far — как далеко изображённое: луг и сараи — в сотнях метров, горы — в километрах (по ним бегут тени облаков).
+export const RINGS = { middle: ['tushna-mid', 45, 300], far: ['tushna', 140, 3000] };
+
+// Свет, небо и панорамы rings — в scene. Возвращает лучи солнца (рисуются поверх кадра) и light(camera):
 // перед кадром сколько солнца у камеры проходит сквозь облака (0..1) — по нему гаснет отсвет луга.
-export async function makeWorld(renderer, scene) {
+export async function makeWorld(renderer, scene, rings = Object.values(RINGS)) {
   const skyLight = new THREE.HemisphereLight(0xb4ccec, MEADOW, 1.7);
   scene.add(skyLight);
   // Тень накрывает весь участок с забором: солнце стоит, поэтому тени не дрожат. Карта 4096 — около 1,7 см
@@ -36,10 +41,7 @@ export async function makeWorld(renderer, scene) {
 
   scene.add(await makeSky(SUN));
   const rays = new Rays(renderer, scene, SUN);
-  // Окружение локации — два кольца внутри неба: средний план (луг, стога, сараи) сразу за полосой травы
-  // за забором и горы за ним. Самое красивое место гор — перед игроком на старте.
-  // far — как далеко изображённое: луг и сараи — в сотнях метров, горы — в километрах (по ним бегут тени облаков).
-  for (const [name, radius, far] of [['tushna-mid', 45, 300], ['tushna', 140, 3000]]) {
+  for (const [name, radius, far] of rings) {
     const ring = await makePanorama(name, { radius, far, eye: EYE });
     ring.rotation.y = Math.PI / 2;
     scene.add(ring);
@@ -57,23 +59,23 @@ export async function makeWorld(renderer, scene) {
 }
 
 // Трава густая во всём дворе и редеет за забором на 8 м.
-const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - YARD.w / 2, Math.abs(z) - YARD.d / 2), 0, 8);
-// Полынь и крапива растут колониями от корневищ: пятна в несколько метров, у каждой свои, между ними их нет.
-const colonies = (shift) => (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + shift, z / 9), 0.6, 0.85);
+export const fenced = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - YARD.w / 2, Math.abs(z) - YARD.d / 2), 0, 8);
+// Сколько где растёт, по тому, сколько травы вообще (grass, 0..1). Полынь и крапива растут колониями от корневищ:
+// пятна в несколько метров, у каждой свои, между ними их нет.
+const colonies = (shift) => (x, z) => THREE.MathUtils.smoothstep(noise(x / 9 + shift, z / 9), 0.6, 0.85);
 // Одуванчик низкий и в высокой траве не выживает: растёт там, где трава ниже (тот же шум 5 м, что у пучков).
-const lawn = (x, z) => meadow(x, z) * (1 - THREE.MathUtils.smoothstep(noise(x / 5, z / 5), 0.3, 0.6));
+const lawn = (x, z) => 1 - THREE.MathUtils.smoothstep(noise(x / 5, z / 5), 0.3, 0.6);
 // Клевер тоже любит низкую траву, но разрастается куртинами по несколько метров.
 const clover = (x, z) => lawn(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + 240, z / 9), 0.4, 0.7);
 // Тысячелистник расползается корневищами редкими широкими пятнами, по всему двору, а не только в низкой траве.
-const yarrow = (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(noise(x / 12 + 190, z / 12), 0.45, 0.8);
-// Растения сажаем в квадрате FIELD метров: весь двор и полоса за забором. Число пучков — на 1000 м².
-const FIELD = 76;
-const PLANTS = [[grassTufts, 11000, meadow], [mugwortTufts, 1700, colonies(40)], [nettleTufts, 1700, colonies(90)],
+const yarrow = (x, z) => THREE.MathUtils.smoothstep(noise(x / 12 + 190, z / 12), 0.45, 0.8);
+// Число пучков — на 1000 м² там, где трава густая.
+const PLANTS = [[grassTufts, 11000, () => 1], [mugwortTufts, 1700, colonies(40)], [nettleTufts, 1700, colonies(90)],
   [tansyTufts, 1100, colonies(140)], [dandelionTufts, 1700, lawn], [cloverTufts, 5500, clover], [yarrowTufts, 1200, yarrow]];
 
-// Земля с травой. open(x, z) — сколько здесь места траве, 0..1: у ствола, под домом, на дороге её нет.
-// Строить после shapeGround: и земля, и пучки встают по рельефу.
-export function makeMeadow(open) {
-  return new THREE.Group().add(makeGround(200),
-    ...PLANTS.map(([atlas, perThousand, density]) => makeTufts(atlas, Math.round(perThousand * FIELD * FIELD / 1000), FIELD, (x, z) => density(x, z) * open(x, z))));
+// Земля со стороной ground метров и трава на квадрате со стороной size. grass(x, z) — сколько здесь травы, 0..1:
+// у ствола, под домом, на дороге её нет. Строить после shapeGround: и земля, и пучки встают по рельефу.
+export function makeMeadow(grass, size, ground = 200) {
+  return new THREE.Group().add(makeGround(ground),
+    ...PLANTS.map(([atlas, perThousand, kind]) => makeTufts(atlas, Math.round(perThousand * size * size / 1000), size, (x, z) => grass(x, z) * kind(x, z))));
 }

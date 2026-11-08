@@ -6,7 +6,7 @@ import { planGas, buildGas } from './gas.js';
 import { planPower, buildPower } from './power.js';
 import { buildRoad, roadCover } from './road.js';
 import { shapeGround, height } from './terrain.js';
-import { makeWorld, makeMeadow } from './world.js';
+import { makeWorld, makeMeadow, fenced, RINGS } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
 
@@ -21,7 +21,10 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400);
-const world = await makeWorld(renderer, scene);
+// Ближнего кольца панорамы (луг со стогами в 45 м) на стенде нет: вокруг двора будет своя местность объёмом
+// по плану Никиты (2026-11-08). Земля тянется до кольца гор.
+const world = await makeWorld(renderer, scene, [RINGS.far]);
+const GROUND = 2 * RINGS.far[1];
 
 // Дом стоит фасадом к улице у забора, за палисадником в 1,5–2,5 м (Никита, 2026-11-08: фасад прямо в линию забора
 // не нравится). Боком с крыльцом — к воротам, в ASIDE от их середины. Земля под домом выровнена (terrain.js),
@@ -49,7 +52,7 @@ function rebuild(seed) {
   const open = (x, z) => (Math.abs(x - pad.x) < pad.w / 2 && Math.abs(z - pad.z) < pad.d / 2 ? 0 : 1 - road(x, z));
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES] });
-  yard = new THREE.Group().add(makeMeadow(open), makeFence(), buildGas(gas), buildPower(power), buildRoad({ seed, fence }));
+  yard = new THREE.Group().add(makeMeadow((x, z) => fenced(x, z) * open(x, z), 76, GROUND), makeFence(), buildGas(gas), buildPower(power), buildRoad({ seed, fence }));
   layout = { at, gas, power };
   scene.add(house, yard);
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
@@ -88,13 +91,13 @@ function walk(dt) {
   // Камера смотрит из (sin yaw, cos yaw) на точку: вперёд — обратно этому направлению.
   view.target.x += (-Math.sin(view.yaw) * ahead + Math.cos(view.yaw) * side) * step;
   view.target.z += (-Math.cos(view.yaw) * ahead - Math.sin(view.yaw) * side) * step;
-  // Ходим внутри кольца панорамы ближнего плана: дальше видно, что она — картинка.
+  // Ходим внутри карты: дальше видно, что горы — картинка на кольце.
   const out = Math.hypot(view.target.x, view.target.z) / BOUND;
   if (out > 1) view.target.x /= out, view.target.z /= out;
   view.target.y = Math.max(height(view.target.x, view.target.z) + 0.2, view.target.y + ((held.has('KeyE') ? 1 : 0) - (held.has('KeyQ') ? 1 : 0)) * step);
 }
 // Камера тоже не дальше BOUND от середины двора: на луче от точки к камере — сколько до этой границы.
-const BOUND = 40;
+const BOUND = 100;
 function reach(target, dir) {
   const a = dir.x ** 2 + dir.z ** 2, b = 2 * (target.x * dir.x + target.z * dir.z), c = target.x ** 2 + target.z ** 2 - BOUND ** 2;
   return a < 1e-9 ? Infinity : (-b + Math.sqrt(b * b - 4 * a * c)) / (2 * a);
