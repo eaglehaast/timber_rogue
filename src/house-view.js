@@ -5,9 +5,10 @@ import { generator } from './random.js';
 import { makeFence, YARD, GATES, WICKET } from './fence.js';
 import { planGas, buildGas } from './gas.js';
 import { planPower, buildPower } from './power.js';
+import { buildRoad } from './road.js';
 import { castShadows } from './sky.js';
 
-// Стенд дома отдельно от игры: сруб во дворе у забора, газовая труба и провода с улицы, солнце; камера крутится мышью вокруг дома.
+// Стенд дома отдельно от игры: сруб во дворе у забора, грунтовая улица, газовая труба и провода с улицы, солнце; камера крутится мышью вокруг дома.
 // R — новый дом (новое зерно), колесо — ближе и дальше.
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
@@ -52,7 +53,7 @@ function rebuild(seed) {
   const at = { x: GATES.at - door * (plan.w / 2 + ASIDE), z: YARD.d / 2 - front - plan.d / 2 };
   const gas = planGas(plan, at, { fence: YARD.d / 2, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence: YARD.d / 2, keep: [WICKET, GATES] });
-  yard = new THREE.Group().add(makeFence(), buildGas(gas), buildPower(power));
+  yard = new THREE.Group().add(makeFence(), buildGas(gas), buildPower(power), buildRoad({ seed, fence: YARD.d / 2 }));
   yard.position.set(-at.x, 0, -at.z);
   layout = { at, gas, power };
   scene.add(house, yard);
