@@ -10,7 +10,7 @@ import { brickMaterial, BRICK_TILE } from './roof.js';
 // Следы вдавлены в саму землю (dug — для terrain.js): по краям выдавлен валик грязи, кое-где след проседает ямой,
 // в яме стоит вода, в воде — обломки кирпича. Перед воротами — следы многих подъездов (Никита: «по чуть разным
 // траекториям: подъехали к воротам; подъехали и поставили машину параллельно воротам»), старые мельче и заросли.
-// Участок брошен: тропки к калитке не осталось.
+// Участок брошен: во двор не заезжали, тропки к калитке не осталось.
 // Трава: на следах её нет, между ними и рядом — только низкая (trodden — для world.js).
 //
 // Картинки: дно следов — грунт чернозёма (road-base, 8 плиток по BASE м вперемешку), к траве рвано тает
@@ -24,10 +24,11 @@ const RUT = { gauge: 1.5, width: 0.42, depth: [0.06, 0.13], wander: 0.12, berm: 
 // лужа шире следа во сколько раз, в какой доле луж кирпичи.
 const PUDDLE = { count: 8, length: [1.2, 3.4], deep: [0.07, 0.16], wide: 1.35, bricks: 0.6 };
 const BRICK = [0.25, 0.065, 0.12];          // м: кирпич
-// Подъезды: сколько заездов в ворота (или выездов — след тот же) и стоянок у забора; радиус поворота середины машины;
-// на сколько заезд уходит во двор; где стоит середина машины у забора (за стойками газовой трубы, в метре от забора);
-// глубина свежего следа — доля самой глубокой уличной.
-const VISITS = { gate: 6, parked: 3, radius: [3, 4.5], inside: [0.5, 2], beside: [2.1, 2.5], depth: 0.6 };
+// Подъезды: сколько раз подъезжали носом к воротам и сколько вставали вдоль забора; с какой долей ехали со стороны
+// деревни; поворот середины машины — вдоль улицы и поперёк; где встаёт середина передних колёс у ворот; где стоит
+// середина машины вдоль забора (за стойками газовой трубы, в метре от забора); глубина свежего следа — доля самой
+// глубокой уличной.
+const VISITS = { gate: 5, parked: 2, village: 0.75, along: [2.5, 6], across: [2, 3.2], stop: [0.9, 1.8], beside: [1.9, 2.6], depth: 0.6 };
 const STEP = 0.05;                          // м: шаг точек по пути машины
 const CELL = 0.025;                         // м: клетка растра следов перед воротами
 const EDGE_ALONG = 16, BASE = 4;            // м: длина маски края; сторона плитки грунта
@@ -109,28 +110,33 @@ export function planRoad({ seed, fence }) {
   return { seed, lines, wheels, puddles, dug, rows, grass, trodden, keep };
 }
 
-// Подъезды к воротам gx от улицы с серединой center; fence — z забора. Каждый — путь середины машины (точки через
-// STEP, сплайн через опорные точки) и свежесть 0..1: старый след мельче и зарос.
-// Заезд в ворота: машина шла улицей (чуть в стороне от середины) и сворачивала к забору по четверти круга, заканчивая
-// поворот над воротами (чуть вбок); выезд оставляет тот же след. Стоянка: машина ушла с улицы к забору, встала
-// вдоль него перед воротами и потом уехала вперёд обратно на улицу или задним ходом тем же следом.
+// Подъезды к воротам gx от улицы с серединой center; fence — z забора. Участок брошен: во двор никто не заезжал.
+// Подъезжали проверить дом: носом к воротам — и задним ходом тем же следом обратно, или вставали вдоль забора
+// и уезжали дальше. Чаще ехали со стороны деревни. Каждый подъезд — путь середины машины (точки через STEP,
+// сплайн через опорные точки, у каждого подъезда свой разворот и свой сбой). У точки w — насколько след
+// виден, 0..1: старых подъездов больше, старый след мельче и зарос; где машина встала, след сходит на нет.
 function approaches(rnd, gx, fence, center) {
-  const lerp = ([a, b]) => a + rnd() * (b - a), dir = () => (rnd() < 0.5 ? -1 : 1);
-  const path = (points) => {
+  const lerp = ([a, b]) => a + rnd() * (b - a), jitter = (a) => (rnd() - 0.5) * 2 * a;
+  const village = rnd() < 0.5 ? -1 : 1, dir = () => (rnd() < VISITS.village ? -village : village);
+  const path = (points, stops = false) => {
     const curve = new THREE.CatmullRomCurve3(points.map(([x, z]) => new THREE.Vector3(x, 0, z)));
-    return { points: curve.getSpacedPoints(Math.ceil(curve.getLength() / STEP)).map(({ x, z }) => ({ x, z })), fresh: 0.35 + 0.65 * rnd() };
+    const spaced = curve.getSpacedPoints(Math.ceil(curve.getLength() / STEP)), fresh = 0.2 + 0.8 * rnd() ** 2;
+    const end = (i) => (stops ? THREE.MathUtils.smoothstep((spaced.length - 1 - i) * STEP, 0, 0.6) : 1);
+    return { points: spaced.map(({ x, z }, i) => ({ x, z, w: fresh * end(i) })) };
   };
   const visits = [];
   for (let n = 0; n < VISITS.gate; n++) {
-    // d — куда ехали по улице; круг поворота — с серединой (x − d·r, z − r), сорок пять градусов — посередине дуги.
-    const d = dir(), r = lerp(VISITS.radius), x = gx + (rnd() - 0.5) * 0.8, z = center + (rnd() - 0.5) * 0.5;
-    const cx = x - d * r, cz = z - r, k = Math.SQRT1_2;
-    visits.push(path([[cx - d * 6, z], [cx, z], [cx + d * r * k, cz + r * k], [x, cz], [x, fence - lerp(VISITS.inside)]]));
+    // d — куда ехали по улице. Поворот — четверть овала: along метров вдоль улицы, across — поперёк, дальше прямо
+    // хотя бы метр до стоянки; машина встаёт не ровно, а чуть наискось (skew).
+    const d = dir(), along = lerp(VISITS.along), x = gx + jitter(0.9), z = center + jitter(0.35), stop = fence + lerp(VISITS.stop);
+    const across = Math.min(lerp(VISITS.across), z - stop - 1), k = Math.SQRT1_2, skew = jitter(0.4);
+    visits.push(path([[x - d * (along + 7), z + jitter(0.2)], [x - d * along, z], [x - d * along * (1 - k), z - across * (1 - k)],
+      [x, z - across], [x + skew, stop]], true));
   }
   for (let n = 0; n < VISITS.parked; n++) {
-    const d = dir(), x = gx + (rnd() - 0.5) * 3, z = fence + lerp(VISITS.beside);
-    const stand = [[x - d * 13, center], [x - d * 7, center], [x - d * 3, z + 0.25], [x - d * 0.5, z], [x + d * 1.5, z]];
-    visits.push(path(rnd() < 0.5 ? stand : [...stand, [x + d * 5, z + 0.4], [x + d * 9, center], [x + d * 14, center]]));
+    const d = dir(), x = gx + jitter(3), z = fence + lerp(VISITS.beside), run = lerp([5, 9]);
+    visits.push(path([[x - d * (run + 7), center + jitter(0.3)], [x - d * run, center], [x - d * 2.5, z + 0.2 + jitter(0.15)], [x, z],
+      [x + d * 3, z + jitter(0.15)], [x + d * (run - 1), center + jitter(0.3)], [x + d * (run + 6), center]]));
   }
   return visits;
 }
@@ -139,7 +145,7 @@ function approaches(rnd, gx, fence, center) {
 function beside(points, off) {
   return points.map((p, i) => {
     const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)], l = Math.hypot(b.x - a.x, b.z - a.z);
-    return { x: p.x - (off * (b.z - a.z)) / l, z: p.z + (off * (b.x - a.x)) / l };
+    return { ...p, x: p.x - (off * (b.z - a.z)) / l, z: p.z + (off * (b.x - a.x)) / l };
   });
 }
 
@@ -164,18 +170,18 @@ function raster(fence, center, wheels, visits) {
     }
   };
   const half = RUT.width / 2, deep = VISITS.depth * RUT.depth[1], s = THREE.MathUtils.smoothstep;
-  for (const { points, fresh } of wheels) {
+  for (const { points } of wheels) {
     for (const p of points) stamp(p.x, p.z, 1.6 * half, (k, r) => {
-      const v = fresh * deep * profile(r / half);
+      const v = p.w * deep * profile(r / half);
       dug[k] = touched[k] ? Math.max(dug[k], v) : v;
       touched[k] = 1;
-      bare[k] = Math.max(bare[k], fresh * (1 - s(r / half, 0.8, 1.2)));
+      bare[k] = Math.max(bare[k], p.w * (1 - s(r / half, 0.8, 1.2)));
     });
   }
   const wide = RUT.gauge / 2 + 1.2;
-  for (const { points, fresh } of visits) {
+  for (const { points } of visits) {
     for (let i = 0; i < points.length; i += 4) {
-      stamp(points[i].x, points[i].z, wide, (k, r) => { trodden[k] = Math.max(trodden[k], fresh * (1 - s(r, RUT.gauge / 2 + 0.3, wide))); });
+      stamp(points[i].x, points[i].z, wide, (k, r) => { trodden[k] = Math.max(trodden[k], points[i].w * (1 - s(r, RUT.gauge / 2 + 0.3, wide))); });
     }
   }
   // Значение слоя в точке — по четырём клеткам вокруг; вне растра — ноль.
@@ -191,8 +197,8 @@ function raster(fence, center, wheels, visits) {
 // Лента по земле вдоль середины points ({x, z} через равные шаги): полуширина half(i), высота — surface(x, z).
 // По краю — полоса band (её середина — на half), где маска идёт от земли к траве. Вдоль маска идёт по EDGE_ALONG
 // метров, начиная с места from на ней. Поперёк точки через step, чтобы лента повторяла впадину и валик.
-// alpha — насколько лента видна вся (у старого заросшего следа меньше).
-function ribbon(points, half, surface, { band, from = 0, step = 0.04, alpha = 1 }) {
+// У точки может быть w — насколько лента здесь видна (старый заросший след бледнее).
+function ribbon(points, half, surface, { band, from = 0, step = 0.04 }) {
   const pos = [], uv = [], uv1 = [], color = [], index = [];
   const n = Math.ceil((2 * Math.max(...points.map((_, i) => half(i))) + band) / step) + 1; // точек поперёк — у всех рядов поровну
   let s = 0;
@@ -207,7 +213,7 @@ function ribbon(points, half, surface, { band, from = 0, step = 0.04, alpha = 1 
       pos.push(x, surface(x, z), z);
       uv.push(x / BASE, z / BASE);
       uv1.push((from + s) / EDGE_ALONG, Math.max(0, Math.abs(d) - inner) / band);
-      color.push(1, 1, 1, alpha);
+      color.push(1, 1, 1, p.w ?? 1);
     });
     if (!i) return;
     const k = n, a0 = (i - 1) * k, a1 = i * k;
@@ -245,8 +251,8 @@ export function buildRoad({ seed, lines, wheels, puddles }) {
     add(ribbon(points, half, surface, { band: RUT.band, from: rnd() * EDGE_ALONG }), mud, 2);
   });
   // Ленте хватает точки через три шага пути.
-  for (const { points, fresh } of wheels) {
-    add(ribbon(points.filter((_, i) => i % 3 === 0), () => RUT.width / 2, surface, { band: RUT.band, from: rnd() * EDGE_ALONG, alpha: fresh }), mud, 2);
+  for (const { points } of wheels) {
+    add(ribbon(points.filter((_, i) => i % 3 === 0 || i === points.length - 1), () => RUT.width / 2, surface, { band: RUT.band, from: rnd() * EDGE_ALONG }), mud, 2);
   }
 
   // Лужи: вода ровно на уровне, где яма выходит на дно следа (по краям лужи), — заполняет яму.
