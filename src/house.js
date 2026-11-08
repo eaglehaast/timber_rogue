@@ -48,7 +48,8 @@ const FIVE_WALL_CHANCE = 0.35, MIDDLE_GAP = 0.65;
 // скатами с подрезанным потолком. Фасад и зад рублены во всю ширину только до прежнего верха: выше от них
 // остаются лишь углы, а между углами — дощатый фронтон, опущенный до самого фриза. В нём обычное окно
 // с наличником (вместо чердачного), и фриз — перемычка между брёвнами и досками.
-const HIGH_CHANCE = 0.25, KNEE = [5, 7];
+// Окно фронтона — на GABLE_LIFT выше, чем впритык к фризу (Никита: иначе теснится к нижним).
+const HIGH_CHANCE = 0.25, KNEE = [5, 7], GABLE_LIFT = 0.2;
 const SINK = 0.05, DAMP = 0.6;
 
 const [logMap, endMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-chinking.jpg']);
@@ -117,7 +118,7 @@ export function planHouse(seed) {
     ...sides,
     // Окна верхней комнаты высокого сруба — во фронтонах, над фризом.
     ...(high ? ['front', 'back'].map((wall) => {
-      const bottom = gable + ABOVE_FRIEZE + TRIM_BELOW;
+      const bottom = gable + ABOVE_FRIEZE + TRIM_BELOW + GABLE_LIFT;
       return { kind: 'window', wall, at: 0, width: PANE[0], bottom, top: bottom + PANE[1] };
     }) : []),
   ];
