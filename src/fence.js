@@ -159,8 +159,7 @@ function picket({ length, place }, { height, gap, boardWidth, postWidth, age }, 
 export const WICKET = { at: 8, width: 1.2, leaves: 1 };
 export const GATES = { at: 8.6 + 1.7, width: 3.4, leaves: 2 };
 
-// house — [x от, x до]: дом стоит фасадом в линию забора к дороге, и забор примыкает к его углам.
-export function makeFence({ house } = {}) {
+export function makeFence() {
   const root = new THREE.Group();
   const rnd = generator(7);
   const parts = { board: [], post: [], rail: [] };
@@ -168,12 +167,7 @@ export function makeFence({ house } = {}) {
   const put = (name, geometry) => parts[name][Math.floor(rnd() * KINDS)].push(geometry);
   const x = YARD.w / 2, z = YARD.d / 2;
   // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
-  // Сторона к дороге — одним куском или двумя по бокам дома; калитка и ворота — в том куске, где они есть.
-  const street = house ? [[-x, house[0]], [house[1], x]] : [[-x, x]];
-  for (const [from, to] of street) {
-    const openings = [WICKET, GATES].filter((o) => from < o.at && o.at < to).map((o) => ({ ...o, at: o.at - from }));
-    picket(side({ x: from, z }, { x: to, z }), LOOK, rnd, put, openings);
-  }
+  picket(side({ x: -x, z }, { x, z }), LOOK, rnd, put, [WICKET, GATES].map((o) => ({ ...o, at: o.at + x })));
   picket(side({ x, z }, { x, z: -z }), LOOK, rnd, put);
   picket(side({ x, z: -z }, { x: -x, z: -z }), LOOK, rnd, put);
   picket(side({ x: -x, z: -z }, { x: -x, z }), LOOK, rnd, put);

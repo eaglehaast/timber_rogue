@@ -1,51 +1,51 @@
 import * as THREE from 'three';
 import { generator } from './random.js';
 import { tiles, soften, merge } from './surface.js';
-import { R, COURSE, PLINTH, THICKEST } from './house.js';
-import { TRIM_WIDTH, TRIM_ABOVE } from './window.js';
+import { R, COURSE, PLINTH, THICKEST, OVERHANG } from './house.js';
+import { TRIM_WIDTH } from './window.js';
 
 // Газовая линия по каталогу ChatGPT «Газовая линия и ввод в дом» (2026-11-08, по видео Никиты).
-// Улица: жёлтая труба на тёмных круглых стойках, в открытом седле, выше забора (Никита: 2,5–3 м), пролёт до SPAN.
-// Над воротами она поднимается рыжей П-образной аркой — снизу плавные колена, наверху крутые, — стояки держат
-// высокие стойки вплотную к ним. От тройника
-// тонкий отвод на той же высоте идёт над забором к углу дома у улицы — к ближней стене, ради экономии (Никита), —
-// за углом поворачивает к боку без двери и дальше крепится к дому: по стене над наличниками на кронштейнах до ближнего
-// глухого места, там опускается (на спуске кран) и коленом уходит в бревно сквозь стальной футляр, зазор в нём заделан
-// тёмным. Стойки во дворе — только если дом далеко от забора.
+// Улица: жёлтая труба на тёмных круглых стойках, в открытом седле, выше забора (Никита: 2,5–3 м),
+// пролёт до SPAN. Над воротами она поднимается рыжей П-образной аркой — снизу плавные колена, наверху крутые;
+// перемычку снизу держат две высокие стойки рядом со стояками, в седле, как уличные.
+// От тройника тонкий отвод на той же высоте идёт над забором вдоль бока дома без двери — за остатками брёвен фасада
+// на углу — к ближнему к улице глухому месту бока (ближняя стена — экономия, Никита) и там одним коленом уходит
+// в стену. Перед стеной — кран: латунный корпус и красная рукоятка вдоль трубы (кран открыт). В стене — футляр,
+// зазор в нём заделан тёмным. Если пролёт от тройника до колена длинный, его держит стойка во дворе.
+// Крепёж — сёдла, накладки — крашен чёрным (Никита: серого не бывает).
 // Под каждой стойкой — пятно цемента (Никита: «первоначальная отмостка плюс-минус цемент»).
 //
 // Картинки — развёртки ChatGPT (tools/gas.py → gas-*.jpg): длина × окружность, у каждого набора общие края,
 // поэтому по трубе они лежат вперемешку, каждая на свои TILE метров (у тонкой трубы и стоек — короче во столько раз,
 // во сколько они тоньше). Жёлтая — вперемешку со сварными стыками; у арки, где краска переходит в окись, —
 // по картинке перехода.
-const MAIN = { r: 0.0475, axis: 2.7 };        // м: улица — Ø 95 мм, ось над землёй
-const BRANCH = { r: 0.017, off: 0.24, out: 0.9 }; // м: отвод — Ø 34 мм; его ось у стены и во дворе — от оси бока
+// Улица — Ø 95 мм; ось над землёй — по оси 11-го венца бока (2,8 м): отвод на той же высоте входит в середину
+// бревна, а не в паз между брёвнами.
+const MAIN = { r: 0.0475, axis: PLINTH + R + 10 * COURSE };
+const BRANCH = { r: 0.017, out: OVERHANG + THICKEST * R + 0.12 }; // м: отвод — Ø 34 мм; во дворе — от оси бока
 const POST = { r: 0.03, branch: 0.02 };       // м: стойки улицы и отвода
 const SPAN = 4, BRANCH_SPAN = 4.5;            // м: самый длинный пролёт
 const ARCH = { w: 4.2, h: 5, low: 0.4, high: 0.16 }; // просвет между стояками и до низа перемычки; радиусы колен
 const ELBOW = 0.06;                           // м: колено отвода
-const HOLD = 1.5;                             // м: кронштейны по стене не реже
 const STREET = 1;                             // м: от забора к улице до оси трубы
 const REACH = 45;                             // м: улица по обе стороны от середины двора
-const CLEAR = 0.08, ROOM = 0.15;              // м: от наличника и выпусков пятой стены до трубы; ширина спуска с краном
-const ENTRY = 1.9;                            // м над землёй: ввод в стену — примерно здесь, по оси бревна
+const CLEAR = 0.08, ROOM = 0.15;              // м: от наличника и выпусков пятой стены до трубы; ширина места для ввода
 const TILE = 1.2;                             // м трубы Ø 95 мм на одну развёртку
 const FOOTING = 0.5;                          // м: сторона картинки цемента
 const SIDES = 16;
 
 const strips = (file, rows) => soften(new THREE.MeshLambertMaterial({ map: tiles([`assets/textures/${file}`])[0] }),
   { contrast: 1, saturation: 1, scales: [0.3, 1], low: [1, 1, 1], high: [1, 1, 1], cells: [1, rows] });
-const paint = (hex, extra) => new THREE.MeshLambertMaterial({ color: hex, ...extra });
+const paint = (hex) => new THREE.MeshLambertMaterial({ color: hex });
 const MAT = {
   yellow: strips('gas-yellow.jpg', 11), turn: strips('gas-turn.jpg', 2), oxide: strips('gas-oxide.jpg', 6), post: strips('gas-post.jpg', 4),
   footing: new THREE.MeshLambertMaterial({ map: tiles(['assets/textures/gas-footing.webp'])[0], transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
-  steel: paint(0x8b908b, { side: THREE.DoubleSide }), brass: paint(0x95815c), handle: paint(0x40453e), seal: paint(0x55534c),
+  iron: paint(0x1e2022), brass: paint(0x95815c), handle: paint(0xa3261d), seal: paint(0x2f2d29),
 };
 const FEET = 5; // картинок цемента в ряд
 
 // Путь трубы — ломаная, в углах колена радиуса bend(i): точки оси с касательной t и длиной s от начала.
 function route(points, bend) {
-  points = points.filter((p, i) => !i || p.distanceTo(points[i - 1]) > 1e-6);
   const dir = (a, b) => b.clone().sub(a).normalize();
   const out = [{ p: points[0].clone(), t: dir(points[0], points[1]), s: 0 }];
   const push = (p, t) => out.push({ p, t, s: out.at(-1).s + p.distanceTo(out.at(-1).p) });
@@ -100,8 +100,8 @@ function tube(path, r, set) {
 }
 
 // Где отвод входит в бок дома: глухой бок (без двери), ближнее к улице место между окнами, углами и выпусками
-// пятой стены, где подъём не заденет наличники. Всё — в метрах двора: дом стоит в at фасадом к улице (+z),
-// fence — где забор со стороны улицы (z), gate — середина ворот (x).
+// пятой стены. Всё — в метрах двора: дом стоит в at фасадом к улице (+z), fence — где забор со стороны улицы (z),
+// gate — середина ворот (x).
 export function planGas(plan, at, { fence, gate }) {
   const door = plan.openings.find((o) => o.kind === 'door').wall;
   const wall = door === 'left' ? 'right' : 'left', out = wall === 'right' ? 1 : -1;
@@ -109,7 +109,7 @@ export function planGas(plan, at, { fence, gate }) {
   const blocked = plan.openings.filter((o) => o.wall === wall).map((o) => [o.at - TRIM_WIDTH / 2 - CLEAR, o.at + TRIM_WIDTH / 2 + CLEAR]);
   if (plan.middle !== null) blocked.push([plan.middle - R - CLEAR, plan.middle + R + CLEAR]);
   blocked.sort((a, b) => a[0] - b[0]);
-  // Свободные отрезки вдоль бока, z — от середины дома; берём ближний к улице, куда помещается спуск с краном.
+  // Свободные отрезки вдоль бока, z — от середины дома; берём ближний к улице.
   const free = [];
   let from = -edge;
   for (const [a, b] of blocked) {
@@ -117,21 +117,9 @@ export function planGas(plan, at, { fence, gate }) {
     from = Math.max(from, b);
   }
   if (from < edge) free.push([from, edge]);
-  // У пятистенка — перед пятой стеной: по стене за неё не пройти, мешают её выпуски.
-  const [a, b] = free.filter(([a, b]) => b - a >= ROOM && (plan.middle === null || a > plan.middle)).at(-1);
-  // По стене отвод идёт над наличниками бока, но не ниже улицы.
-  const tops = plan.openings.filter((o) => o.wall === wall && o.kind === 'window').map((o) => PLINTH + o.top + TRIM_ABOVE + 0.12);
-  // Ввод — по оси бревна бока (боковые стены лежат на цоколе), ближайшего к высоте ENTRY.
-  const k = Math.round((ENTRY - PLINTH - R) / COURSE);
+  const [a, b] = free.filter(([a, b]) => b - a >= ROOM).at(-1);
   const wallX = at.x + (out * plan.w) / 2;
-  return {
-    seed: plan.seed, street: fence + STREET, gate,
-    branch: {
-      x: wallX + out * BRANCH.out, wallX, out, y: PLINTH + R + k * COURSE, run: Math.max(MAIN.axis, ...tops),
-      // К стене — сразу за остатками брёвен фасада на углу; ввод — у переднего края глухого места.
-      corner: at.z + plan.d / 2 - THICKEST * R - 0.1, z: at.z + Math.max((a + b) / 2, b - 0.25),
-    },
-  };
+  return { seed: plan.seed, street: fence + STREET, gate, branch: { x: wallX + out * BRANCH.out, z: at.z + Math.max((a + b) / 2, b - 0.25), wallX, out } };
 }
 
 export function buildGas({ seed, street, gate, branch }) {
@@ -160,13 +148,15 @@ export function buildGas({ seed, street, gate, branch }) {
     for (let i = 0; i < uv.count; i++) uv.setX(i, (k + uv.getX(i)) / FEET);
     put('footing', plane, new THREE.Matrix4().setPosition(x, 0.005, zz));
   };
-  // Стойка: круглая труба от цемента до седла — гнутой полосы, что подхватывает трубу снизу.
-  const stand = (x, zz, pipe, post, along) => {
-    const seat = H - pipe - 0.005;
+  // Стойка: круглая труба от цемента до седла — гнутой полосы толщиной 4 мм, что подхватывает трубу снизу на 200°.
+  const stand = (x, zz, pipe, post, axis, y = H) => {
+    const seat = y - pipe - 0.006;
     put('post', tube(line(V(x, -0.05, zz), V(x, seat, zz)), post, set()));
-    // Седло — часть трубки на 200° вокруг низа, ось вдоль трубы.
-    put('steel', new THREE.CylinderGeometry(pipe + 0.005, pipe + 0.005, 0.07, 12, 1, true, THREE.MathUtils.degToRad(170), THREE.MathUtils.degToRad(200))
-      .rotateZ(Math.PI / 2).rotateY(along === 'z' ? Math.PI / 2 : 0), new THREE.Matrix4().setPosition(x, H, zz));
+    const saddle = new THREE.Shape().absarc(0, 0, pipe + 0.006, THREE.MathUtils.degToRad(170), THREE.MathUtils.degToRad(370), false)
+      .absarc(0, 0, pipe + 0.002, THREE.MathUtils.degToRad(370), THREE.MathUtils.degToRad(170), true);
+    put('iron', new THREE.ExtrudeGeometry(saddle, { depth: 0.06, bevelEnabled: false, curveSegments: 12 }).translate(0, 0, -0.03)
+      .rotateY(axis === 'x' ? Math.PI / 2 : 0), new THREE.Matrix4().setPosition(x, y, zz));
+    put('iron', new THREE.CylinderGeometry(post + 0.004, post + 0.004, 0.03, 12), new THREE.Matrix4().setPosition(x, seat - 0.012, zz));
     feet(x, zz);
   };
   // Стойки улицы — от арки наружу, у самых колен и дальше через SPAN; у тройника стойку отодвигаем.
@@ -174,48 +164,32 @@ export function buildGas({ seed, street, gate, branch }) {
   for (let x = a1 + 0.5; x < REACH; x += SPAN) posts.push(x);
   for (let x = a0 - 0.5; x > -REACH; x -= SPAN) posts.push(x);
   for (const x of posts) stand(Math.abs(x - branch.x) < 0.3 ? branch.x + Math.sign(x - branch.x || 1) * 0.3 : x, z, MAIN.r, POST.r, 'x');
-  // Стояки арки держат свои высокие стойки (видео Никиты): тёмная труба от земли вплотную к стояку со стороны улицы
-  // почти до верхнего колена, прихвачена к нему накладками.
-  const beside = MAIN.r + POST.r + 0.015, tall = top - ARCH.high;
-  for (const x of [left, right]) {
-    put('post', tube(line(V(x, -0.05, z + beside), V(x, tall, z + beside)), POST.r, set()));
-    for (const h of [H + 0.5 * (tall - H), tall - 0.12]) put('steel', new THREE.BoxGeometry(0.04, 0.03, beside), new THREE.Matrix4().setPosition(x, h, z + beside / 2));
-    feet(x, z + beside);
-  }
+  // Высокие стойки арки — под перемычкой, сразу за верхними коленами: держат её снизу седлом.
+  for (const x of [left + ARCH.high + 0.15, right - ARCH.high - 0.15]) stand(x, z, MAIN.r, POST.r, 'x', top);
 
-  // Тройник на улице и отвод: над забором во двор, за углом к боку дома, по стене, вниз и в стену.
-  const { x, wallX, out, y, run, corner } = branch;
+  // Тройник на улице и отвод: над забором вдоль бока к месту ввода, коленом к стене и в стену.
+  const { x, wallX, out } = branch;
   put('yellow', tube(line(V(x - 0.11, H, z), V(x + 0.11, H, z)), MAIN.r * 1.15, set()));
-  const near = wallX + out * BRANCH.off;
-  put('yellow', tube(route([V(x, H, z), V(x, H, corner), V(near, H, corner), V(near, run, corner), V(near, run, branch.z),
-    V(near, y, branch.z), V(wallX, y, branch.z)], () => ELBOW), BRANCH.r, set()));
-  // Стойки отвода во дворе — поровну, только если пролёт от тройника до угла дома длиннее BRANCH_SPAN.
-  const span = z - corner, count = Math.ceil(span / BRANCH_SPAN);
+  put('yellow', tube(route([V(x, H, z), V(x, H, branch.z), V(wallX, H, branch.z)], () => ELBOW), BRANCH.r, set()));
+  const span = z - branch.z, count = Math.ceil(span / BRANCH_SPAN);
   for (let i = 1; i < count; i++) stand(x, z - (span * i) / count, BRANCH.r, POST.branch, 'z');
 
-  // Кронштейн: пятка на бревне, вынос до трубы, хомут вокруг неё — на стене (по z) или на спуске (вверх).
-  const heel = wallX + out * (THICKEST * R + 0.006), arm = BRANCH.off - THICKEST * R - BRANCH.r;
-  const bracket = (h, zz, up) => {
-    put('steel', new THREE.BoxGeometry(0.012, 0.1, 0.05), new THREE.Matrix4().setPosition(heel, h, zz));
-    put('steel', new THREE.BoxGeometry(arm, 0.02, 0.01), new THREE.Matrix4().setPosition(heel + (out * arm) / 2, h, zz));
-    const clamp = new THREE.TorusGeometry(BRANCH.r + 0.004, 0.004, 6, SIDES);
-    put('steel', up ? clamp.rotateX(Math.PI / 2) : clamp, new THREE.Matrix4().setPosition(near, h, zz));
-  };
-  const along = corner - branch.z, holds = Math.ceil(along / HOLD);
-  for (let i = 0; i <= holds; i++) bracket(run, corner - 0.15 - ((along - 0.3) * i) / holds, false);
-  // Кран на спуске: корпус с гранями на концах, шток наружу и рукоятка вдоль трубы — кран открыт.
-  const valve = y + 0.35 * (run - y);
-  put('brass', new THREE.CylinderGeometry(BRANCH.r * 1.8, BRANCH.r * 1.8, 0.05, SIDES), new THREE.Matrix4().setPosition(near, valve, branch.z));
-  for (const dy of [-0.035, 0.035]) put('brass', new THREE.CylinderGeometry(BRANCH.r * 1.5, BRANCH.r * 1.5, 0.022, 6), new THREE.Matrix4().setPosition(near, valve + dy, branch.z));
-  put('brass', new THREE.CylinderGeometry(0.006, 0.006, 0.04, 8).rotateZ(Math.PI / 2), new THREE.Matrix4().setPosition(near + out * 0.045, valve, branch.z));
-  put('handle', new THREE.BoxGeometry(0.012, 0.11, 0.022), new THREE.Matrix4().setPosition(near + out * 0.068, valve + 0.04, branch.z));
-  // И кронштейн на спуске над краном — по оси венца.
-  bracket(PLINTH + R + Math.round((valve + 0.3 - PLINTH - R) / COURSE) * COURSE, branch.z, true);
-  // Ввод: стальной футляр из стены (бревно бывает и тоньше — тогда футляр торчит чуть больше), в нём тёмная заделка.
-  const sleeve = BRANCH.r * 1.8, face = wallX + out * (THICKEST * R + 0.005), toWall = new THREE.Matrix4().makeRotationY((out * Math.PI) / 2);
-  put('steel', new THREE.CylinderGeometry(sleeve, sleeve, THICKEST * R, SIDES, 1, true).rotateZ(Math.PI / 2), new THREE.Matrix4().setPosition(face - (out * THICKEST * R) / 2, y, branch.z));
-  put('steel', new THREE.RingGeometry(sleeve * 0.85, sleeve, SIDES).applyMatrix4(toWall), new THREE.Matrix4().setPosition(face, y, branch.z));
-  put('seal', new THREE.RingGeometry(BRANCH.r, sleeve * 0.85, SIDES).applyMatrix4(toWall), new THREE.Matrix4().setPosition(face - out * 0.002, y, branch.z));
+  // Кран между коленом и стеной: корпус — тело вращения (шар между двумя муфтами с гранями), шток вверх,
+  // красная рукоятка-флажок вдоль трубы.
+  const face = wallX + out * (THICKEST * R + 0.005), valve = (face + x - out * ELBOW) / 2;
+  const toAxis = new THREE.Matrix4().makeRotationZ(Math.PI / 2), at = (dx, dy = 0) => new THREE.Matrix4().setPosition(valve + dx, H + dy, branch.z);
+  const r = BRANCH.r, body = [[r * 0.9, -0.05], [r * 1.25, -0.05], [r * 1.25, -0.03], [r * 1.55, -0.022], [r * 1.85, -0.008], [r * 1.85, 0.008], [r * 1.55, 0.022], [r * 1.25, 0.03], [r * 1.25, 0.05], [r * 0.9, 0.05]];
+  put('brass', new THREE.LatheGeometry(body.map(([a, b]) => new THREE.Vector2(a, b)), SIDES).applyMatrix4(toAxis), at(0));
+  for (const dx of [-0.04, 0.04]) put('brass', new THREE.CylinderGeometry(r * 1.45, r * 1.45, 0.016, 6).applyMatrix4(toAxis), at(dx));
+  put('brass', new THREE.CylinderGeometry(0.005, 0.006, 0.02, 10), at(0, r * 1.8 + 0.008));
+  const lever = new THREE.Shape().moveTo(-0.012, -0.007).lineTo(0.07, -0.005).quadraticCurveTo(0.08, 0, 0.07, 0.005).lineTo(-0.012, 0.007).quadraticCurveTo(-0.018, 0, -0.012, -0.007);
+  put('handle', new THREE.ExtrudeGeometry(lever, { depth: 0.003, bevelEnabled: true, bevelThickness: 0.0015, bevelSize: 0.0015, bevelSegments: 2 })
+    .rotateX(-Math.PI / 2).rotateY(out > 0 ? Math.PI : 0), at(0, r * 1.8 + 0.02));
+  // Ввод: футляр, крашенный как труба, из стены (бревно бывает и тоньше — тогда футляр торчит чуть больше),
+  // в нём тёмная заделка.
+  const sleeve = r * 1.8, toWall = new THREE.Matrix4().makeRotationY((out * Math.PI) / 2);
+  put('yellow', tube(line(V(wallX, H, branch.z), V(face, H, branch.z)), sleeve, set()));
+  put('seal', new THREE.RingGeometry(r, sleeve, SIDES).applyMatrix4(toWall), new THREE.Matrix4().setPosition(face, H, branch.z));
 
   const group = new THREE.Group();
   for (const [name, list] of Object.entries(parts)) {

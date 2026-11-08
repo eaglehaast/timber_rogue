@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
-import { planHouse, buildHouse, R, OVERHANG } from './house.js';
+import { planHouse, buildHouse } from './house.js';
 import { generator } from './random.js';
 import { makeFence, YARD, GATES } from './fence.js';
 import { planGas, buildGas } from './gas.js';
@@ -36,28 +36,25 @@ const lawn = new THREE.Mesh(new THREE.PlaneGeometry(160, 160).rotateX(-Math.PI /
 lawn.receiveShadow = true;
 scene.add(lawn);
 
-// Дом стоит фасадом к улице прямо у забора (Никита, 2026-11-08): чаще фасад в линию забора и забор примыкает
-// к углам дома, реже перед фасадом палисадник в 1,5–2,5 м. Боком с крыльцом — к воротам, в ASIDE от их середины.
+// Дом стоит фасадом к улице у забора, за палисадником в 1,5–2,5 м (Никита, 2026-11-08: фасад прямо в линию забора
+// не нравится). Боком с крыльцом — к воротам, в ASIDE от их середины.
 // Мир стенда — от середины дома: двор с забором и газом сдвинут так, чтобы дом оказался в нуле.
-const ATTACHED = 0.6, PALISADE = [1.5, 2.5], ASIDE = 5;
+const PALISADE = [1.5, 2.5], ASIDE = 5;
 let house = null, yard = null, layout = null;
 const label = document.getElementById('seed');
 function rebuild(seed) {
   if (house) scene.remove(house, yard);
   const plan = planHouse(seed);
   house = buildHouse(plan);
-  const rnd = generator(seed + 13);
-  const attached = rnd() < ATTACHED, front = attached ? 0 : PALISADE[0] + rnd() * (PALISADE[1] - PALISADE[0]);
+  const front = PALISADE[0] + generator(seed + 13)() * (PALISADE[1] - PALISADE[0]);
   const door = plan.openings.find((o) => o.kind === 'door').wall === 'right' ? 1 : -1;
-  // Брёвна фасада — вровень с линией забора: ось фасадной стены на R внутри двора.
-  const at = { x: GATES.at - door * (plan.w / 2 + ASIDE), z: YARD.d / 2 - front - R - plan.d / 2 };
-  const corner = plan.w / 2 + OVERHANG + R;
+  const at = { x: GATES.at - door * (plan.w / 2 + ASIDE), z: YARD.d / 2 - front - plan.d / 2 };
   const gas = planGas(plan, at, { fence: YARD.d / 2, gate: GATES.at });
-  yard = new THREE.Group().add(makeFence({ house: attached ? [at.x - corner, at.x + corner] : undefined }), buildGas(gas));
+  yard = new THREE.Group().add(makeFence(), buildGas(gas));
   yard.position.set(-at.x, 0, -at.z);
-  layout = { at, gas, attached };
+  layout = { at, gas };
   scene.add(house, yard);
-  label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов · ${attached ? 'фасад в линию забора' : `палисадник ${front.toFixed(1)} м`}`;
+  label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов · палисадник ${front.toFixed(1)} м`;
 }
 rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
 
