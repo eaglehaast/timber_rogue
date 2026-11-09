@@ -5,7 +5,7 @@ import { makeFence, YARD, GATES, WICKET } from './fence.js';
 import { planGas, buildGas } from './gas.js';
 import { planPower, buildPower } from './power.js';
 import { planRoad, buildRoad } from './road.js';
-import { planLand } from './land.js';
+import { planLand, buildLand } from './land.js';
 import { shapeGround, height } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS } from './world.js';
 import { driftClouds } from './sky.js';
@@ -58,7 +58,7 @@ function rebuild(seed) {
   const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) ? 0 : road.grass(x, z) * lawn(x, z));
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: road.trodden, lush: land.lush }), makeFence(), buildGas(gas), buildPower(power), buildRoad(road));
+  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: road.trodden, lush: land.lush }), makeFence(), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land));
   layout = { at, gas, power, road };
   scene.add(house, yard);
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
