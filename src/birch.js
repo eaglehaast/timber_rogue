@@ -63,7 +63,7 @@ function swaying(material) {
 }
 const bark = swaying(soften(new THREE.MeshLambertMaterial({ map: barkMap }), {
   contrast: 1, saturation: 0.8, scales: [0.4, 1.3], low: [0.85, 0.85, 0.83], high: [1.05, 1.05, 1.02],
-  cells: BARK.cells, blend: { map: barkMap, scale: [1, 1], groups: BARK.groups, sharp: 5, ragged: [1.8, 4, 0.5] },
+  cells: BARK.cells, blend: { map: barkMap, scale: [1, 1], groups: BARK.groups, sharp: 6, ragged: [1.2, 3, 0.5], relief: 0.7 },
 }));
 // Издали мип-уровни усредняют тонкие листья с прозрачным фоном, прозрачность растёт, и альфа-тест съедает крону.
 // Поэтому прозрачность поднимаем с каждым мип-уровнем: на сколько уровней картинка ужата на экране.
@@ -88,10 +88,15 @@ function skeleton(height) {
   const axes = [];
   const lean = rand(0, 0.07), az = rand(0, 2 * Math.PI);
   const R = 0.006 * height * rand(0.9, 1.15);
-  const ctrl = walk(new THREE.Vector3(0, -0.15, 0), new THREE.Vector3(Math.cos(az) * lean, 1, -Math.sin(az) * lean).normalize(), height, 0.8,
-    (d) => wobble(d, 0.025).addScaledVector(UP, 0.01).normalize());
-  // Ствол сужается к вершине, у земли раздут комлем.
-  const trunk = makeAxis(ctrl, (s, len) => Math.max(0.01, R * (1 - s / len) ** 0.8 * (1 + 0.3 * Math.exp(-s / 0.4))), {});
+  // Ствол не палка: клонится до 4°, по высоте плавно изгибается в своей плоскости (bow) и чуть шатается.
+  const turn0 = az + rand(-1.5, 1.5), bow = new THREE.Vector3(Math.cos(turn0), 0, -Math.sin(turn0));
+  const waves = rand(0.6, 1.6), phase = rand(0, 2 * Math.PI), bend = rand(0.02, 0.06);
+  const axis = new THREE.Vector3(Math.cos(az) * lean, 1, -Math.sin(az) * lean).normalize();
+  const ctrl = walk(new THREE.Vector3(0, -0.15, 0), axis, height, 0.6,
+    (d, f) => d.copy(axis).addScaledVector(bow, bend * Math.sin(2 * Math.PI * waves * f + phase)).add(new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)).multiplyScalar(0.01)).normalize());
+  // Ствол сужается к вершине, у земли раздут комлем; толщина гуляет наплывами.
+  const swell = rand(0, 2 * Math.PI);
+  const trunk = makeAxis(ctrl, (s, len) => Math.max(0.01, R * (1 - s / len) ** 0.8 * (1 + 0.3 * Math.exp(-s / 0.4)) * (1 + 0.05 * Math.sin(1.3 * s + swell))), {});
   axes.push(trunk);
   // Крона поднята: ниже — голый ствол. Ветви по спирали, внизу кроны отходят шире и длиннее, к макушке — круче вверх.
   const crown = height * rand(0.4, 0.55);
@@ -217,9 +222,10 @@ function sprayGeometry(list, height) {
 function grow(height, k) {
   seed(7919 * (k + 1));
   const { axes, trunk } = skeleton(height);
-  // Комель чёрный до 0,3–1 м, выше чёрная кора уходит в бересту рваными языками (ragged в материале).
-  const black = rand(0.3, 1.0) * Math.min(1, height / 14);
-  const grade = (a, s) => (a.level ? 0 : 1 - THREE.MathUtils.smoothstep(s, black, black + 2));
+  // Тёмная кора комля у старой берёзы поднимается на 2–4 м, у молодой её почти нет. Выше она уходит в бересту
+  // трещинами и языками (relief и ragged в материале).
+  const black = rand(0.3, 1) * 2 * (height / 20) ** 2;
+  const grade = (a, s) => (a.level ? 0 : 1 - THREE.MathUtils.smoothstep(s, black, black + 1.2));
   return { bark: barkGeometry(axes, height, grade), spray: sprayGeometry(sprays(axes, trunk, height), height) };
 }
 
