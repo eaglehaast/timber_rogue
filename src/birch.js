@@ -18,10 +18,11 @@ const wobble = (d, k) => d.add(new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(
 export const KINDS = [20, 19, 18, 15, 14, 13, 8, 6.5];
 
 // Кора — плитки 40 см (BARK_TILE клёна): группы — белая береста и тёмный комель, переходят по высоте.
-// Пряди — атлас вертикальных картинок: aspect — ширина к высоте клетки, length — длина клетки в метрах,
-// up — прядь торчит вверх (крепится снизу), иначе свисает (крепится сверху).
+// Пряди — атлас вертикальных картинок (tools/birch.py): aspect — ширина к высоте клетки, length — длина клетки
+// в метрах, kind — вид: 0 длинная прядь, 1 короткий пучок (обе свисают, крепятся сверху), 2 побег вверх (снизу).
 const BARK = await (await fetch('assets/textures/birch-bark.json')).json();
 const SPRAY = await (await fetch('assets/textures/birch-spray.json')).json();
+const BY_KIND = [0, 1, 2].map((kind) => SPRAY.kind.flatMap((k, cell) => (k === kind ? [cell] : [])));
 const [barkMap, sprayMap] = tiles(['assets/textures/birch-bark.jpg', 'assets/textures/birch-spray.webp']);
 
 // Ветер в вершинном шейдере: сдвиг в метрах мира переводим в координаты копии (поворот и масштаб копии).
@@ -64,9 +65,23 @@ const bark = swaying(soften(new THREE.MeshLambertMaterial({ map: barkMap }), {
   contrast: 0.8, saturation: 0.8, scales: [0.4, 1.3], low: [0.85, 0.85, 0.83], high: [1.05, 1.05, 1.02],
   cells: BARK.cells, blend: { map: barkMap, scale: [1, 1], groups: BARK.groups },
 }));
-const spray = swaying(new THREE.MeshLambertMaterial({ map: sprayMap, alphaTest: 0.5 }));
+// Издали мип-уровни усредняют тонкие листья с прозрачным фоном, прозрачность растёт, и альфа-тест съедает крону.
+// Поэтому прозрачность поднимаем с каждым мип-уровнем: на сколько уровней картинка ужата на экране.
+function dense(material) {
+  const prior = material.onBeforeCompile, key = material.customProgramCacheKey();
+  material.onBeforeCompile = (shader, renderer) => {
+    prior.call(material, shader, renderer);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <alphatest_fragment>', `
+      vec2 texels = max(abs(dFdx(vMapUv)), abs(dFdy(vMapUv))) * vec2(textureSize(map, 0));
+      diffuseColor.a *= 1.0 + 0.25 * max(0.0, log2(max(texels.x, texels.y)));
+      #include <alphatest_fragment>`);
+  };
+  material.customProgramCacheKey = () => `${key}dense`;
+  return material;
+}
+const spray = dense(swaying(new THREE.MeshLambertMaterial({ map: sprayMap, alphaTest: 0.5 })));
 const depth = (map) => swaying(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map, alphaTest: map ? 0.5 : 0 }));
-const [barkDepth, sprayDepth] = [depth(null), depth(sprayMap)];
+const [barkDepth, sprayDepth] = [depth(null), dense(depth(sprayMap))];
 
 // Скелет берёзы ростом height: ствол, ветви, на ветвях веточки.
 function skeleton(height) {
@@ -107,20 +122,21 @@ function skeleton(height) {
 }
 
 // Пряди на ветвях и веточках: где крепится (at), куда смотрит плоскость (across), куда идёт прядь (down), длина l.
+// Вдоль ветвей свисают длинные пряди и короткие пучки; макушку и концы верхних ветвей венчают побеги вверх.
+const LONG = 0.7; // доля длинных прядей среди свисающих
 function sprays(axes, trunk, height) {
-  const [cols, rows] = SPRAY.grid, list = [];
-  const scale = THREE.MathUtils.clamp(height / 16, 0.6, 1);
+  const list = [], scale = THREE.MathUtils.clamp(height / 16, 0.6, 1);
+  const add = (a, s, kind) => {
+    const at = section(a, s).center, up = kind === 2, cells = BY_KIND[kind], cell = cells[Math.floor(random() * cells.length)];
+    const outward = at.clone().sub(section(trunk, Math.min(trunk.len, at.y)).center).setY(0).normalize();
+    const down = (up ? UP.clone() : UP.clone().negate()).addScaledVector(outward, up ? 0.4 : 0.25).normalize();
+    const az = rand(0, 2 * Math.PI), across = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
+    across.addScaledVector(down, -across.dot(down)).normalize();
+    list.push({ at, across, down, up, cell, l: SPRAY.length[cell] * scale * rand(0.8, 1.2), seed: rand(0, 2 * Math.PI) });
+  };
   for (const a of axes) {
-    if (!a.level) continue;
-    for (let s = 0.2 * a.len; s <= a.len; s += rand(0.2, 0.4)) {
-      const at = section(a, s).center;
-      const outward = at.clone().sub(section(trunk, Math.min(trunk.len, at.y)).center).setY(0).normalize();
-      const cell = Math.floor(random() * cols * rows), up = SPRAY.up[cell];
-      const down = (up ? UP.clone() : UP.clone().negate()).addScaledVector(outward, up ? 0.4 : 0.25).normalize();
-      const az = rand(0, 2 * Math.PI), across = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
-      across.addScaledVector(down, -across.dot(down)).normalize();
-      list.push({ at, across, down, up, cell, l: SPRAY.length * scale * rand(0.7, 1.2), seed: rand(0, 2 * Math.PI) });
-    }
+    if (a.level) for (let s = 0.2 * a.len; s <= a.len; s += rand(0.08, 0.16)) add(a, s, random() < LONG ? 0 : 1);
+    if (!a.level || (a.level === 1 && a.attach > 0.75 * trunk.len)) add(a, a.len, 2);
   }
   return list;
 }

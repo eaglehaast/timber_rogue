@@ -25,12 +25,13 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
   const vec3 = (c) => `vec3(${c.map((v) => v.toFixed(2)).join(', ')})`;
   const count = cells ? cells[0] * cells[1] : 1;
   // Номер плитки скачет на краю клетки, поэтому мип-уровень берём по производным непрерывных координат.
-  // Плитку берём из [first, first + n) по хешу номера клетки.
+  // Плитку берём из [first, first + n) по хешу номера клетки. Плитки нумеруются, как лежат в картинке: слева
+  // направо и сверху вниз, — а v в текстуре растёт снизу, поэтому ряд считаем от верха.
   const tile = cells ? `
     vec4 softTile(sampler2D image, vec2 uv, float first, float n) {
       const vec2 N = vec2(${cells.map((v) => v.toFixed(1)).join(', ')});
       float k = first + floor(softHash(floor(uv)) * n);
-      vec2 at = (vec2(mod(k, N.x), floor(k / N.x)) + fract(uv)) / N;
+      vec2 at = (vec2(mod(k, N.x), N.y - 1.0 - floor(k / N.x)) + fract(uv)) / N;
       return textureGrad(image, at, dFdx(uv) / N, dFdy(uv) / N);
     }` : `
     vec4 softTile(sampler2D image, vec2 uv, float first, float n) { return texture2D(image, uv); }`;
