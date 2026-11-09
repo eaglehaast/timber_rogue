@@ -34,7 +34,8 @@ const bark = swaying(soften(new THREE.MeshLambertMaterial({ map: barkMap }), {
   contrast: 1, saturation: 0.85, scales: [0.4, 1.3], low: [0.85, 0.85, 0.83], high: [1.05, 1.03, 1.0],
   cells: BARK.cells, blend: { map: barkMap, scale: [1, 1], groups: BARK.groups },
 }));
-const spray = dense(swaying(new THREE.MeshLambertMaterial({ map: sprayMap, alphaTest: 0.5 })));
+// Хвоя на картинках светлее живой: в бору она тёмная, сизо-зелёная.
+const spray = dense(swaying(new THREE.MeshLambertMaterial({ map: sprayMap, alphaTest: 0.5, color: new THREE.Color(0.5, 0.6, 0.52) })));
 const [barkDepth, sprayDepth] = [depth(null), dense(depth(sprayMap))];
 const PARTS = [['bark', bark, barkDepth, true], ['spray', spray, sprayDepth, false]];
 // Дальше FAR метров сосна попроще: ствол и толстые ветви редкими кольцами, хвои втрое меньше, но кисти крупнее.
@@ -55,7 +56,7 @@ function skeleton({ h, crown }) {
   // Узлы мутовок — через годовой прирост: у молодых чаще, у взрослых до 0,6 м.
   const node = () => Math.min(0.6, 0.15 + 0.05 * h) * rand(0.7, 1.3);
   const out = (at, turn) => at.frame[0].clone().multiplyScalar(Math.cos(turn)).addScaledVector(at.frame[1], Math.sin(turn));
-  const start = crown * trunk.len, reach = young ? 0.38 * h : crown > 0.5 ? 0.15 * h : 0.22 * h;
+  const start = crown * trunk.len, reach = young ? 0.38 * h : crown > 0.5 ? 0.11 * h : 0.18 * h;
   for (let s = young ? 0.08 * h : 0.25 * h, turn = rand(0, 7); s < trunk.len - 0.6 * node(); s += node()) {
     const at = section(trunk, s);
     turn += rand(0.6, 1.6);
@@ -79,8 +80,8 @@ function skeleton({ h, crown }) {
       // Молодая — конус: ветви короче к макушке; взрослая — купол.
       const len = Math.max(0.12, reach * (young ? 1 - f : 1 - f ** 1.6) * rand(0.75, 1.15));
       const r0 = Math.min(0.06, at.r * rand(0.35, 0.5));
-      // Ветвь идёт вбок, к концу загибается вверх — так растут сосновые ветви.
-      const limb = makeAxis(walk(at.center, dir, len, Math.min(0.3, len / 3), (d, q) => wobble(d, 0.05).addScaledVector(UP, 0.35 * q * q - 0.05).normalize()),
+      // Ветвь идёт вбок коленами, у ствола чуть никнет, к концу загибается вверх — так растут сосновые ветви.
+      const limb = makeAxis(walk(at.center, dir, len, Math.min(0.3, len / 3), (d, q) => wobble(d, 0.12).addScaledVector(UP, 0.3 * q * q - 0.08).normalize()),
         (q, l) => Math.max(0.004, r0 * (1 - q / l) ** 0.8), { parent: trunk, attach: s, level: 1, joint: 'twig' });
       axes.push(limb);
       // Веточки на длинных ветвях — поочерёдно в стороны и чуть вверх.
@@ -101,18 +102,19 @@ function skeleton({ h, crown }) {
 // Хвоя кистями на внешней части ветвей и веточек (у ствола ветви голые): веточки с кистями тянутся вдоль ветви наружу и вверх,
 // короткие кисти — между ними, на концах — побеги вверх. Макушку венчает побег.
 function sprays(axes, trunk, h) {
-  const list = [], scale = THREE.MathUtils.clamp(h / 10, 0.22, 1);
+  const list = [], scale = THREE.MathUtils.clamp(h / 10, 0.22, 1.4);
   const add = (a, s, kind) => {
     const on = section(a, s), cells = BY_KIND[kind], cell = cells[Math.floor(random() * cells.length)];
     const down = kind === 2 ? UP.clone().addScaledVector(on.tangent, 0.5).normalize() : on.tangent.clone().addScaledVector(UP, rand(0.1, 0.5)).normalize();
-    const across = wobble(new THREE.Vector3(), 1);
+    // Половина кистей лежит плашмя, как лапы на ветви (снизу из бора видно сплошную хвою), остальные — как придётся.
+    const across = random() < 0.5 ? UP.clone().cross(down) : wobble(new THREE.Vector3(), 1);
     across.addScaledVector(down, -across.dot(down)).normalize();
     list.push({ at: on.center, across, down, up: kind === 2, cell, l: SPRAY.length[cell] * scale * rand(0.8, 1.2), seed: rand(0, 2 * Math.PI) });
   };
   for (const a of axes) {
     if (a.dead || !a.level) continue;
-    const from = a.level === 2 ? 0.1 : a.children.length ? 0.5 : 0.3;
-    for (let s = from * a.len; s < a.len; s += rand(0.07, 0.13) * scale) add(a, s, random() < 0.6 ? 0 : 1);
+    const from = a.level === 2 ? 0.05 : a.children.length ? 0.35 : 0.25;
+    for (let s = from * a.len; s < a.len; s += rand(0.05, 0.09) * scale) add(a, s, random() < 0.5 ? 0 : 1);
     add(a, a.len, 2);
   }
   add(trunk, trunk.len, 2);

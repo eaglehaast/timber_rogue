@@ -10,22 +10,25 @@ import { groundGeometry, height } from './terrain.js';
 // Пятна тона около 15 и 4 метров.
 const GRASS_TILE = 2;
 // Под соснами земля усыпана хвоей: набор из 5 плиток по LITTER_TILE метров с общими краями (tools/pine.py).
-const LITTER_TILE = 1.2;
+const LITTER_TILE = 1.2, SHADE = 0.45;
 const LUSH = 'vec3(0.72, 1.25, 0.22)'; // сочная зелень: во сколько раз каждый цвет против яркости пучка
 const [texture, litter] = tiles(['assets/textures/grass-clover.jpg', 'assets/textures/pine-litter.jpg']);
-const material = soften(new THREE.MeshLambertMaterial({ map: texture }), {
+const material = soften(new THREE.MeshLambertMaterial({ map: texture, vertexColors: true }), {
   contrast: 0.85, saturation: 0.65, scales: [0.13, 0.5], low: [0.8, 0.84, 0.82], high: [0.98, 0.98, 0.95], cells: [5, 4],
   blend: { map: litter, cells: [5, 1], groups: [5], scale: [GRASS_TILE / LITTER_TILE, GRASS_TILE / LITTER_TILE] },
 });
 
 // Земля — квадрат травы со стороной size метров, выгнутый по рельефу (terrain.js). Раскладка плиток
 // своя у каждого запуска игры и не меняется, пока на делянке растят новые деревья.
-// litter(x, z) — сколько на земле опавшей хвои, 0..1: там вместо травы подстилка.
+// litter(x, z) — сколько на земле опавшей хвои, 0..1: там вместо травы подстилка, и она в тени сомкнутых крон
+// (тени солнца от карты теней туда не достают): земля темнее на SHADE.
 export function makeGround(size, litter = () => 0) {
   texture.repeat.set(size / GRASS_TILE, size / GRASS_TILE);
   texture.offset.set(Math.floor(Math.random() * 100), Math.floor(Math.random() * 100));
   const geometry = groundGeometry(size), pos = geometry.attributes.position;
-  geometry.setAttribute('blend', new THREE.Float32BufferAttribute(Array.from({ length: pos.count }, (_, i) => 1 - litter(pos.getX(i), pos.getZ(i))), 1));
+  const under = Array.from({ length: pos.count }, (_, i) => litter(pos.getX(i), pos.getZ(i)));
+  geometry.setAttribute('blend', new THREE.Float32BufferAttribute(under.map((k) => 1 - k), 1));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(under.flatMap((k) => Array(3).fill(1 - SHADE * k)), 3));
   const ground = new THREE.Mesh(geometry, material);
   ground.receiveShadow = true;
   return ground;
