@@ -17,7 +17,7 @@ const wobble = (d, k) => d.add(new THREE.Vector3(rand(-1, 1), rand(-1, 1), rand(
 // Виды — рост, м: взрослые, средние, молодые.
 export const KINDS = [20, 19, 18, 15, 14, 13, 8, 6.5];
 
-// Кора — плитки 40 см (BARK_TILE клёна): группы — белая береста и тёмный комель, переходят по высоте.
+// Кора — плитки 40 см (BARK_TILE клёна): группы — береста, переходная и тёмный комель, сменяются по высоте.
 // Пряди — атлас вертикальных картинок (tools/birch.py): aspect — ширина к высоте клетки, length — длина клетки
 // в метрах, kind — вид: 0 длинная прядь, 1 короткий пучок (обе свисают, крепятся сверху), 2 побег вверх (снизу).
 const BARK = await (await fetch('assets/textures/birch-bark.json')).json();
@@ -148,7 +148,7 @@ function sprays(axes, trunk, height) {
 
 // Кора — трубки по стволу и ветвям, редкими кольцами: берёз сотни, а издали частые кольца не видны.
 // Веточки видны только прядями. Текстура в метрах: плитка TILE, по кругу — по среднему радиусу оси, вдоль — по дуге.
-// blend — ступень коры (grade): 1 у тёмного комля, 0 — белая береста. bend — плечо изгиба дерева в точке.
+// blend — ступень коры (grade): 0 береста, 1 переходная, 2 тёмный комель. bend — плечо изгиба дерева в точке.
 const TILE = 0.4;
 function barkGeometry(axes, height, grade) {
   const pos = [], normal = [], uv = [], blend = [], index = [];
@@ -218,14 +218,14 @@ function sprayGeometry(list, height) {
   return geometry;
 }
 
-// Берёза вида k: кора и пряди. Кора тёмная у комля (ступень 1) и белая выше (0), граница на своей высоте.
+// Берёза вида k: кора и пряди. Кора тёмная у комля (ступень 2), выше переходная (1), ещё выше береста (0).
 function grow(height, k) {
   seed(7919 * (k + 1));
   const { axes, trunk } = skeleton(height);
-  // Тёмная кора комля у старой берёзы поднимается на 2–4 м, у молодой её почти нет. Выше она уходит в бересту
-  // трещинами и языками (relief и ragged в материале).
-  const black = rand(0.3, 1) * 2 * (height / 20) ** 2;
-  const grade = (a, s) => (a.level ? 0 : 1 - THREE.MathUtils.smoothstep(s, black, black + 1.2));
+  // У старой берёзы береста снизу на 2–4 м в чёрных трещиноватых пятнах, в нижней трети их — сплошной тёмный
+  // комель; у молодой того и другого почти нет. Ступени сменяются языками (relief и ragged в материале).
+  const top = rand(0.5, 1) * 4 * (height / 20) ** 2, root = top / 3;
+  const grade = (a, s) => (a.level ? 0 : 2 - THREE.MathUtils.smoothstep(s, root, root + 0.5) - THREE.MathUtils.smoothstep(s, top, top + 1.2));
   return { bark: barkGeometry(axes, height, grade), spray: sprayGeometry(sprays(axes, trunk, height), height) };
 }
 
