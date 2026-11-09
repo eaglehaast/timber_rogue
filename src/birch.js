@@ -62,8 +62,8 @@ function swaying(material) {
   return material;
 }
 const bark = swaying(soften(new THREE.MeshLambertMaterial({ map: barkMap }), {
-  contrast: 0.8, saturation: 0.8, scales: [0.4, 1.3], low: [0.85, 0.85, 0.83], high: [1.05, 1.05, 1.02],
-  cells: BARK.cells, blend: { map: barkMap, scale: [1, 1], groups: BARK.groups },
+  contrast: 1, saturation: 0.8, scales: [0.4, 1.3], low: [0.85, 0.85, 0.83], high: [1.05, 1.05, 1.02],
+  cells: BARK.cells, blend: { map: barkMap, scale: [1, 1], groups: BARK.groups, sharp: 5, ragged: [1.8, 4, 0.5] },
 }));
 // Издали мип-уровни усредняют тонкие листья с прозрачным фоном, прозрачность растёт, и альфа-тест съедает крону.
 // Поэтому прозрачность поднимаем с каждым мип-уровнем: на сколько уровней картинка ужата на экране.
@@ -217,8 +217,9 @@ function sprayGeometry(list, height) {
 function grow(height, k) {
   seed(7919 * (k + 1));
   const { axes, trunk } = skeleton(height);
-  const black = height * rand(0.05, 0.1);
-  const grade = (a, s) => (a.level ? 0 : 1 - THREE.MathUtils.smoothstep(s, black, black + 1.2));
+  // Комель чёрный до 0,3–1 м, выше чёрная кора уходит в бересту рваными языками (ragged в материале).
+  const black = rand(0.3, 1.0) * Math.min(1, height / 14);
+  const grade = (a, s) => (a.level ? 0 : 1 - THREE.MathUtils.smoothstep(s, black, black + 2));
   return { bark: barkGeometry(axes, height, grade), spray: sprayGeometry(sprays(axes, trunk, height), height) };
 }
 

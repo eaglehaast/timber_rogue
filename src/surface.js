@@ -20,7 +20,9 @@ export const tiles = (files) => files.map((file) => {
 // blend = { map, scale, groups } — вторая картинка той же раскладки, её плитки поделены на группы подряд
 // (groups — сколько плиток в каждой). Атрибут blend геометрии ведёт вершину по ступеням: 0 — плитки первой
 // группы, 1 — второй, …, groups.length — первая картинка map; между ступенями — смесь соседних.
-// Координаты второй картинки — координаты map, умноженные на scale.
+// Координаты второй картинки — координаты map, умноженные на scale. Переход между ступенями: sharp — во сколько
+// раз он круче (1 — ровно на шаг ступени), ragged = [доля, ячеек шума по u, по v] — граница рвётся пятнами
+// и языками: к ступени вершины прибавлен шум, ячейки — на плитку второй картинки.
 export function soften(material, { contrast, saturation, scales: [a, b], low, high, cells, blend }) {
   const vec3 = (c) => `vec3(${c.map((v) => v.toFixed(2)).join(', ')})`;
   const count = cells ? cells[0] * cells[1] : 1;
@@ -31,7 +33,9 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
     vec4 softTile(sampler2D image, vec2 uv, float first, float n) {
       const vec2 N = vec2(${cells.map((v) => v.toFixed(1)).join(', ')});
       float k = first + floor(softHash(floor(uv)) * n);
-      vec2 at = (vec2(mod(k, N.x), N.y - 1.0 - floor(k / N.x)) + fract(uv)) / N;
+      // На полтекселя от края клетки: иначе сглаживание подмешивает соседнюю плитку атласа, и на стыках клеток тонкая линия.
+      vec2 edge = 0.5 * N / vec2(textureSize(image, 0));
+      vec2 at = (vec2(mod(k, N.x), N.y - 1.0 - floor(k / N.x)) + clamp(fract(uv), edge, 1.0 - edge)) / N;
       return textureGrad(image, at, dFdx(uv) / N, dFdy(uv) / N);
     }` : `
     vec4 softTile(sampler2D image, vec2 uv, float first, float n) { return texture2D(image, uv); }`;
@@ -39,14 +43,19 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
   const steps = blend ? blend.groups.map((n, i) => {
     const first = blend.groups.slice(0, i).reduce((x, y) => x + y, 0);
     const tex = `softTile(blendMap, ${second}, ${first.toFixed(1)}, ${n.toFixed(1)})`;
-    return i ? `c = mix(c, ${tex}, clamp(vBlend - ${(i - 1).toFixed(1)}, 0.0, 1.0));` : `vec4 c = ${tex};`;
+    return i ? `c = mix(c, ${tex}, softStep(${(i - 1).toFixed(1)}));` : `vec4 c = ${tex};`;
   }).join('\n      ') : '';
+  const [torn, tu, tv] = blend?.ragged ?? [0, 1, 1];
   const pick = blend ? `
+    float softStep(float i) {
+      float b = vBlend + ${torn.toFixed(2)} * (softNoise(${second} * vec2(${tu.toFixed(2)}, ${tv.toFixed(2)})) - 0.5);
+      return clamp((b - i - 0.5) * ${(blend.sharp ?? 1).toFixed(2)} + 0.5, 0.0, 1.0);
+    }
     vec4 softPick() {
       ${steps}
-      return mix(c, softTile(map, vMapUv, 0.0, ${count.toFixed(1)}), clamp(vBlend - ${(blend.groups.length - 1).toFixed(1)}, 0.0, 1.0));
+      return mix(c, softTile(map, vMapUv, 0.0, ${count.toFixed(1)}), softStep(${(blend.groups.length - 1).toFixed(1)}));
     }` : '';
-  const last = blend ? `clamp(vBlend - ${(blend.groups.length - 1).toFixed(1)}, 0.0, 1.0)` : '';
+  const last = blend ? `softStep(${(blend.groups.length - 1).toFixed(1)})` : '';
   const mean = blend ? `mix(textureLod(blendMap, ${second}, 12.0), textureLod(map, vMapUv, 12.0), ${last})` : 'textureLod(map, vMapUv, 12.0)';
   const sample = THREE.ShaderChunk.map_fragment.replace('texture2D( map, vMapUv )', blend ? 'softPick()' : `softTile(map, vMapUv, 0.0, ${count.toFixed(1)})`);
   material.onBeforeCompile = (shader) => {
@@ -78,7 +87,7 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
   };
   // Three.js узнаёт готовую программу по тексту onBeforeCompile, а он у всех вызовов soften один:
   // без своего ключа два материала с разными настройками получили бы одну и ту же программу.
-  const key = JSON.stringify([contrast, saturation, a, b, low, high, cells, blend?.scale, blend?.groups]);
+  const key = JSON.stringify([contrast, saturation, a, b, low, high, cells, blend?.scale, blend?.groups, blend?.sharp, blend?.ragged]);
   material.customProgramCacheKey = () => key;
   return material;
 }
