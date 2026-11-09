@@ -61,12 +61,13 @@ export const depth = (map) => swaying(new THREE.MeshDepthMaterial({ depthPacking
 
 // Кора — трубки по осям axes (какие оси брать, решает дерево), редкими кольцами: деревьев сотни, а издали частые
 // кольца не видны. Текстура в метрах: плитка tile, по кругу — по среднему радиусу оси, вдоль — по дуге.
-// bend — плечо изгиба дерева в точке.
-export function barkGeometry(axes, height, tile = 0.4) {
-  const pos = [], normal = [], uv = [], index = [];
+// bend — плечо изгиба дерева в точке. grade(a, s) — ступень коры в точке оси (атрибут blend, см. soften), если кора
+// у дерева меняется по высоте. coarse — во сколько раз реже кольца и грани: так кору рисуют издали.
+export function barkGeometry(axes, height, { tile = 0.4, grade = null, coarse = 1 } = {}) {
+  const pos = [], normal = [], uv = [], blend = [], index = [];
   for (const a of axes) {
-    const sides = THREE.MathUtils.clamp(Math.round((2 * Math.PI * a.points[0].r) / 0.05), 5, 12);
-    const rings = Math.max(2, Math.ceil(a.len / (a.level ? 0.25 : 0.4)));
+    const sides = THREE.MathUtils.clamp(Math.round((2 * Math.PI * a.points[0].r) / (0.05 * coarse)), 5, 12);
+    const rings = Math.max(2, Math.ceil(a.len / ((a.level ? 0.25 : 0.4) * coarse)));
     const mean = a.points.reduce((m, q) => m + q.r, 0) / a.points.length;
     const start = pos.length / 3;
     for (let i = 0; i <= rings; i++) {
@@ -77,6 +78,7 @@ export function barkGeometry(axes, height, tile = 0.4) {
         pos.push(...at.center.clone().addScaledVector(out, at.r).toArray());
         normal.push(...out.toArray());
         uv.push((az * mean) / tile, s / tile);
+        if (grade) blend.push(grade(a, s));
         if (i && j < sides) {
           const c = start + i * (sides + 1) + j, p = c - (sides + 1);
           index.push(p, p + 1, c, p + 1, c + 1, c);
@@ -89,6 +91,7 @@ export function barkGeometry(axes, height, tile = 0.4) {
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  if (grade) geometry.setAttribute('blend', new THREE.Float32BufferAttribute(blend, 1));
   geometry.setAttribute('bend', new THREE.Float32BufferAttribute(y.map((v) => Math.max(0, v) ** 2 / height), 1));
   geometry.setAttribute('hang', new THREE.Float32BufferAttribute(new Float32Array(y.length), 1));
   geometry.setAttribute('seed', new THREE.Float32BufferAttribute(new Float32Array(y.length), 1));
@@ -130,21 +133,30 @@ export function sprayGeometry(list, height, sheet) {
 
 // Посадка копиями. kinds[k] — геометрии вида k по именам, trees = [{ x, y, z, kind, turn, scale }]: копия своего вида,
 // повёрнутая на turn вокруг вертикали (или на rotation — Quaternion) и выросшая в scale раз. parts — что сажать:
-// [[имя геометрии, материал, материал тени, принимает ли тень], …]. Копии одного вида собраны кусками по CHUNK метров
-// вдоль x: что не попало в кадр или в тень солнца, не рисуется.
+// [[имя геометрии, материал, материал тени, принимает ли тень], …]. Копии одного вида собраны в квадраты по CHUNK метров:
+// что не попало в кадр или в тень солнца, не рисуется. far = { distance, parts } — как рисовать квадрат дальше distance
+// метров от камеры (THREE.LOD): деревья попроще, когда их в лесу тысяча.
 const CHUNK = 30;
-export function plant(kinds, trees, parts) {
+export function plant(kinds, trees, parts, far = null) {
   const group = new THREE.Group(), m = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), size = new THREE.Vector3();
-  for (const mine of Map.groupBy(trees, (t) => `${t.kind} ${Math.floor(t.x / CHUNK)}`).values()) {
-    for (const [name, material, shadow, receive] of parts) {
-      const mesh = new THREE.InstancedMesh(kinds[mine[0].kind][name], material, mine.length);
-      mine.forEach((t, i) => mesh.setMatrixAt(i, m.compose(v.set(t.x, t.y, t.z), t.rotation ?? q.setFromAxisAngle(UP, t.turn), size.setScalar(t.scale))));
-      mesh.customDepthMaterial = shadow;
-      mesh.castShadow = true;
-      mesh.receiveShadow = receive;
-      mesh.computeBoundingSphere();
-      group.add(mesh);
+  const place = (mine, list, at) => new THREE.Group().add(...list.map(([name, material, shadow, receive]) => {
+    const mesh = new THREE.InstancedMesh(kinds[mine[0].kind][name], material, mine.length);
+    mine.forEach((t, i) => mesh.setMatrixAt(i, m.compose(v.set(t.x - at.x, t.y, t.z - at.z), t.rotation ?? q.setFromAxisAngle(UP, t.turn), size.setScalar(t.scale))));
+    mesh.customDepthMaterial = shadow;
+    mesh.castShadow = true;
+    mesh.receiveShadow = receive;
+    mesh.computeBoundingSphere();
+    return mesh;
+  }));
+  for (const mine of Map.groupBy(trees, (t) => `${t.kind} ${Math.floor(t.x / CHUNK)} ${Math.floor(t.z / CHUNK)}`).values()) {
+    if (!far) {
+      group.add(place(mine, parts, { x: 0, z: 0 }));
+      continue;
     }
+    const at = { x: (Math.floor(mine[0].x / CHUNK) + 0.5) * CHUNK, z: (Math.floor(mine[0].z / CHUNK) + 0.5) * CHUNK };
+    const lod = new THREE.LOD().addLevel(place(mine, parts, at), 0).addLevel(place(mine, far.parts, at), far.distance);
+    lod.position.set(at.x, 0, at.z);
+    group.add(lod);
   }
   return group;
 }

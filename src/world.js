@@ -77,9 +77,9 @@ const PLANTS = [[grassTufts, 22000, () => 0.5, false, 1], [mugwortTufts, 1700, c
 
 // Земля со стороной ground метров и трава на квадрате со стороной size. grass(x, z) — сколько здесь травы, 0..1:
 // у ствола, под домом, на дороге её нет. trodden(x, z) — насколько здесь топчут, 0..1: там трава низкая;
-// lush(x, z) — насколько трава сочная, 0..1 (в лесополосе). Строить после shapeGround: и земля, и пучки встают по рельефу.
-export function makeMeadow(grass, size, ground = 200, { trodden = () => 0, lush = () => 0 } = {}) {
-  return new THREE.Group().add(makeGround(ground), ...PLANTS.map(([atlas, perThousand, kind, tall, rich]) => makeTufts(atlas,
+// lush(x, z) — насколько трава сочная, 0..1 (в лесополосе); litter(x, z) — сколько на земле хвои (в бору). Строить после shapeGround: и земля, и пучки встают по рельефу.
+export function makeMeadow(grass, size, ground = 200, { trodden = () => 0, lush = () => 0, litter } = {}) {
+  return new THREE.Group().add(makeGround(ground, litter), ...PLANTS.map(([atlas, perThousand, kind, tall, rich]) => makeTufts(atlas,
     Math.round(perThousand * size * size / 1000), size,
     (x, z) => grass(x, z) * kind(x, z) * (1 + rich * lush(x, z)) * (tall ? 1 - trodden(x, z) : 1), { trodden, lush })));
 }
