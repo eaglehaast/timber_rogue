@@ -20,10 +20,7 @@ export const tiles = (files) => files.map((file) => {
 // blend = { map, scale, groups } — вторая картинка той же раскладки, её плитки поделены на группы подряд
 // (groups — сколько плиток в каждой). Атрибут blend геометрии ведёт вершину по ступеням: 0 — плитки первой
 // группы, 1 — второй, …, groups.length — первая картинка map; между ступенями — смесь соседних.
-// Координаты второй картинки — координаты map, умноженные на scale. Переход между ступенями: sharp — во сколько
-// раз он круче (1 — ровно на шаг ступени), ragged = [доля, ячеек шума по u, по v] — граница рвётся пятнами
-// и языками: к ступени вершины прибавлен шум, ячейки — на плитку второй картинки. relief — переход по рисунку
-// новой группы: её тёмное (трещины) наступает раньше светлого, на столько ступеней; без серой смеси двух плиток.
+// Координаты второй картинки — координаты map, умноженные на scale.
 export function soften(material, { contrast, saturation, scales: [a, b], low, high, cells, blend }) {
   const vec3 = (c) => `vec3(${c.map((v) => v.toFixed(2)).join(', ')})`;
   const count = cells ? cells[0] * cells[1] : 1;
@@ -46,21 +43,15 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
   const steps = blend ? blend.groups.map((n, i) => {
     const first = blend.groups.slice(0, i).reduce((x, y) => x + y, 0);
     const tex = `softTile(blendMap, ${second}, ${first.toFixed(1)}, ${n.toFixed(1)})`;
-    return i ? `vec4 c${i} = ${tex};\n      c = mix(c, c${i}, softStep(${(i - 1).toFixed(1)}, c${i}));` : `vec4 c = ${tex};`;
+    return i ? `c = mix(c, ${tex}, softStep(${(i - 1).toFixed(1)}));` : `vec4 c = ${tex};`;
   }).join('\n      ') : '';
-  const [torn, tu, tv] = blend?.ragged ?? [0, 1, 1];
   const pick = blend ? `
-    float softStep(float i, vec4 next) {
-      float b = vBlend + ${torn.toFixed(2)} * (softNoise(${second} * vec2(${tu.toFixed(2)}, ${tv.toFixed(2)})) - 0.5);
-      float dark = 0.5 - dot(next.rgb, vec3(0.299, 0.587, 0.114));
-      return clamp((b - i - 0.5 + ${(blend.relief ?? 0).toFixed(2)} * dark) * ${(blend.sharp ?? 1).toFixed(2)} + 0.5, 0.0, 1.0);
-    }
+    float softStep(float i) { return clamp(vBlend - i, 0.0, 1.0); }
     vec4 softPick() {
       ${steps}
-      vec4 own = softTile(map, vMapUv, 0.0, ${count.toFixed(1)});
-      return mix(c, own, softStep(${(blend.groups.length - 1).toFixed(1)}, own));
+      return mix(c, softTile(map, vMapUv, 0.0, ${count.toFixed(1)}), softStep(${(blend.groups.length - 1).toFixed(1)}));
     }` : '';
-  const last = blend ? `softStep(${(blend.groups.length - 1).toFixed(1)}, vec4(0.5))` : '';
+  const last = blend ? `softStep(${(blend.groups.length - 1).toFixed(1)})` : '';
   const mean = blend ? `mix(textureLod(blendMap, ${second}, 12.0), textureLod(map, vMapUv, 12.0), ${last})` : 'textureLod(map, vMapUv, 12.0)';
   const sample = THREE.ShaderChunk.map_fragment.replace('texture2D( map, vMapUv )', blend ? 'softPick()' : `softTile(map, vMapUv, 0.0, ${count.toFixed(1)})`);
   material.onBeforeCompile = (shader) => {
@@ -92,7 +83,7 @@ export function soften(material, { contrast, saturation, scales: [a, b], low, hi
   };
   // Three.js узнаёт готовую программу по тексту onBeforeCompile, а он у всех вызовов soften один:
   // без своего ключа два материала с разными настройками получили бы одну и ту же программу.
-  const key = JSON.stringify([contrast, saturation, a, b, low, high, cells, blend?.scale, blend?.groups, blend?.sharp, blend?.ragged, blend?.relief]);
+  const key = JSON.stringify([contrast, saturation, a, b, low, high, cells, blend?.scale, blend?.groups]);
   material.customProgramCacheKey = () => key;
   return material;
 }

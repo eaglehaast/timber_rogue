@@ -15,6 +15,7 @@ export const ROWS = [33.5, 37, 42.5, 46];
 const PLOW = { ridge: 0.09, furrow: 0.07, half: 1.1, wander: 0.35 };
 const TUSSOCK = { size: 1.3, height: 0.07 };                // кочки от обочины до канавы: размер и высота
 const DITCH = { z: 50.5, half: 1.3, depth: 0.3 };           // канава у поля: середина, полуширина, глубина
+const VERGE = 26;                                          // м: дальняя обочина улицы, за ней трава сочная
 
 // Берёзы (birch.js) — в ряду через step метров, чуть вбок от ряда (jitter), кое-где пропуск; kinds — какие виды
 // и как часто (взрослых больше), рост вида гуляет на ±size.
@@ -45,8 +46,8 @@ export function planLand(seed) {
     const tussocks = TUSSOCK.height * s(noise(x / TUSSOCK.size, z / TUSSOCK.size + 40), 0.1, 0.9) * s(z, BELT.from - 6, BELT.from - 2) * (1 - s(z, DITCH.z - 1, DITCH.z));
     return DITCH.depth * bump((z - DITCH.z) / DITCH.half) - raised - tussocks;
   };
-  // Трава сочная от обочины через всю полосу до канавы: в тени берёз земля не пересыхает.
-  const lush = (x, z) => s(z, BELT.from - 5, BELT.from - 1) * (1 - s(z, DITCH.z, DITCH.z + 1));
+  // За улицей вся трава сочная, как под берёзами (Никита 2026-11-09): трава двора с сорняками туда не заходит.
+  const lush = (x, z) => s(z, VERGE, VERGE + 1.5);
   // Берёзы по рядам: { x, z, kind, turn, scale } — место, вид, поворот и рост.
   const birches = [];
   ROWS.forEach((_, k) => {
