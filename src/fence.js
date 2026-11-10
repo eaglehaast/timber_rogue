@@ -106,7 +106,7 @@ function side(a, b) {
 // на него с обеих сторон одинаково. Столб срезан вровень с плечами досок — там, где начинается их угол.
 //
 // Забор стоит не первый год. Столбы просели в землю или их выперло морозом и они накренились —
-// прожилины легли между ними под уклон, а доски на прожилинах повторяют этот уклон и крен. Сами доски
+// прожилины легли между ними под уклон, доски на прожилинах повторяют крен, а верхом — уклон. Сами доски
 // прибиты не по линейке: чуть вкось, чуть выше-ниже, чуть разной длины. Угловые столбы держат две стороны
 // и стоят ровно. Всё это — доли градуса и сантиметры, умноженные на возраст age: при нуле забор как новый.
 //
@@ -170,10 +170,13 @@ function picket({ length, place, floor }, { height, gap, boardWidth, postWidth, 
     const n = leaf ? Math.round((width + gap) / (boardWidth + gap)) : Math.max(1, Math.round(span / (boardWidth + gap)));
     for (let k = 0; k < n; k++) {
       const s = (leaf ? lo + boardWidth / 2 + k * (width - boardWidth) / (n - 1) : a + (k + 0.5) * span / n) + wobble(0.006);
-      const h = (leaf ? height - 0.17 : height) + wobble(0.012);
-      const y = (leaf ? GATE_LIFT : LIFT) + height0(s) + wobble(0.012);
+      // Доска прибита к прожилинам отвесно: верх идёт по их уклону, низ — над самой землёй (под горку доски длиннее).
+      // Створка висит жёсткой рамкой: её доски одной длины и наклонены вместе с ней.
+      const ground = leaf ? height0(s) : floor(s);
+      const h = (leaf ? height - 0.17 : height + height0(s) - ground) + wobble(0.012);
+      const y = (leaf ? GATE_LIFT : LIFT) + ground + wobble(0.012);
       put('board', board(boardWidth, h, 0.022, rnd())
-        .applyMatrix4(place(s, front, y, tilt + wobble(1.2 * DEG), lean0(s) + wobble(0.6 * DEG))));
+        .applyMatrix4(place(s, front, y, (leaf ? tilt : 0) + wobble(1.2 * DEG), lean0(s) + wobble(0.6 * DEG))));
     }
     if (!leaf) continue;
     // hand — куда от петель к притвору: у правой створки ворот петли справа.
@@ -223,7 +226,10 @@ function picket({ length, place, floor }, { height, gap, boardWidth, postWidth, 
 export const WICKET = { at: 8, width: 1.2, leaves: 1, pipe: 0.046 };
 export const GATES = { at: 8.6 + 1.7, width: 3.4, leaves: 2, pipe: 0.065 };
 
-export function makeFence() {
+// Без open участок обнесён со всех сторон (так в игре). open(x) — докуда по z идут боковые стороны, если сзади
+// забора нет: на стенде за двором речка, боковые заборы уходят в воду, а заднего нет (Никита, 2026-11-10: так
+// бывает в деревнях, хоть и не по закону).
+export function makeFence({ open } = {}) {
   const root = new THREE.Group();
   const rnd = generator(7);
   const parts = Object.fromEntries(Object.entries(materials).map(([name, list]) => [name, list.map(() => [])]));
@@ -232,9 +238,10 @@ export function makeFence() {
   const x = YARD.w / 2, z = YARD.d / 2;
   // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
   picket(side({ x: -x, z }, { x, z }), LOOK, rnd, put, [WICKET, GATES].map((o) => ({ ...o, at: o.at + x })));
-  picket(side({ x, z }, { x, z: -z }), LOOK, rnd, put);
-  picket(side({ x, z: -z }, { x: -x, z: -z }), LOOK, rnd, put);
-  picket(side({ x: -x, z: -z }, { x: -x, z }), LOOK, rnd, put);
+  const end = open ?? (() => -z);
+  picket(side({ x, z }, { x, z: end(x) }), LOOK, rnd, put);
+  if (!open) picket(side({ x, z: -z }, { x: -x, z: -z }), LOOK, rnd, put);
+  picket(side({ x: -x, z: end(-x) }, { x: -x, z }), LOOK, rnd, put);
   for (const name in parts) {
     parts[name].forEach((list, i) => {
       if (!list.length) return;

@@ -1,16 +1,18 @@
 import * as THREE from 'three';
 import { generator, smoothNoise } from './random.js';
 import { tiles, soften } from './surface.js';
-import { groundPatch } from './terrain.js';
+import { groundPatch, height } from './terrain.js';
 import { windUniforms } from './wind.js';
+import { atlas, makeTufts } from './grass.js';
 
-// Речка за задним забором (каталог ChatGPT «Мелкая речка», 2026-11-10; ориентир — Атца). По воде 4–5,5 м
+// Речка за двором (каталог ChatGPT «Мелкая речка», 2026-11-10; ориентир — Атца). По воде 4–5,5 м
 // (Никита попросил шире каталожных 2–3 м), 20–40 см глубиной, течёт вдоль двора по x и петляет. На изгибе
 // с внутренней стороны — пологая галечная отмель, с внешней вода подмывает берег: короткий крутой глинистый
 // откос, сверху дернина. За двором русло изгибается от двора, поэтому отмель — со стороны двора, откос —
 // с дальней. Вокруг русла — пойма: её выровняла вода, поэтому длинной волны рельефа там нет (calm для
-// terrain.js). Речка в низине у самого забора: луг спускается к ней, наш берег — выпас с низкой травой,
-// дальний берег выше нашего — из-за забора видно и воду, и тот берег (Никита, 2026-11-10).
+// terrain.js). Речка в низине сразу за двором: луг спускается к ней, наш берег — выпас с низкой травой,
+// дальний берег выше нашего — со двора видно и воду, и тот берег (Никита, 2026-11-10). Заднего забора нет,
+// боковые уходят в воду (into для fence.js).
 // Всё в метрах двора, улица — к +z, речка — к −z. Рельеф отдаёт dug(x, z), как улица в road.js.
 const AXIS = { z: -28, bend: 2, period: 60, wander: 1 };       // ось: середина по z, размах и длина изгиба, шум
 const WIDTH = [4, 5.5], DEPTH = [0.2, 0.4];                     // м: ширина по воде, глубина в русле
@@ -21,24 +23,34 @@ const LIP = { top: 0.25, edge: 0.12 };                          // неровн�
 const TUFT = 0.4;                                               // м: трава на берегу — её тоже видно в отражении
 const RISE = { lift: 1, run: 8 };                               // дальний луг: на сколько выше нашего, за сколько м от берега
 const GRAZE = 0.8;                                              // на нашем берегу пасут: трава низкая (trodden для world.js)
+const INTO = 1.5;                                               // м: на столько от нашего уреза в воду уходят боковые заборы
 const REACH = 140;                                              // м: русло в обе стороны от середины двора
 const BAND = { half: 7, step: 0.1 };                            // полоса частой сетки земли вокруг русла
 
-// Дно и берег — пока уличный грунт (road-base), до плиток ChatGPT (design/river/river-assets-prompt.md):
-// глина дна, галька переката, глина откоса.
+// Дно и голый берег — плитки ChatGPT по 1 × 1 м (tools/river.py): у отмели галька, в русле глина с илом,
+// на подмытом откосе — глина откоса. Ступени blend (surface.js): 0 — галька, 1 — глина дна, 2 — глина откоса.
 const BED_TILE = 1, ARC = 0.1;   // м: плитка 1 × 1 м; шаг, которым меряют путь поперёк берега
-const [bedMap] = tiles(['assets/textures/road-base.jpg']);
-const bed = soften(new THREE.MeshLambertMaterial({ map: bedMap, vertexColors: true, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }),
-  { contrast: 0.9, saturation: 0.8, scales: [0.13, 0.5], low: [0.92, 0.92, 0.9], high: [1.02, 1.02, 1], cells: [4, 2] });
+const [bankMap, bedMap] = tiles(['assets/textures/river-bank.jpg', 'assets/textures/river-bed.jpg']);
+const bed = soften(new THREE.MeshLambertMaterial({ map: bankMap, vertexColors: true, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }),
+  { contrast: 0.9, saturation: 0.8, scales: [0.13, 0.5], low: [0.92, 0.92, 0.9], high: [1.02, 1.02, 1], cells: [5, 1],
+    blend: { map: bedMap, cells: [5, 2], groups: [5, 5], scale: [1, 1] } });
+// Камни сверху на прозрачном (tools/river.py): плитняк 12–25 см — на отмели и в воде у уреза, окатыши 8–12 см.
+// Камень — выпуклая шапка по овалу картинки, чуть утопленная в дно; край камня вырезает прозрачность картинки.
+const STONES = await (await fetch('assets/textures/river-stones.json')).json();
+// reach, step — вдоль русла: докуда от середины двора и через сколько метров пробовать положить камень.
+const STONE = { flat: 5, size: [[0.12, 0.25], [0.08, 0.12]], tall: [0.3, 0.55], sink: 0.25, ring: 10, rows: 4, reach: 55, step: 0.15 };
+const stoneMaterial = new THREE.MeshLambertMaterial({ map: tiles(['assets/textures/river-stones.webp'])[0], alphaTest: 0.5 });
+// Осока по урезу (tools/tufts.py): куртинами, от воды на ладонь глубиной до пары десятков сантиметров над ней.
+const SEDGE = await atlas('river-sedge-tufts'), SEDGE_PER = 20000;   // попыток на 1000 м² квадрата травы
 const WATER = flowingWater();
 
-// fence — z заднего забора: от него луг спускается к реке.
-export function planRiver({ seed, fence }) {
+// back — z задней границы двора: от неё луг спускается к реке.
+export function planRiver({ seed, back }) {
   const rnd = generator(seed + 89);
   const smooth = smoothNoise(rnd), noise = (x, k) => 2 * smooth(x, 13 * k) - 1;
   const s = THREE.MathUtils.smoothstep, phase = rnd() * 9;
   const k = (2 * Math.PI) / AXIS.period;
-  // Ось и её производные по x: за серединой двора русло дальше всего от забора.
+  // Ось и её производные по x: за серединой двора русло дальше всего от двора.
   const center = (x) => AXIS.z - AXIS.bend * Math.cos(k * x) + AXIS.wander * noise(x / 37 + phase, 1);
   const slope = (x) => (center(x + 0.05) - center(x - 0.05)) / 0.1;
   const curve = (x) => (center(x + 0.5) - 2 * center(x) + center(x - 0.5)) / 0.25;
@@ -62,7 +74,7 @@ export function planRiver({ seed, fence }) {
   const side = (u, { w, bend, top, edge }) => {
     const deep = -0.35 * bend * w, sign = u < deep ? -1 : 1, k = (sign + 1) / 2, out = 0.5 - 0.5 * sign * bend;
     return {
-      deep, sign, shore: sign * (w + edge[k]),
+      deep, sign, out, shore: sign * (w + edge[k]),
       top: (BANK.low + (BANK.high - BANK.low) * out) * top[k],
       run: BANK.shoal * (BANK.steep / BANK.shoal) ** out,
     };
@@ -78,15 +90,15 @@ export function planRiver({ seed, fence }) {
     return -sec.d * (2 * t ** 3 - 3 * t ** 2 + 1) + lean * (t ** 3 - t ** 2);
   };
   // Пойма: 1 у воды, 0 на лугу. От верха берега луг поднимается: дальний — за RISE.run метров на RISE.lift выше
-  // нашего, наш — от самого забора. Наш склон выпуклый: у забора полого, к реке круче (бровка), — с бровки взгляд
-  // из-за забора падает к воде, а не упирается в траву склона.
+  // нашего, наш — от самого двора. Наш склон выпуклый: у двора полого, к реке круче (бровка), — с бровки взгляд
+  // со двора падает к воде, а не упирается в траву склона.
   const deepest = AXIS.z - AXIS.bend - AXIS.wander - WIDTH[1] / 2 - LIP.edge - BANK.shoal - RISE.run;
   // У точки: p — 1 у воды, 0 на лугу; far — точка за рекой; sec, u — сечение и место в нём.
   const plainAt = (x, z) => {
-    if (z > fence || z < deepest) return { p: 0, far: z < deepest };
+    if (z > back || z < deepest) return { p: 0, far: z < deepest };
     const sec = section(x), u = across(x, z), { sign, shore, run } = side(u, sec), beyond = sign * (u - shore) - run;
     if (sign < 0) return { p: 1 - s(beyond, 0, RISE.run), far: true, sec, u };
-    const q = THREE.MathUtils.clamp(beyond / Math.max(2, across(x, fence) - shore - run), 0, 1);
+    const q = THREE.MathUtils.clamp(beyond / Math.max(2, across(x, back) - shore - run), 0, 1);
     return { p: (1 - q) ** 2, far: false, sec, u };
   };
   const plain = (x, z) => plainAt(x, z).p;
@@ -109,19 +121,43 @@ export function planRiver({ seed, fence }) {
   };
   // Мокро ниже уреза и на пару пальцев выше: глина там темнее.
   const wet = (x, z) => 1 - s(rise(across(x, z), section(x)), 0, 0.05);
-  // Наш берег от забора до воды — выпас (гуси, коза): трава там низкая, и из-за забора видно воду.
-  const trodden = (x, z) => (plainAt(x, z).far ? 0 : GRAZE * s(fence - z, 0, 0.5));
-  const rows = [[AXIS.z - AXIS.bend - AXIS.wander - BAND.half, Math.min(fence, AXIS.z + AXIS.bend + AXIS.wander + BAND.half), BAND.step]];
-  return { center, slope, level, section, across, side, rise, dug, calm: plain, grass, bare, wet, trodden, rows };
+  // Чем покрыто дно (ступень blend): у уреза отмели галька, у откоса глина откоса, глубже — глина дна.
+  const stage = (x, z) => {
+    const sec = section(x), u = across(x, z), h = rise(u, sec);
+    return THREE.MathUtils.lerp(2 * side(u, sec).out, 1, s(-h, 0.05, 0.25));
+  };
+  // Сколько осоки: куртинами по урезу, где берег не круче откоса.
+  const sedge = (x, z) => {
+    if (Math.abs(z - AXIS.z) > AXIS.bend + AXIS.wander + WIDTH[1]) return 0;
+    const sec = section(x), u = across(x, z), h = rise(u, sec);
+    return s(h, -0.15, -0.03) * (1 - s(h, 0.15, 0.4)) * (1 - s(steepness(u, sec), 0.5, 1)) * s(smooth(x / 3, z / 3 + 77), 0.35, 0.65);
+  };
+  // Камни лежат на отмели куртинами — от трёх ладоней над урезом до метра в воду; у откоса их почти нет.
+  const stones = [];
+  for (let x = -STONE.reach; x <= STONE.reach; x += STONE.step) {
+    const sec = section(x);
+    for (const sign of [-1, 1]) {
+      const { out, shore } = side(sign * sec.w, sec);
+      if (rnd() > (1 - out) ** 2 * s(smooth(x / 6, sign * 9), 0.3, 0.7)) continue;
+      const at = x + (rnd() - 0.5) * STONE.step, u = shore - sign * (rnd() * 1.3 - 0.3);
+      stones.push({ x: at, z: center(at) + u * Math.sqrt(1 + slope(at) ** 2), kind: Math.floor(rnd() * STONES.aspect.length), size: rnd(), turn: rnd() * Math.PI });
+    }
+  }
+  // Наш берег от двора до воды — выпас (гуси, коза): трава там низкая, и со двора видно воду.
+  const trodden = (x, z) => (plainAt(x, z).far ? 0 : GRAZE * s(back - z, 0, 3));
+  // Докуда по z идёт боковой забор, воткнутый в реку (open для makeFence).
+  const into = (x) => center(x) + section(x).w - INTO;
+  const rows = [[AXIS.z - AXIS.bend - AXIS.wander - BAND.half, Math.min(back, AXIS.z + AXIS.bend + AXIS.wander + BAND.half), BAND.step]];
+  return { center, slope, level, section, across, side, rise, dug, calm: plain, grass, bare, wet, stage, sedge, stones, trodden, into, rows };
 }
 
-// Строить после makeMeadow: дно и берег лежат на куске той же сетки земли.
-export function buildRiver(river) {
+// Строить после makeMeadow: дно и берег лежат на куске той же сетки земли. size — сторона квадрата травы.
+export function buildRiver(river, size) {
   const group = new THREE.Group();
   // Дно и голый берег: покрытие на сетке земли, к траве тает.
   const patch = groundPatch((x, z) => river.bare(x, z) > 0);
   const pos = patch.attributes.position;
-  const uv = [], color = [];
+  const uv = [], color = [], blend = [];
   // Плитка вдоль — по x, поперёк — по пути через профиль от оси: на крутом откосе она не тянется, а ложится «в лоб».
   const arc = (x, z) => {
     const sec = river.section(x), u = river.across(x, z), n = Math.ceil(Math.abs(u) / ARC), du = u / n;
@@ -138,14 +174,49 @@ export function buildRiver(river) {
     uv.push(x / BED_TILE, -arc(x, z) / BED_TILE);
     const tone = 1 - 0.4 * river.wet(x, z);
     color.push(tone, tone, tone, river.bare(x, z));
+    blend.push(river.stage(x, z));
   }
   patch.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   patch.setAttribute('color', new THREE.Float32BufferAttribute(color, 4));
+  patch.setAttribute('blend', new THREE.Float32BufferAttribute(blend, 1));
   const floor = new THREE.Mesh(patch, bed);
   floor.receiveShadow = true;
   floor.renderOrder = 1;
-  group.add(floor, water(river));
+  group.add(floor, water(river), stones(river), makeTufts(SEDGE, Math.round((SEDGE_PER * size * size) / 1000), size, river.sedge, { trodden: river.trodden }));
   return group;
+}
+
+// Камни одной геометрией: у каждого шапка из колец вокруг макушки, высота над краем — как у половинки эллипсоида.
+function stones(river) {
+  const { grid: [cols, rows], aspect } = STONES, { ring } = STONE;
+  const pos = [], uv = [], index = [];
+  for (const { x, z, kind, size, turn } of river.stones) {
+    const shape = kind < STONE.flat ? 0 : 1, [lo, hi] = STONE.size[shape], length = lo + size * (hi - lo);   // 0 — плитняк, 1 — окатыш
+    const half = [length / 2, length / 2 / aspect[kind]], tall = length * STONE.tall[shape], y = height(x, z) - STONE.sink * tall;
+    const cos = Math.cos(turn), sin = Math.sin(turn), u0 = (kind % cols) / cols, v0 = 1 - (Math.floor(kind / cols) + 1) / rows;
+    const k = pos.length / 3, at = (i, j) => (i ? k + 1 + (i - 1) * ring + (j % ring) : k);
+    for (let i = 0; i <= STONE.rows; i++) {
+      const r = i / STONE.rows, lift = tall * Math.sqrt(1 - r * r);
+      for (let j = 0; j < (i ? ring : 1); j++) {
+        const a = (j / ring) * 2 * Math.PI, dx = r * Math.cos(a), dz = r * Math.sin(a), lx = dx * half[0], lz = dz * half[1];
+        pos.push(x + lx * cos - lz * sin, y + lift, z + lx * sin + lz * cos);
+        uv.push(u0 + (0.5 + 0.5 * dx) / cols, v0 + (0.5 + 0.5 * dz) / rows);
+      }
+    }
+    // Обход — чтобы грани смотрели наружу, вверх.
+    for (let j = 0; j < ring; j++) {
+      index.push(k, at(1, j + 1), at(1, j));
+      for (let i = 1; i < STONE.rows; i++) index.push(at(i, j), at(i + 1, j + 1), at(i + 1, j), at(i, j), at(i, j + 1), at(i + 1, j + 1));
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geometry.setIndex(index);
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, stoneMaterial);
+  mesh.castShadow = mesh.receiveShadow = true;
+  return mesh;
 }
 
 // Вода — лента по руслу на уровне воды, шире русла: у берега её закрывает земля, урез — где они пересекаются.
