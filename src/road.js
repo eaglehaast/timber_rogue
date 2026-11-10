@@ -61,7 +61,8 @@ function puddleWater() {
 
 // Профиль следа поперёк: t — расстояние от оси в полуширинах. В следе — впадина, сразу за краем — валик
 // выдавленной грязи, дальше земля нетронута.
-const profile = (t) => (t < 1 ? (1 - t * t) ** 2 : t < 1.6 ? -RUT.berm * Math.sin((Math.PI * (t - 1)) / 0.6) : 0);
+const LIP = 1.6; // валик грязи кончается на стольких полуширинах следа от его оси
+const profile = (t) => (t < 1 ? (1 - t * t) ** 2 : t < LIP ? -RUT.berm * Math.sin((Math.PI * (t - 1)) / (LIP - 1)) : 0);
 
 // Где улица и что на ней — для рельефа, травы и самой улицы. fence — z забора со стороны улицы.
 export function planRoad({ seed, fence }) {
@@ -107,7 +108,9 @@ export function planRoad({ seed, fence }) {
   // Где машины съезжали с улицы к забору — там не ставить опор (power.js): { at, width } по x.
   const off = visits.flatMap((v) => v.points).filter((p) => p.z < center - RUT.gauge / 2).map((p) => p.x);
   const keep = { at: (Math.min(...off) + Math.max(...off)) / 2, width: Math.max(...off) - Math.min(...off) };
-  return { seed, lines, wheels, puddles, dug, rows, grass, trodden, keep };
+  // Дальний край улицы у x — внешний край дальнего следа с валиком грязи: за ним начинается лесополоса (land.js).
+  const verge = (x) => lines[1].z(x) + LIP * half;
+  return { seed, lines, wheels, puddles, dug, rows, grass, trodden, keep, verge };
 }
 
 // Подъезды к воротам gx от улицы с серединой center; fence — z забора. Участок брошен: во двор никто не заезжал.

@@ -47,7 +47,7 @@ function rebuild(seed) {
   // Площадка под дом — всё, что он занимает с крыльцом и свесами крыши.
   const box = new THREE.Box3().setFromObject(house), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
   const pad = { x: at.x + mid.x, z: at.z + mid.z, w: size.x, d: size.z };
-  const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed), forest = planForest(seed);
+  const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed, road.verge), forest = planForest(seed);
   shapeGround(seed, [pad], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + forest.dug(x, z), rows: road.rows });
   at.y = height(at.x, at.z);
   house.position.set(at.x, at.y, at.z);

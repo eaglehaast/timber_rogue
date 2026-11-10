@@ -15,7 +15,6 @@ export const ROWS = [33.5, 37, 42.5, 46];
 const PLOW = { ridge: 0.09, furrow: 0.07, half: 1.1, wander: 0.35 };
 const TUSSOCK = { size: 1.3, height: 0.07 };                // кочки от обочины до канавы: размер и высота
 const DITCH = { z: 50.5, half: 1.3, depth: 0.3 };           // канава у поля: середина, полуширина, глубина
-const VERGE = 26;                                          // м: дальняя обочина улицы, за ней трава сочная
 
 // Берёзы (birch.js) — в ряду через step метров, чуть вбок от ряда (jitter), кое-где пропуск; kinds — какие виды
 // и как часто (взрослых больше), рост вида гуляет на ±size.
@@ -30,7 +29,8 @@ const UNDER = { kinds: [8, 9, 10], per: 8, reach: 2.2 };
 
 const bump = (t) => (Math.abs(t) < 1 ? (1 - t * t) ** 2 : 0);
 
-export function planLand(seed) {
+// verge(x) — z дальнего края улицы (road.js): сразу за ним трава сочная.
+export function planLand(seed, verge) {
   const rnd = generator(seed + 53);
   const smooth = smoothNoise(rnd), noise = (x, z) => 2 * smooth(x, z) - 1;
   const s = THREE.MathUtils.smoothstep;
@@ -54,7 +54,7 @@ export function planLand(seed) {
     return DITCH.depth * bump((z - DITCH.z) / DITCH.half) - raised - tussocks;
   };
   // За улицей вся трава сочная, как под берёзами (Никита 2026-11-09): трава двора с сорняками туда не заходит.
-  const lush = (x, z) => s(z, VERGE, VERGE + 1.5);
+  const lush = (x, z) => s(z - verge(x), 0, 0.3);
   // Берёзы по рядам: { x, z, kind, turn, scale } — место, вид, поворот и рост.
   const birches = [], gaps = [];
   ROWS.forEach((_, k) => {
