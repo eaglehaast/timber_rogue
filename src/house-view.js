@@ -11,13 +11,16 @@ import { shapeGround, height } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
+import { PHONE } from './device.js';
 
 // Стенд дома — тот же мир, что в игре (world.js): небо, панорамы, земля с рельефом и трава, — а во дворе
 // вместо делянки сруб у забора, грунтовая улица, газовая труба и провода с улицы.
 // Мышь — обойти дом, колесо — ближе и дальше, стрелки — идти, R — новый дом (новое зерно).
+// На телефоне: палец — обойти, два пальца — щипком ближе и дальше, сдвигом идти, кнопка — новый дом.
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// На телефоне экран втрое чаще по точкам, чем видит глаз: хватает полутора, кадр рисуется вчетверо быстрее, чем при трёх.
+renderer.setPixelRatio(Math.min(devicePixelRatio, PHONE ? 1.5 : 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -70,38 +73,63 @@ function rebuild(seed) {
 // Камера на сфере вокруг точки над серединой дома: yaw — вокруг, pitch — вверх, dist — расстояние.
 const view = { yaw: 0.35, pitch: 0.12, dist: 12, target: new THREE.Vector3() };
 rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
-let drag = null;
-canvas.addEventListener('pointerdown', (e) => { drag = [e.clientX, e.clientY]; canvas.setPointerCapture(e.pointerId); });
-canvas.addEventListener('pointerup', () => { drag = null; });
+// Пальцы и мышь — указатели: один ведёт камеру вокруг точки, два — щипок (ближе и дальше) и сдвиг
+// (точка идёт, как будто тянешь землю: пальцы вверх — вперёд).
+const pointers = new Map();
+canvas.addEventListener('pointerdown', (e) => { pointers.set(e.pointerId, [e.clientX, e.clientY]); canvas.setPointerCapture(e.pointerId); });
+for (const type of ['pointerup', 'pointercancel']) canvas.addEventListener(type, (e) => pointers.delete(e.pointerId));
 canvas.addEventListener('pointermove', (e) => {
-  if (!drag) return;
-  view.yaw -= (e.clientX - drag[0]) * 0.006;
-  view.pitch = THREE.MathUtils.clamp(view.pitch + (e.clientY - drag[1]) * 0.004, -0.05, 1.3);
-  drag = [e.clientX, e.clientY];
+  const was = pointers.get(e.pointerId);
+  if (!was) return;
+  const before = [...pointers.values()];
+  pointers.set(e.pointerId, [e.clientX, e.clientY]);
+  const dx = e.clientX - was[0], dy = e.clientY - was[1];
+  if (pointers.size === 1) {
+    view.yaw -= dx * 0.006;
+    view.pitch = THREE.MathUtils.clamp(view.pitch + dy * 0.004, -0.05, 1.3);
+  } else if (pointers.size === 2) {
+    const span = ([a, b]) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    view.dist = THREE.MathUtils.clamp(view.dist * span(before) / span([...pointers.values()]), 2, 60);
+    // Середина пальцев сдвинулась на половину сдвига этого пальца; метров на точку экрана — сколько их видно на расстоянии dist.
+    const metres = view.dist / canvas.clientHeight;
+    shift(-dx / 2 * metres, dy / 2 * metres);
+  }
 });
 canvas.addEventListener('wheel', (e) => { view.dist = THREE.MathUtils.clamp(view.dist * Math.exp(e.deltaY * 0.001), 2, 60); e.preventDefault(); }, { passive: false });
 // Стрелки (или WASD) двигают точку, вокруг которой ходит камера: вперёд — куда смотришь, вбок — вбок;
 // с Shift — втрое быстрее. Q и E — точку ниже и выше.
 const held = new Set();
 const MOVE = { speed: 5, fast: 3, keys: { ArrowUp: [0, 1], KeyW: [0, 1], ArrowDown: [0, -1], KeyS: [0, -1], ArrowLeft: [-1, 0], KeyA: [-1, 0], ArrowRight: [1, 0], KeyD: [1, 0] } };
+const another = () => rebuild(1 + Math.floor(Math.random() * 1e6));
+if (PHONE) {
+  document.getElementById('keys').textContent = 'Палец — обойти · два пальца: щипок — ближе, сдвиг — идти';
+  const button = document.getElementById('another');
+  button.hidden = false;
+  button.addEventListener('click', another);
+}
 addEventListener('keydown', (e) => {
-  if (e.code === 'KeyR') rebuild(1 + Math.floor(Math.random() * 1e6));
+  if (e.code === 'KeyR') another();
   held.add(e.code);
   if (e.code.startsWith('Arrow')) e.preventDefault();
 });
 addEventListener('keyup', (e) => held.delete(e.code));
 addEventListener('blur', () => held.clear());
+// Сдвинуть точку на side метров вбок и ahead вперёд.
+function shift(side, ahead) {
+  // Камера смотрит из (sin yaw, cos yaw) на точку: вперёд — обратно этому направлению.
+  view.target.x += -Math.sin(view.yaw) * ahead + Math.cos(view.yaw) * side;
+  view.target.z += -Math.cos(view.yaw) * ahead - Math.sin(view.yaw) * side;
+  // Ходим внутри карты: дальше видно, что горы — картинка на кольце.
+  const out = Math.hypot(view.target.x, view.target.z) / BOUND;
+  if (out > 1) view.target.x /= out, view.target.z /= out;
+  view.target.y = Math.max(height(view.target.x, view.target.z) + 0.2, view.target.y);
+}
 function walk(dt) {
   let side = 0, ahead = 0;
   for (const code of held) [side, ahead] = [side + (MOVE.keys[code]?.[0] ?? 0), ahead + (MOVE.keys[code]?.[1] ?? 0)];
   const step = MOVE.speed * dt * (held.has('ShiftLeft') || held.has('ShiftRight') ? MOVE.fast : 1);
-  // Камера смотрит из (sin yaw, cos yaw) на точку: вперёд — обратно этому направлению.
-  view.target.x += (-Math.sin(view.yaw) * ahead + Math.cos(view.yaw) * side) * step;
-  view.target.z += (-Math.cos(view.yaw) * ahead - Math.sin(view.yaw) * side) * step;
-  // Ходим внутри карты: дальше видно, что горы — картинка на кольце.
-  const out = Math.hypot(view.target.x, view.target.z) / BOUND;
-  if (out > 1) view.target.x /= out, view.target.z /= out;
-  view.target.y = Math.max(height(view.target.x, view.target.z) + 0.2, view.target.y + ((held.has('KeyE') ? 1 : 0) - (held.has('KeyQ') ? 1 : 0)) * step);
+  view.target.y += ((held.has('KeyE') ? 1 : 0) - (held.has('KeyQ') ? 1 : 0)) * step;
+  shift(side * step, ahead * step);
 }
 // Камера тоже не дальше BOUND от середины двора: на луче от точки к камере — сколько до этой границы.
 const BOUND = 100;
@@ -135,4 +163,4 @@ function frame() {
   requestAnimationFrame(frame);
 }
 frame();
-window.stand = { view, rebuild, renderer, get layout() { return layout; } };
+window.stand = { view, rebuild, renderer, scene, get layout() { return layout; } };
