@@ -5,13 +5,11 @@ import {
 } from './physics.js';
 import { struck, wreck, pushOut } from './yard.js';
 import { makeFence, YARD } from './fence.js';
-import { makePanorama } from './panorama.js';
-import { makeSky, driftClouds, sunlight, castShadows } from './sky.js';
-import { Rays } from './rays.js';
+import { driftClouds } from './sky.js';
+import { makeWorld, makeMeadow, fenced, EYE } from './world.js';
 import { makeSaw, dressSaw, lamp, PACKS, BARS, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
-import { makeGround, makeTufts, grassTufts, mugwortTufts, nettleTufts, tansyTufts, dandelionTufts, cloverTufts, yarrowTufts, noise } from './grass.js';
 import { watch, note, beat, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, blow, gust, stepWind } from './wind.js';
@@ -37,7 +35,7 @@ const MAX_TURN = THREE.MathUtils.degToRad(30);
 const SNAP_DIST = 0.03;   // прицел прилипает к начатому пропилу, если почти совпал с ним
 const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(10));
 // Глаза стоя и присев: присев можно пилить у самой земли.
-const EYE = 1.7, EYE_CROUCH = 1.0;
+const EYE_CROUCH = 1.0;
 const STRIDE = 0.75;   // м — длина шага
 const STEP_RISE = 0.012; // м — на сколько опускается голова на шаге при ходьбе; бегом вдвое больше
 // Точная настройка пилы: шаг стрелками и замедление мыши с зажатым Shift.
@@ -102,57 +100,11 @@ const VIEW_EL_MIN = THREE.MathUtils.degToRad(-10), VIEW_EL_MAX = THREE.MathUtils
 const view = { base: 0, az: 0, el: 0, dist: VIEW_FAR };
 let inspecting = false;
 
-// Небо светит в тень почти так же, как солнце на свету: тень на досках и стволах прозрачная, а не чёрная.
-// Снизу в тень светит залитый солнцем луг. Тень облака гасит солнце там, где лежит (sky.js), а отсвет
-// луга — там, где стоим: под облаком луг освещён только небом.
-const SUN_POWER = 2.2, MEADOW = new THREE.Color(0x8f8a66);
-const skyLight = new THREE.HemisphereLight(0xb4ccec, MEADOW, 1.7);
-scene.add(skyLight);
-const sun = new THREE.DirectionalLight(0xffe2b8, SUN_POWER);
-const shine = (light) => skyLight.groundColor.copy(MEADOW).multiplyScalar(0.5 + 0.5 * light);
-// Тень накрывает весь участок с забором: солнце стоит, поэтому тени не дрожат. Карта 4096 — около 1,7 см
-// на точку, мельче щелей штакетника: полосы света сквозь забор читаются.
-// Солнце низкое и сбоку — справа от взгляда со старта, чуть впереди: стволы освещены наполовину,
-// длинные тени деревьев ложатся поперёк луга, а сквозь щели правого забора по траве тянутся полосы света.
-const SUN = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 22), THREE.MathUtils.degToRad(180 - 80));
-sun.position.copy(SUN).multiplyScalar(60);
-sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096);
-sun.shadow.camera.left = sun.shadow.camera.bottom = -36;
-sun.shadow.camera.right = sun.shadow.camera.top = 36;
-sun.shadow.camera.far = 120;
-sun.shadow.normalBias = 0.03;
-scene.add(sun);
-
-scene.add(await makeSky(SUN));
-const rays = new Rays(renderer, scene, SUN);
-// Окружение локации — два кольца внутри неба: средний план (луг, стога, сараи) сразу за полосой травы
-// за забором и горы за ним. Самое красивое место гор — перед игроком на старте.
-// far — как далеко изображённое: луг и сараи — в сотнях метров, горы — в километрах (по ним бегут тени облаков).
-for (const [name, radius, far] of [['tushna-mid', 45, 300], ['tushna', 140, 3000]]) {
-  const ring = await makePanorama(name, { radius, far, eye: EYE });
-  ring.rotation.y = Math.PI / 2;
-  scene.add(ring);
-}
-
-// Трава густая во всём дворе и редеет за забором на 8 м.
-const meadow = (x, z) => 1 - 0.85 * THREE.MathUtils.smoothstep(Math.max(Math.abs(x) - YARD.w / 2, Math.abs(z) - YARD.d / 2), 0, 8);
-// Полынь и крапива растут колониями от корневищ: пятна в несколько метров, у каждой свои, между ними их нет.
-const colonies = (shift) => (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + shift, z / 9), 0.6, 0.85);
-// Одуванчик низкий и в высокой траве не выживает: растёт там, где трава ниже (тот же шум 5 м, что у пучков).
-const lawn = (x, z) => meadow(x, z) * (1 - THREE.MathUtils.smoothstep(noise(x / 5, z / 5), 0.3, 0.6));
-// Клевер тоже любит низкую траву, но разрастается куртинами по несколько метров.
-const clover = (x, z) => lawn(x, z) * THREE.MathUtils.smoothstep(noise(x / 9 + 240, z / 9), 0.4, 0.7);
-// Тысячелистник расползается корневищами редкими широкими пятнами, по всему двору, а не только в низкой траве.
-const yarrow = (x, z) => meadow(x, z) * THREE.MathUtils.smoothstep(noise(x / 12 + 190, z / 12), 0.45, 0.8);
+// Мир вокруг двора — свет, небо, панорамы, земля и трава (world.js). Трава не растёт у стволов и там, где игрок встаёт на старте.
+const world = await makeWorld(renderer, scene);
 const clear = PLOT.map(({ x }) => ({ x, z: 0, r: 0.8 })).concat({ x: 0, z: 4, r: 1.5 });
-// Растения сажаем в квадрате FIELD метров: весь двор и полоса за забором. Число пучков — на 1000 м².
-const FIELD = 76;
-const plant = (atlas, perThousand, density) => makeTufts(atlas, Math.round(perThousand * FIELD * FIELD / 1000), FIELD, clear, density);
-scene.add(makeGround(200), makeFence(), plant(grassTufts, 11000, meadow),
-  plant(mugwortTufts, 1700, colonies(40)), plant(nettleTufts, 1700, colonies(90)),
-  plant(tansyTufts, 1100, colonies(140)), plant(dandelionTufts, 1700, lawn), plant(cloverTufts, 5500, clover),
-  plant(yarrowTufts, 1200, yarrow));
+// Растения сажаем в квадрате 76 м: весь двор и полоса за забором.
+scene.add(makeMeadow((x, z) => (clear.some((c) => Math.hypot(x - c.x, z - c.z) < c.r) ? 0 : fenced(x, z)), 76), makeFence());
 
 // Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
 // Плоскость единичная: под длину шины и толщину ствола её растягивает scale.
@@ -1118,7 +1070,7 @@ function hint() {
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
   const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-  rays.setSize(size.x, size.y);
+  world.rays.setSize(size.x, size.y);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -1257,12 +1209,10 @@ renderer.setAnimationLoop((now) => {
   if (startEl.hidden) beat(now);
   const dt = Math.min(clock.getDelta(), 0.05);
   update(dt);
-  const light = sunlight(camera.position);
-  shine(light);
-  castShadows(renderer);
+  const light = world.light(camera);
   renderer.setViewport(0, 0, innerWidth, innerHeight);
   renderer.render(scene, camera);
-  rays.render(camera, light, dt);
+  world.rays.render(camera, light, dt);
   // Вид сбоку рисуем в рамку #side поверх основного, тем же рендером.
   const r = sideEl.getBoundingClientRect();
   renderer.setScissorTest(true);
