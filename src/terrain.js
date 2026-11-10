@@ -14,17 +14,17 @@ const EDGE = 2;          // м за краем участка, за которы
 const BUMPS = 30;        // кротовин и ямок на участке
 // м — шаг сетки земли: на участке, вокруг него до NEAR от середины (там ходят: улица, лесополоса) и дальше.
 const FINE = 0.15, MID = 0.4, COARSE = 1, NEAR = 60;
-const CARVED = 0.04;           // м — шаг рядов сетки в полосах rows, где вдавлены следы вдоль x
+const CARVED = 0.04;           // м — шаг рядов сетки в полосах rows, где вдавлены следы вдоль x (если у полосы нет своего)
 
 // noise — плавный шум −1..1 с ячейкой в единицу, свой у каждого рельефа; пока рельефа нет — null.
-let noise = null, area = { w: 0, d: 0 }, bumps = [], flats = [], dug = () => 0, rows = [];
+let noise = null, area = { w: 0, d: 0 }, bumps = [], flats = [], dug = () => 0, calm = () => 0, rows = [];
 // Последняя построенная сетка земли: узлы по x и по z и высоты узлов — для groundAt.
 let grid = null;
 
 // Высота без ровных площадок у стволов.
 function raw(x, z) {
   if (!noise) return 0;
-  let h = WAVES[0][1] * noise(x / WAVES[0][0], z / WAVES[0][0]) - dug(x, z);
+  let h = (1 - calm(x, z)) * WAVES[0][1] * noise(x / WAVES[0][0], z / WAVES[0][0]) - dug(x, z);
   const out = Math.max(Math.abs(x) - area.w / 2, Math.abs(z) - area.d / 2);
   const near = 1 - THREE.MathUtils.smoothstep(out, 0, EDGE);
   if (!near) return h;
@@ -43,14 +43,15 @@ const away = (f, x, z) => Math.hypot(Math.max(Math.abs(x - f.x) - (f.w ?? 0) / 2
 
 // Новый рельеф участка w × d метров с центром в начале координат. level — ровные площадки { x, z, w, d }:
 // под стволом (w и d не нужны) и под домом. Высота площадки — высота земли в её середине.
-// carve — что вдавлено в землю: dug(x, z) — на сколько метров (колея, ямы луж); rows — полосы по z [от, до],
+// carve — что вдавлено в землю: dug(x, z) — на сколько метров (колея, ямы луж); calm(x, z) — где, 0..1, длинной волны
+// нет и высоту целиком задаёт dug (пойма реки: её выровняла вода); rows — полосы по z [от, до, шаг рядов],
 // где у сетки земли частые ряды (там следы идут вдоль x).
-export function shapeGround(seed, level, w, d, carve = { dug: () => 0, rows: [] }) {
+export function shapeGround(seed, level, w, d, carve = {}) {
   const rnd = generator(seed);
   const smooth = smoothNoise(rnd);
   noise = (x, z) => 2 * smooth(x, z) - 1;
   area = { w, d };
-  ({ dug, rows } = carve);
+  ({ dug = () => 0, calm = () => 0, rows = [] } = carve);
   flats = [];
   bumps = [];
   while (bumps.length < BUMPS) {
@@ -79,7 +80,7 @@ export function normal(x, z, out = new THREE.Vector3()) {
 }
 
 // Сетка земли — квадрат со стороной size: на участке (и на EDGE за ним) шаг FINE, до NEAR — MID, дальше COARSE,
-// в полосах rows ряды через CARVED. Узлы по x и по z — общие для всех рядов: сетка из прямоугольников, частая там, где ходят.
+// в полосах rows ряды через свой шаг полосы (или CARVED). Узлы по x и по z — общие для всех рядов: сетка из прямоугольников, частая там, где ходят.
 export function groundGeometry(size) {
   const ticks = (half, bands = []) => {
     const out = [];
@@ -89,7 +90,7 @@ export function groundGeometry(size) {
     for (let s = half; s < NEAR; s += MID) out.push(s);
     for (let s = NEAR; s < size / 2; s += COARSE) out.push(s);
     out.push(size / 2);
-    const steps = ([a, b]) => Math.round((b - a) / CARVED);
+    const steps = ([a, b, step = CARVED]) => Math.round((b - a) / step);
     return [...out.filter((s) => !bands.some(([a, b]) => s >= a && s <= b)),
       ...bands.flatMap((band) => Array.from({ length: steps(band) + 1 }, (_, i) => band[0] + ((band[1] - band[0]) * i) / steps(band)))]
       .sort((a, b) => a - b);
@@ -106,6 +107,26 @@ export function groundGeometry(size) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geometry.setIndex(index);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+// Кусок последней построенной сетки земли — клетки, где keep(x, z) хоть в одном углу: в них тот же рельеф,
+// что у земли, вершина в вершину. Поверх земли на нём лежит другое покрытие (дно и берег реки).
+export function groundPatch(keep) {
+  const { xs, zs, pos } = grid, take = new Map(), out = [], index = [];
+  const at = (i, j) => {
+    const k = j * xs.length + i;
+    if (!take.has(k)) take.set(k, (out.push(pos[3 * k], pos[3 * k + 1], pos[3 * k + 2]), out.length / 3 - 1));
+    return take.get(k);
+  };
+  zs.forEach((z, j) => xs.forEach((x, i) => {
+    if (!i || !j || ![[x, z], [xs[i - 1], z], [x, zs[j - 1]], [xs[i - 1], zs[j - 1]]].some(([a, b]) => keep(a, b))) return;
+    index.push(at(i - 1, j - 1), at(i - 1, j), at(i, j - 1), at(i, j - 1), at(i - 1, j), at(i, j));
+  }));
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
   geometry.setIndex(index);
   geometry.computeVertexNormals();
   return geometry;

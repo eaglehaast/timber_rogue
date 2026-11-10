@@ -6,7 +6,7 @@ import { planGas, buildGas } from './gas.js';
 import { planPower, buildPower } from './power.js';
 import { planRoad, buildRoad } from './road.js';
 import { planLand, buildLand } from './land.js';
-import { planForest, buildForest } from './forest.js';
+import { planRiver, buildRiver } from './river.js';
 import { shapeGround, height } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS } from './world.js';
 import { driftClouds } from './sky.js';
@@ -47,8 +47,8 @@ function rebuild(seed) {
   // Площадка под дом — всё, что он занимает с крыльцом и свесами крыши.
   const box = new THREE.Box3().setFromObject(house), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
   const pad = { x: at.x + mid.x, z: at.z + mid.z, w: size.x, d: size.z };
-  const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed, road.verge), forest = planForest(seed);
-  shapeGround(seed, [pad], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + forest.dug(x, z), rows: road.rows });
+  const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed, road.verge), river = planRiver(seed);
+  shapeGround(seed, [pad], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
   at.y = height(at.x, at.z);
   house.position.set(at.x, at.y, at.z);
   // Трава: во дворе густая, за забором — луг пореже, в лесополосе — сплошная и сочная, к краю квадрата MEADOW
@@ -56,10 +56,10 @@ function rebuild(seed) {
   const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
   const lawn = (x, z) => (inside(x, z, { x: 0, z: 0 }, YARD.w, YARD.d) ? 1
     : THREE.MathUtils.lerp(OUTSIDE, 1, land.lush(x, z)) * (1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), MEADOW / 2 - 3, MEADOW / 2)));
-  const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) ? 0 : road.grass(x, z) * lawn(x, z) * forest.grass(x, z));
+  const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) ? 0 : road.grass(x, z) * lawn(x, z) * river.grass(x, z));
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: road.trodden, lush: land.lush, litter: forest.floor }), makeFence(), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildForest(forest));
+  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: road.trodden, lush: land.lush }), makeFence(), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river));
   layout = { at, gas, power, road };
   scene.add(house, yard);
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
