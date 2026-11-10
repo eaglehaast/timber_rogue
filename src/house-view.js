@@ -62,7 +62,7 @@ function rebuild(seed) {
   const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) ? 0 : road.grass(x, z) * lawn(x, z) * river.grass(x, z));
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: road.trodden, lush: land.lush }), makeFence(), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river));
+  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence(), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river));
   layout = { at, gas, power, road };
   scene.add(house, yard);
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
