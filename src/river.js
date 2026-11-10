@@ -12,7 +12,7 @@ import { atlas, makeTufts } from './grass.js';
 // с дальней. Вокруг русла — пойма: её выровняла вода, поэтому длинной волны рельефа там нет (calm для
 // terrain.js). Речка в низине сразу за двором: луг спускается к ней, наш берег — выпас с низкой травой,
 // дальний берег выше нашего — со двора видно и воду, и тот берег (Никита, 2026-11-10). Заднего забора нет,
-// боковые уходят в воду (into для fence.js).
+// боковые доходят до воды (into для fence.js).
 // Всё в метрах двора, улица — к +z, речка — к −z. Рельеф отдаёт dug(x, z), как улица в road.js.
 const AXIS = { z: -28, bend: 2, period: 60, wander: 1 };       // ось: середина по z, размах и длина изгиба, шум
 const WIDTH = [4, 5.5], DEPTH = [0.2, 0.4];                     // м: ширина по воде, глубина в русле
@@ -23,7 +23,6 @@ const LIP = { top: 0.25, edge: 0.12 };                          // неровн�
 const TUFT = 0.4;                                               // м: трава на берегу — её тоже видно в отражении
 const RISE = { lift: 1, run: 8 };                               // дальний луг: на сколько выше нашего, за сколько м от берега
 const GRAZE = 0.8;                                              // на нашем берегу пасут: трава низкая (trodden для world.js)
-const INTO = 1.5;                                               // м: на столько от нашего уреза в воду уходят боковые заборы
 const REACH = 140;                                              // м: русло в обе стороны от середины двора
 const BAND = { half: 7, step: 0.1 };                            // полоса частой сетки земли вокруг русла
 
@@ -145,8 +144,11 @@ export function planRiver({ seed, back }) {
   }
   // Наш берег от двора до воды — выпас (гуси, коза): трава там низкая, и со двора видно воду.
   const trodden = (x, z) => (plainAt(x, z).far ? 0 : GRAZE * s(back - z, 0, 3));
-  // Докуда по z идёт боковой забор, воткнутый в реку (open для makeFence).
-  const into = (x) => center(x) + section(x).w - INTO;
+  // Докуда по z идёт боковой забор: до уреза нашего берега (open для makeFence), в воде его нет.
+  const into = (x) => {
+    const sec = section(x);
+    return center(x) + side(sec.w, sec).shore * Math.sqrt(1 + slope(x) ** 2);
+  };
   const rows = [[AXIS.z - AXIS.bend - AXIS.wander - BAND.half, Math.min(back, AXIS.z + AXIS.bend + AXIS.wander + BAND.half), BAND.step]];
   return { center, slope, level, section, across, side, rise, dug, calm: plain, grass, bare, wet, stage, sedge, stones, trodden, into, rows };
 }
