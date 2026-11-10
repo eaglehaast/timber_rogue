@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PHONE } from './device.js';
 import { YARD } from './fence.js';
 import { makePanorama } from './panorama.js';
 import { makeSky, sunlight, castShadows } from './sky.js';
@@ -32,7 +33,8 @@ export async function makeWorld(renderer, scene, rings = Object.values(RINGS)) {
   const sun = new THREE.DirectionalLight(0xffe2b8, SUN_POWER);
   sun.position.copy(SUN).multiplyScalar(60);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(4096, 4096);
+  // На телефоне карта 2048 (16 МБ памяти вместо 64): на маленьком экране щели штакетника и так мельче точки.
+  sun.shadow.mapSize.setScalar(PHONE ? 2048 : 4096);
   sun.shadow.camera.left = sun.shadow.camera.bottom = -36;
   sun.shadow.camera.right = sun.shadow.camera.top = 36;
   sun.shadow.camera.far = 120;

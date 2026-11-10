@@ -1,9 +1,10 @@
 import * as THREE from 'three';
+import { texture as sized } from './device.js';
 
 // Поверхности из бесшовных фотографий: кора, трава. Картинки ложатся плиткой в мировом масштабе.
 const loader = new THREE.TextureLoader();
 export const tiles = (files) => files.map((file) => {
-  const texture = loader.load(file);
+  const texture = loader.load(sized(file));
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
   texture.anisotropy = 8;
