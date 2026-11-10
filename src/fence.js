@@ -87,8 +87,9 @@ const strip = (sx, sy, sz) => block(sx, sy, sz, [sx / STEEL, sy / STEEL]);
 
 // Сторона забора — отрезок от a до b по земле; деталь ставим по координате s вдоль него,
 // со сдвигом off наружу участка и наклоном tilt вдоль стороны. rest(x, z) — ниже какой высоты верх забора
-// не опускается: там, где земля ниже, столбы длиннее.
-function side(a, b, rest = () => -Infinity) {
+// не опускается: там, где земля ниже, столбы длиннее. water(x, z) — высота воды: в воду уходят только столбы,
+// доски до неё не достают.
+function side(a, b, { rest = () => -Infinity, water = () => -Infinity } = {}) {
   const dir = new THREE.Vector2(b.x - a.x, b.z - a.z), length = dir.length();
   dir.normalize();
   const yaw = Math.atan2(-dir.y, dir.x);
@@ -97,10 +98,12 @@ function side(a, b, rest = () => -Infinity) {
     new THREE.Vector3(a.x + dir.x * s - dir.y * off, y, a.z + dir.y * s + dir.x * off),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(lean, yaw, tilt, 'YXZ')), new THREE.Vector3(1, 1, 1));
   // Земля под точкой s стороны: столбы стоят на ней, а пролёты тянутся от столба к столбу.
-  const floor = (s) => height(a.x + dir.x * s, a.z + dir.y * s);
-  // По этой высоте идёт верх забора: земля, но не ниже rest.
-  const level = (s) => Math.max(floor(s), rest(a.x + dir.x * s, a.z + dir.y * s));
-  return { length, place, floor, level };
+  const at = (s) => [a.x + dir.x * s, a.z + dir.y * s];
+  const floor = (s) => height(...at(s));
+  // По level идёт верх забора: земля, но не ниже rest. До dry доходят доски снизу: земля или вода над ней.
+  const level = (s) => Math.max(floor(s), rest(...at(s)));
+  const dry = (s) => Math.max(floor(s), water(...at(s)));
+  return { length, place, floor, level, dry };
 }
 
 // Штакетник: столбы через 2,5 м (STEP), на них в каждом пролёте две прожилины, к ним прибиты доски ровным рядом.
@@ -123,7 +126,7 @@ const LIFT = 0.05, GATE_LIFT = 0.12; // м: доски не достают до 
 const CLEAR = 0.025, SEAM = 0.01; // м: зазор от створки до трубы и половина щели между створками ворот
 const DEG = Math.PI / 180;
 const STEP = 2.5; // м: шаг столбов
-function picket({ length, place, floor, level }, { height, gap, boardWidth, postWidth, age }, rnd, put, openings = []) {
+function picket({ length, place, floor, level, dry }, { height, gap, boardWidth, postWidth, age }, rnd, put, openings = []) {
   const wobble = (size) => (rnd() + rnd() - 1) * size * age; // чаще около нуля, изредка до ±size
   const posts = [], seams = [], pipes = new Map(), key = (s) => Math.round(s * 100);
   const count = Math.ceil(length / STEP - 0.01); // столбы поровну, не реже STEP, и на обоих концах
@@ -174,9 +177,9 @@ function picket({ length, place, floor, level }, { height, gap, boardWidth, post
     const n = leaf ? Math.round((width + gap) / (boardWidth + gap)) : Math.max(1, Math.round(span / (boardWidth + gap)));
     for (let k = 0; k < n; k++) {
       const s = (leaf ? lo + boardWidth / 2 + k * (width - boardWidth) / (n - 1) : a + (k + 0.5) * span / n) + wobble(0.006);
-      // Доска прибита к прожилинам отвесно: верх идёт по их уклону, низ — над самой землёй (под горку доски длиннее).
-      // Створка висит жёсткой рамкой: её доски одной длины и наклонены вместе с ней.
-      const ground = leaf ? height0(s) : floor(s);
+      // Доска прибита к прожилинам отвесно: верх идёт по их уклону, низ — над самой землёй или водой (под горку
+      // доски длиннее). Створка висит жёсткой рамкой: её доски одной длины и наклонены вместе с ней.
+      const ground = leaf ? height0(s) : dry(s);
       const h = (leaf ? height - 0.17 : height + height0(s) - ground) + wobble(0.012);
       const y = (leaf ? GATE_LIFT : LIFT) + ground + wobble(0.012);
       put('board', board(boardWidth, h, 0.022, rnd())
@@ -232,8 +235,8 @@ export const GATES = { at: 8.6 + 1.7, width: 3.4, leaves: 2, pipe: 0.065 };
 
 // Без open участок обнесён со всех сторон (так в игре). open(x) — докуда по z идут боковые стороны, если сзади
 // забора нет: на стенде за двором речка, боковые заборы уходят в воду, а заднего нет (Никита, 2026-11-10: так
-// бывает в деревнях, хоть и не по закону).
-export function makeFence({ open } = {}) {
+// бывает в деревнях, хоть и не по закону). water(x, z) — высота воды в реке.
+export function makeFence({ open, water } = {}) {
   const root = new THREE.Group();
   const rnd = generator(7);
   const parts = Object.fromEntries(Object.entries(materials).map(([name, list]) => [name, list.map(() => [])]));
@@ -243,11 +246,11 @@ export function makeFence({ open } = {}) {
   // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
   picket(side({ x: -x, z }, { x, z }), LOOK, rnd, put, [WICKET, GATES].map((o) => ({ ...o, at: o.at + x })));
   // Без заднего забора боковые стороны за двором спускаются под горку в воду. Верх там держится на уровне
-  // угла двора, а столбы и доски тянутся вниз до земли, в реке — до дна.
-  const end = open ?? (() => -z), rest = open && ((px, pz) => (pz < -z ? height(px, -z) : -Infinity));
-  picket(side({ x, z }, { x, z: end(x) }, rest), LOOK, rnd, put);
+  // угла двора, столбы тянутся вниз до земли, в реке — до дна, а доски кончаются над водой.
+  const end = open ?? (() => -z), bank = open && { rest: (px, pz) => (pz < -z ? height(px, -z) : -Infinity), water };
+  picket(side({ x, z }, { x, z: end(x) }, bank), LOOK, rnd, put);
   if (!open) picket(side({ x, z: -z }, { x: -x, z: -z }), LOOK, rnd, put);
-  picket(side({ x: -x, z: end(-x) }, { x: -x, z }, rest), LOOK, rnd, put);
+  picket(side({ x: -x, z: end(-x) }, { x: -x, z }, bank), LOOK, rnd, put);
   for (const name in parts) {
     parts[name].forEach((list, i) => {
       if (!list.length) return;

@@ -64,11 +64,12 @@ function rebuild(seed) {
   const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) ? 0 : road.grass(x, z) * lawn(x, z) * river.grass(x, z));
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence({ open: river.into }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier));
-  layout = { at, gas, power, road, pier };
+  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence({ open: river.into, water: river.level }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier));
+  layout = { at, gas, power, road, pier, pad, river };
   scene.add(house, yard);
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
-  if (!walker.on) view.target.set(at.x, at.y + 1.6, at.z);
+  if (walker.on) view.target.set(...settle(view.target.x, view.target.z));
+  else view.target.set(at.x, at.y + 1.6, at.z);
   label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов · палисадник ${front.toFixed(1)} м`;
 }
 
@@ -77,8 +78,28 @@ const view = { yaw: 0.35, pitch: 0.12, dist: 12, target: new THREE.Vector3() };
 // Пешком — как игрок в игре (main.js): глаза на высоте EYE над землёй или настилом мостков, угол обзора тот же,
 // шаг 3 м/с, с Shift — бегом вдвое быстрее, на каждом шаге голова чуть опускается (rise; бегом вдвое).
 // Точка view.target — где стоишь, взгляд — от камеры облёта к точке. Мышь захвачена и водит взгляд (Esc отпускает).
-const WALK = { speed: 3, fast: 2, fov: 55, stride: 0.75, rise: 0.012, mouse: 0.0022 };
+// Законы те же, что в игре: тело — круг радиусом body, за забор не выйти (ворота и калитка закрыты, от досок
+// держимся на fence), сквозь дом с крыльцом и свесами не пройти. Сзади двора забора нет, но в реку не зайти —
+// по воде только настил мостков. Облёт — камера, она летает свободно.
+const WALK = { speed: 3, fast: 2, fov: 55, stride: 0.75, rise: 0.012, mouse: 0.0022, body: 0.35, fence: 0.4 };
 const walker = { on: false, bob: 0, gait: 0 };
+// Можно ли стоять в точке.
+function free(x, z) {
+  const { pad, pier, river } = layout;
+  if (Math.abs(x) > YARD.w / 2 - WALK.fence || z > YARD.d / 2 - WALK.fence) return false;
+  if (Math.abs(x - pad.x) < pad.w / 2 + WALK.body && Math.abs(z - pad.z) < pad.d / 2 + WALK.body) return false;
+  return pier.deck(x, z) > -Infinity || height(x, z) >= river.level(x);
+}
+// Где встать, если зашёл пешком из облёта (или под ногами вырос новый дом): во дворе ближе всего к точке x, z —
+// внутри забора, не дальше задней границы двора (до воды) и у ближней стороны дома, если точка в нём. Возвращает [x, y, z].
+function settle(x, z) {
+  const { pad } = layout, half = [pad.w / 2 + WALK.body, pad.d / 2 + WALK.body];
+  x = THREE.MathUtils.clamp(x, -YARD.w / 2 + WALK.fence, YARD.w / 2 - WALK.fence);
+  z = THREE.MathUtils.clamp(z, -YARD.d / 2, YARD.d / 2 - WALK.fence);
+  const [bx, bz] = [[x, z], [pad.x - half[0], z], [pad.x + half[0], z], [x, pad.z - half[1]], [x, pad.z + half[1]]]
+    .filter(([a, b]) => free(a, b)).reduce((p, q) => (Math.hypot(q[0] - x, q[1] - z) < Math.hypot(p[0] - x, p[1] - z) ? q : p));
+  return [bx, 0, bz];
+}
 rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
 // Пальцы и мышь — указатели: один ведёт камеру вокруг точки (пешком — взгляд), два — щипок (ближе и дальше)
 // и сдвиг (точка идёт, как будто тянешь землю: пальцы вверх — вперёд).
@@ -136,7 +157,7 @@ addEventListener('blur', () => held.clear());
 // Пешком встаём туда, где висела камера облёта, и смотрим туда же; обратно — камера отлетает за спину.
 function toggleWalk() {
   walker.on = !walker.on;
-  if (walker.on) view.target.set(camera.position.x, 0, camera.position.z), view.pitch = 0;
+  if (walker.on) view.target.set(...settle(camera.position.x, camera.position.z)), view.pitch = 0;
   else {
     document.exitPointerLock?.();
     view.target.y = ground(view.target.x, view.target.z) + EYE;
@@ -157,8 +178,14 @@ const ground = (x, z) => Math.max(height(x, z), layout.pier.deck(x, z));
 // Сдвинуть точку на side метров вбок и ahead вперёд.
 function shift(side, ahead) {
   // Камера смотрит из (sin yaw, cos yaw) на точку: вперёд — обратно этому направлению.
-  view.target.x += -Math.sin(view.yaw) * ahead + Math.cos(view.yaw) * side;
-  view.target.z += -Math.cos(view.yaw) * ahead - Math.sin(view.yaw) * side;
+  const dx = -Math.sin(view.yaw) * ahead + Math.cos(view.yaw) * side, dz = -Math.cos(view.yaw) * ahead - Math.sin(view.yaw) * side;
+  if (walker.on) {
+    // Упёрся — скользишь вдоль препятствия: шаг идёт по той оси, по которой можно.
+    const { x, z } = view.target, [mx, mz] = [[dx, dz], [dx, 0], [0, dz]].find(([a, b]) => free(x + a, z + b)) ?? [0, 0];
+    view.target.x += mx, view.target.z += mz;
+    return;
+  }
+  view.target.x += dx, view.target.z += dz;
   // Ходим внутри карты: дальше видно, что горы — картинка на кольце.
   const out = Math.hypot(view.target.x, view.target.z) / BOUND;
   if (out > 1) view.target.x /= out, view.target.z /= out;
