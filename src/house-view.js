@@ -57,11 +57,11 @@ function rebuild(seed) {
   const pier = planPier(river, seed);
   house.position.set(at.x, at.y, at.z);
   // Трава: во дворе густая, за забором — луг пореже, в лесополосе — сплошная и сочная, к краю квадрата MEADOW
-  // сходит на нет; под домом её нет, на улице — как скажет колея. Двор — между боковыми заборами, от улицы до реки.
+  // сходит на нет; под домом и мостками её нет, на улице — как скажет колея. Двор — между боковыми заборами, от улицы до реки.
   const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
   const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.into(x) ? 1
     : THREE.MathUtils.lerp(OUTSIDE, 1, land.lush(x, z)) * (1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), MEADOW / 2 - 3, MEADOW / 2)));
-  const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) ? 0 : road.grass(x, z) * lawn(x, z) * river.grass(x, z));
+  const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) || pier.deck(x, z) > -Infinity ? 0 : road.grass(x, z) * lawn(x, z) * river.grass(x, z));
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
   yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence({ open: river.into }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier));
