@@ -8,6 +8,7 @@ import { planRoad, buildRoad } from './road.js';
 import { planLand, buildLand } from './land.js';
 import { planRiver, buildRiver } from './river.js';
 import { planPier, buildPier } from './pier.js';
+import { planHills } from './hills.js';
 import { shapeGround, height } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS, EYE } from './world.js';
 import { driftClouds } from './sky.js';
@@ -51,8 +52,8 @@ function rebuild(seed) {
   // Площадка под дом — всё, что он занимает с крыльцом и свесами крыши.
   const box = new THREE.Box3().setFromObject(house), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
   const pad = { x: at.x + mid.x, z: at.z + mid.z, w: size.x, d: size.z };
-  const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed, road.verge), river = planRiver({ seed, back: -fence });
-  shapeGround(seed, [pad], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
+  const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed, road.verge), river = planRiver({ seed, back: -fence }), hills = planHills(seed);
+  shapeGround(seed, [pad], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z) + hills.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
   at.y = height(at.x, at.z);
   const pier = planPier(river, seed);
   house.position.set(at.x, at.y, at.z);
