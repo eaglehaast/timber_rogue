@@ -17,11 +17,15 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from half import shrink  # noqa: E402
+
 # Метров: пучки травы — по росту, веточки с листьями — по длине.
 HEIGHTS = {'tall': [0.7, 0.9], 'mid': [0.45, 0.65], 'low': [0.25, 0.4], 'big': [0.5, 0.7], 'small': [0.3, 0.4], 'high': [1.0, 1.4], 'short': [0.15, 0.25]}
 BASE = 64  # пустая полоса под основанием в исходном кадре
 CELL = 512
 DARK, SOFT = 0.05, 0.12  # ярче DARK — уже трава, полная непрозрачность через ещё SOFT
+SPREAD = 32  # точек исходного кадра: радиус, с которого берётся цвет под прозрачными точками (fill)
 
 
 def tuft(path):
@@ -30,11 +34,20 @@ def tuft(path):
     rgb = rgb[BASE:-BASE]  # снизу пустая полоса, сверху срезаем столько же — кадр ровно по траве
     alpha = np.clip((rgb.max(2) - DARK) / SOFT, 0, 1)
     rgb = np.clip(rgb / np.maximum(alpha, 1e-3)[..., None], 0, 1)
-    # Прозрачные пиксели берут цвет ближайшей травинки, а не чёрный: иначе уменьшенные копии
-    # текстуры (вдали) смешали бы край с чёрным и обвели пучок тёмной каймой.
-    _, (iy, ix) = ndimage.distance_transform_edt(alpha < 0.5, return_indices=True)
-    rgb = rgb[iy, ix]
-    return np.dstack([rgb, alpha])
+    return np.dstack([fill(rgb, alpha >= 0.5, SPREAD), alpha])
+
+
+def fill(rgb, solid, sigma):
+    """Цвет под прозрачными (и почти прозрачными) точками — средний цвет травинок вокруг: размытый цвет непрозрачных,
+    делённый на размытую же их долю (sigma — радиус размытия в точках). Уменьшенные копии текстуры (вдали) смешивают
+    травинки с тем, что под пустотой: чёрный там обвёл бы пучок тёмной каймой, а цвет ближайшей точки — это почти
+    всегда чернильный контур, и пучок вдали темнел (пшеница на поле — тёмными крапинками). Средний цвет вокруг
+    оставляет пучку вдали его собственный тон."""
+    weight = ndimage.gaussian_filter(solid.astype(np.float32), sigma)
+    spread = np.dstack([ndimage.gaussian_filter(rgb[..., k] * solid, sigma) for k in range(3)])
+    mean = rgb[solid].mean(0)
+    around = np.where(weight[..., None] > 1e-3, spread / np.maximum(weight, 1e-3)[..., None], mean)
+    return np.where(solid[..., None], rgb, around)
 
 
 def main(folder, name, mask='*.png'):
@@ -45,7 +58,7 @@ def main(folder, name, mask='*.png'):
     for f in files:
         size = f.stem.rsplit('_', 1)[1]
         img = Image.fromarray((tuft(f) * 255).astype(np.uint8), 'RGBA')
-        cells.append((img.resize((CELL, round(CELL * img.height / img.width)), Image.LANCZOS), HEIGHTS[size]))
+        cells.append((shrink(img, (CELL, round(CELL * img.height / img.width))), HEIGHTS[size]))
     h = cells[0][0].height
     atlas = Image.new('RGBA', (cols * CELL, rows * h))
     for n, (img, _) in enumerate(cells):
@@ -57,4 +70,5 @@ def main(folder, name, mask='*.png'):
     }) + '\n')
 
 
-main(*sys.argv[1:])
+if __name__ == '__main__':
+    main(*sys.argv[1:])
