@@ -11,8 +11,8 @@ import { atlas, makeTufts } from './grass.js';
 // откос, сверху дернина. За двором русло изгибается от двора, поэтому отмель — со стороны двора, откос —
 // с дальней. Вокруг русла — пойма: её выровняла вода, поэтому длинной волны рельефа там нет (calm для
 // terrain.js). Речка в низине сразу за двором: луг спускается к ней, наш берег — выпас с низкой травой,
-// дальний берег выше нашего — со двора видно и воду, и тот берег (Никита, 2026-11-10). Заднего забора нет,
-// боковые уходят в воду (into для fence.js).
+// дальний луг на уровне двора, за ним холм (hills.js; прежний подъём дальнего берега на метр — от сосен, Никита
+// 2026-11-14: устарел). Заднего забора нет, боковые доходят до воды (into для fence.js).
 // Всё в метрах двора, улица — к +z, речка — к −z. Рельеф отдаёт dug(x, z), как улица в road.js.
 const AXIS = { z: -28, bend: 2, period: 60, wander: 1 };       // ось: середина по z, размах и длина изгиба, шум
 const WIDTH = [4, 5.5], DEPTH = [0.2, 0.4];                     // м: ширина по воде, глубина в русле
@@ -21,9 +21,8 @@ const LEVEL = { at: -0.8, slope: 0.002 };                       // вода: в�
 const BANK = { low: 0.35, high: 0.7, shoal: 3, steep: 0.25 };
 const LIP = { top: 0.25, edge: 0.12 };                          // неровность берегов: доля высоты откоса, м уреза
 const TUFT = 0.4;                                               // м: трава на берегу — её тоже видно в отражении
-const RISE = { lift: 1, run: 8 };                               // дальний луг: на сколько выше нашего, за сколько м от берега
+const FAR = 8;                                                  // м: за сколько от берега дальний луг выходит на уровень двора
 const GRAZE = 0.8;                                              // на нашем берегу пасут: трава низкая (trodden для world.js)
-const INTO = 1.5;                                               // м: на столько от нашего уреза в воду уходят боковые заборы
 const REACH = 140;                                              // м: русло в обе стороны от середины двора
 const BAND = { half: 7, step: 0.1 };                            // полоса частой сетки земли вокруг русла
 
@@ -89,22 +88,22 @@ export function planRiver({ seed, back }) {
     const t = (u - deep) / (shore - deep), lean = Math.min(((2 * top) / run) * Math.abs(shore - deep), 3 * sec.d);
     return -sec.d * (2 * t ** 3 - 3 * t ** 2 + 1) + lean * (t ** 3 - t ** 2);
   };
-  // Пойма: 1 у воды, 0 на лугу. От верха берега луг поднимается: дальний — за RISE.run метров на RISE.lift выше
-  // нашего, наш — от самого двора. Наш склон выпуклый: у двора полого, к реке круче (бровка), — с бровки взгляд
+  // Пойма: 1 у воды, 0 на лугу. От верха берега луг поднимается к уровню двора: дальний — за FAR метров,
+  // наш — от самого двора. Наш склон выпуклый: у двора полого, к реке круче (бровка), — с бровки взгляд
   // со двора падает к воде, а не упирается в траву склона.
-  const deepest = AXIS.z - AXIS.bend - AXIS.wander - WIDTH[1] / 2 - LIP.edge - BANK.shoal - RISE.run;
+  const deepest = AXIS.z - AXIS.bend - AXIS.wander - WIDTH[1] / 2 - LIP.edge - BANK.shoal - FAR;
   // У точки: p — 1 у воды, 0 на лугу; far — точка за рекой; sec, u — сечение и место в нём.
   const plainAt = (x, z) => {
     if (z > back || z < deepest) return { p: 0, far: z < deepest };
     const sec = section(x), u = across(x, z), { sign, shore, run } = side(u, sec), beyond = sign * (u - shore) - run;
-    if (sign < 0) return { p: 1 - s(beyond, 0, RISE.run), far: true, sec, u };
+    if (sign < 0) return { p: 1 - s(beyond, 0, FAR), far: true, sec, u };
     const q = THREE.MathUtils.clamp(beyond / Math.max(2, across(x, back) - shore - run), 0, 1);
     return { p: (1 - q) ** 2, far: false, sec, u };
   };
   const plain = (x, z) => plainAt(x, z).p;
   const dug = (x, z) => {
-    const { p, far, sec, u } = plainAt(x, z);
-    return -(p && p * (level(x) + rise(u, sec))) - (1 - p) * (far ? RISE.lift : 0);
+    const { p, sec, u } = plainAt(x, z);
+    return -(p && p * (level(x) + rise(u, sec)));
   };
   const steepness = (u, sec) => Math.abs(rise(u + 0.05, sec) - rise(u - 0.05, sec)) / 0.1;
   // Над водой у самого уреза и на крутом откосе травы нет — голая глина; ниже уреза — дно.
@@ -145,8 +144,11 @@ export function planRiver({ seed, back }) {
   }
   // Наш берег от двора до воды — выпас (гуси, коза): трава там низкая, и со двора видно воду.
   const trodden = (x, z) => (plainAt(x, z).far ? 0 : GRAZE * s(back - z, 0, 3));
-  // Докуда по z идёт боковой забор, воткнутый в реку (open для makeFence).
-  const into = (x) => center(x) + section(x).w - INTO;
+  // Докуда по z идёт боковой забор: до уреза нашего берега (open для makeFence), в воде его нет.
+  const into = (x) => {
+    const sec = section(x);
+    return center(x) + side(sec.w, sec).shore * Math.sqrt(1 + slope(x) ** 2);
+  };
   const rows = [[AXIS.z - AXIS.bend - AXIS.wander - BAND.half, Math.min(back, AXIS.z + AXIS.bend + AXIS.wander + BAND.half), BAND.step]];
   return { center, slope, level, section, across, side, rise, dug, calm: plain, grass, bare, wet, stage, sedge, stones, trodden, into, rows };
 }
