@@ -22,7 +22,7 @@ const BANK = { low: 0.35, high: 0.7, shoal: 3, steep: 0.25 };
 const LIP = { top: 0.25, edge: 0.12 };                          // неровность берегов: доля высоты откоса, м уреза
 const TUFT = 0.4;                                               // м: трава на берегу — её тоже видно в отражении
 const FAR = 8;                                                  // м: за сколько от берега дальний луг выходит на уровень двора
-const GRAZE = 0.8;                                              // на нашем берегу пасут: трава низкая (trodden для world.js)
+const GRAZE = 0.8;                                              // на берегах пасут: трава низкая (trodden для world.js)
 const REACH = 140;                                              // м: русло в обе стороны от середины двора
 const BAND = { half: 7, step: 0.1 };                            // полоса частой сетки земли вокруг русла
 
@@ -142,8 +142,9 @@ export function planRiver({ seed, back }) {
       stones.push({ x: at, z: center(at) + u * Math.sqrt(1 + slope(at) ** 2), kind: Math.floor(rnd() * STONES.aspect.length), size: rnd(), turn: rnd() * Math.PI });
     }
   }
-  // Наш берег от двора до воды — выпас (гуси, коза): трава там низкая, и со двора видно воду.
-  const trodden = (x, z) => (plainAt(x, z).far ? 0 : GRAZE * s(back - z, 0, 3));
+  // Наш берег от двора до воды — выпас (гуси, коза): трава там низкая, и со двора видно воду. Дальний берег — пойма до
+  // поля (field.js), там пасут стадо: трава тоже низкая, и с нашего берега видно кромку поля.
+  const trodden = (x, z) => GRAZE * (plainAt(x, z).far ? 1 : s(back - z, 0, 3));
   // Докуда по z идёт боковой забор: до уреза нашего берега (open для makeFence), в воде его нет.
   const into = (x) => {
     const sec = section(x);
