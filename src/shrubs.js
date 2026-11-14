@@ -30,58 +30,76 @@ async function look(name, groups, tint) {
   const byKind = [0, 1].map((kind) => SPRAY.kind.flatMap((k, cell) => (k === kind ? [cell] : [])));
   return { SPRAY, byKind, parts: [['bark', bark, depth(null), true], ['spray', spray, dense(depth(sprayMap)), false]] };
 }
-const LOOK = { seabuckthorn: await look('seabuckthorn', true, [0.66, 0.74, 0.62]), rosehip: await look('rosehip', false, [1, 1, 1]) };
+const LOOK = { seabuckthorn: await look('seabuckthorn', true, [0.75, 0.82, 0.68]), rosehip: await look('rosehip', false, [1, 1, 1]) };
 
-// Облепиха ростом h: стволики из одного места, на них ветви вверх и вбок.
+// Облепиха ростом h — деревце с густой округлой кроной (Никита, 2026-11-14: прежняя — голые стволики с веером
+// крупных веточек — «инопланетное растение»). Из одного места расходятся 2–4 стволика (молодая — 1–2), с трети
+// высоты на них по спирали ветви: внизу длиннее и положе, к макушке короче и круче, концы загибаются вверх.
+// На ветвях поочерёдно короткие побеги — на них и висит листва. Вместе ветви очерчивают шар кроны.
 function seabuckthorn(h) {
-  const axes = [], stems = h > 2 ? Math.round(rand(2, 5)) : Math.round(rand(1, 2));
+  const axes = [], stems = h > 2 ? Math.round(rand(2, 4)) : Math.round(rand(1, 2));
   let az = rand(0, 2 * Math.PI);
   for (let i = 0; i < stems; i++, az += (2 * Math.PI) / stems + rand(-0.5, 0.5)) {
-    const out = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az)), lean = rand(0.1, 0.45);
+    const out = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az)), lean = rand(0.15, 0.45);
     const dir = UP.clone().multiplyScalar(Math.cos(lean)).addScaledVector(out, Math.sin(lean));
-    const len = h * rand(0.75, 1), r0 = 0.012 * h * rand(0.8, 1.2);
-    const stem = makeAxis(walk(out.clone().multiplyScalar(rand(0, 0.12)).setY(-0.1), dir, len, len / 4, (d) => wobble(d, 0.08).addScaledVector(UP, 0.05).normalize()),
-      (s, l) => Math.max(0.006, r0 * (1 - s / l) ** 0.7), {});
+    const len = h * rand(0.8, 1), r0 = 0.014 * h * rand(0.8, 1.2);
+    const stem = makeAxis(walk(out.clone().multiplyScalar(rand(0, 0.1)).setY(-0.1), dir, len, len / 5, (d) => wobble(d, 0.07).addScaledVector(UP, 0.04).normalize()),
+      (s, l) => Math.max(0.008, r0 * (1 - s / l) ** 0.7), {});
     axes.push(stem);
-    for (let s = 0.3 * stem.len, side = rand(0, 2 * Math.PI); s < stem.len - 0.25; s += rand(0.25, 0.45), side += 2.4) {
-      const at = section(stem, s), f = s / stem.len;
+    for (let s = 0.3 * stem.len, side = rand(0, 2 * Math.PI); s < stem.len - 0.15; s += rand(0.12, 0.22) * Math.sqrt(h / 4), side += 2.4) {
+      const at = section(stem, s), f = (s - 0.3 * stem.len) / (0.7 * stem.len);
       const away = at.frame[0].clone().multiplyScalar(Math.cos(side)).addScaledVector(at.frame[1], Math.sin(side));
-      const to = at.tangent.clone().multiplyScalar(Math.cos(0.75)).addScaledVector(away, Math.sin(0.75)).normalize();
-      const l = Math.min(0.45 * h, (stem.len - s) * rand(0.5, 0.8) + 0.3) * (1 - 0.4 * f);
-      axes.push(makeAxis(walk(at.center, to, l, l / 3, (d) => wobble(d, 0.1).addScaledVector(UP, 0.08).normalize()),
-        (q, L) => Math.max(0.004, at.r * 0.5 * (1 - q / L)), { parent: stem, attach: s, level: 1, joint: 'twig' }));
+      const el = THREE.MathUtils.lerp(1.1, 0.45, f) + rand(-0.15, 0.15);
+      const to = at.tangent.clone().multiplyScalar(Math.cos(el)).addScaledVector(away, Math.sin(el)).normalize();
+      const l = 0.5 * h * Math.sin(Math.PI * (0.15 + 0.85 * f) ** 0.8) * rand(0.75, 1.1) + 0.1;
+      const limb = makeAxis(walk(at.center, to, l, l / 4, (d, q) => wobble(d, 0.08).addScaledVector(UP, 0.06 * q).normalize()),
+        (q, L) => Math.max(0.004, Math.min(at.r * 0.6, 0.02) * (1 - q / L)), { parent: stem, attach: s, level: 1, joint: 'twig' });
+      axes.push(limb);
+      for (let q = 0.25 * limb.len, k = 1; q < limb.len - 0.08; q += rand(0.1, 0.18), k = -k) {
+        const on = section(limb, q), tw = on.tangent.clone().multiplyScalar(Math.cos(0.65)).addScaledVector(on.frame[0], k * Math.sin(0.65)).normalize();
+        const tl = rand(0.12, 0.3) * Math.min(1, h / 2.5);
+        axes.push(makeAxis(walk(on.center, tw, tl, tl / 2, (d) => wobble(d, 0.12).normalize()),
+          (x, L) => 0.003, { parent: limb, attach: q, level: 2, joint: 'twig' }));
+      }
     }
   }
   return axes;
 }
 
-// Шиповник ростом h: плети дугой — из корня вверх, к концу клонятся наружу и вниз.
+// Шиповник ростом h: густой округлый куст. Из корня дугами выходят плети, к концу клонятся наружу и вниз;
+// с середины плети поочерёдно короткие побеги с листьями, поэтому куст плотный, а не веер голых плетей.
 function rosehip(h) {
-  const axes = [], canes = Math.round(rand(9, 15));
+  const axes = [], canes = Math.round(rand(14, 22));
   for (let i = 0; i < canes; i++) {
-    const az = rand(0, 2 * Math.PI), out = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az)), lean = rand(0.15, 0.6);
+    const az = rand(0, 2 * Math.PI), out = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az)), lean = rand(0.15, 0.7);
     const dir = UP.clone().multiplyScalar(Math.cos(lean)).addScaledVector(out, Math.sin(lean));
-    const len = h * rand(0.9, 1.4), droop = rand(0.5, 1.1), r0 = rand(0.007, 0.012);
-    axes.push(makeAxis(walk(out.clone().multiplyScalar(rand(0, 0.15)).setY(-0.05), dir, len, len / 5,
+    const len = h * rand(0.8, 1.3), droop = rand(0.5, 1.1), r0 = rand(0.007, 0.012);
+    const cane = makeAxis(walk(out.clone().multiplyScalar(rand(0, 0.15)).setY(-0.05), dir, len, len / 5,
       (d, q) => wobble(d, 0.05).addScaledVector(out, 0.15 * q).addScaledVector(UP, -droop * q * q).normalize()),
-    (s, l) => Math.max(0.004, r0 * (1 - 0.6 * s / l)), {}));
+    (s, l) => Math.max(0.004, r0 * (1 - 0.6 * s / l)), {});
+    axes.push(cane);
+    for (let s = 0.35 * cane.len, k = 1; s < cane.len - 0.1; s += rand(0.12, 0.2), k = -k) {
+      const on = section(cane, s), l = rand(0.15, 0.35);
+      const to = on.tangent.clone().multiplyScalar(Math.cos(0.7)).addScaledVector(on.frame[0], k * Math.sin(0.7)).normalize();
+      axes.push(makeAxis(walk(on.center, to, l, l / 2, (d) => wobble(d, 0.12).normalize()), () => 0.003, { parent: cane, attach: s, level: 1, joint: 'twig' }));
+    }
   }
   return axes;
 }
 
 // Веточки: вдоль ветвей (у облепихи) или плетей (у шиповника) с from доли длины, через step метров, и на концах.
-// Торчат вверх и наружу от середины куста; на fruit доле — ягоды или плоды.
+// Идут по побегу и наружу от середины куста, каждая со своим разбросом; на fruit доле — ягоды или плоды.
 function sprays(axes, h, { SPRAY, byKind }, fruit, from, step) {
-  const list = [], scale = THREE.MathUtils.clamp(h / 3, 0.5, 1);
+  const list = [], scale = THREE.MathUtils.clamp(h / 5, 0.35, 0.75);
   const add = (a, s) => {
     const on = section(a, s), cells = byKind[random() < fruit ? 0 : 1], cell = cells[Math.floor(random() * cells.length)];
     const outward = on.center.clone().setY(0).normalize();
-    const down = UP.clone().addScaledVector(on.tangent, 0.6).addScaledVector(outward, 0.4).normalize();
+    const down = wobble(on.tangent.clone().addScaledVector(outward, 0.5).addScaledVector(UP, 0.15), 0.5);
     const across = wobble(new THREE.Vector3(), 1);
     across.addScaledVector(down, -across.dot(down)).normalize();
-    list.push({ at: on.center, across, down, up: true, cell, l: SPRAY.length[cell] * scale * rand(0.75, 1.15), seed: rand(0, 2 * Math.PI) });
+    list.push({ at: on.center, across, down, up: true, cell, l: SPRAY.length[cell] * scale * rand(0.6, 1.2), seed: rand(0, 2 * Math.PI) });
   };
-  // Стволик облепихи в листве только на конце: вдоль него — ветви.
+  // Стволик облепихи и плеть шиповника в листве только на конце: листва вдоль побегов.
   for (const a of axes) {
     if (a.level || !a.children.length) for (let s = from * a.len; s < a.len; s += rand(step[0], step[1]) * scale) add(a, s);
     add(a, a.len);
@@ -94,10 +112,10 @@ function grow(species, h, k) {
   const kit = LOOK[species];
   if (species === 'seabuckthorn') {
     const axes = seabuckthorn(h);
-    return { bark: barkGeometry(axes, h, { tile: 0.3, grade: (a) => (a.level ? 1 : 0) }), spray: sprayGeometry(sprays(axes, h, kit, FRUIT[species], 0.25, [0.12, 0.2]), h, kit.SPRAY) };
+    return { bark: barkGeometry(axes.filter((a) => a.level < 2), h, { tile: 0.3, grade: (a) => (a.level ? 1 : 0) }), spray: sprayGeometry(sprays(axes, h, kit, FRUIT[species], 0.3, [0.09, 0.14]), h, kit.SPRAY) };
   }
   const axes = rosehip(h);
-  return { bark: barkGeometry(axes, h, { tile: 0.2 }), spray: sprayGeometry(sprays(axes, h, kit, FRUIT[species], 0.3, [0.1, 0.18]), h, kit.SPRAY) };
+  return { bark: barkGeometry(axes.filter((a) => !a.level), h, { tile: 0.2 }), spray: sprayGeometry(sprays(axes, h, kit, FRUIT[species], 0.2, [0.1, 0.16]), h, kit.SPRAY) };
 }
 
 // Кусты list = [{ x, y, z, species, kind, turn, scale }]: species — 'seabuckthorn' или 'rosehip', kind — вид по росту.
