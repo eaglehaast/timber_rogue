@@ -119,7 +119,8 @@ export const noise = smoothNoise(Math.random);
 // Куртины: где шум «дикий», берём в основном высокие пучки и сажаем гуще, между ними — низкая трава.
 // Где траву топчут (между колеями), trodden близко к 1: куртин высокой там нет, растёт низкая.
 // Где трава сочная (lush близко к 1), она сплошная и ровная: куртин почти нет, пучок зеленее.
-export function makeTufts({ material, cols, rows, aspect, heights, rank, turning }, count, size, density, { trodden = () => 0, lush = () => 0 } = {}) {
+// top — какую долю роста пучка оставить сверху: верхушки торчат из сплошной массы (колосья над полем), низ не рисуем.
+export function makeTufts({ material, cols, rows, aspect, heights, rank, turning }, count, size, density, { trodden = () => 0, lush = () => 0, top = 1 } = {}) {
   const pos = [], uv = [], index = [], side = [], lift = [], green = [];
   for (let n = 0; n < count; n++) {
     const x = (Math.random() - 0.5) * size, z = (Math.random() - 0.5) * size;
@@ -129,13 +130,13 @@ export function makeTufts({ material, cols, rows, aspect, heights, rank, turning
     let pick = Math.random() * weights.reduce((a, b) => a + b), cell = 0;
     while ((pick -= weights[cell]) > 0) cell++;
     const [low, high] = heights[cell];
-    const u0 = (cell % cols) / cols, v0 = 1 - (Math.floor(cell / cols) + 1) / rows, u1 = u0 + 1 / cols, v1 = v0 + 1 / rows;
+    const u0 = (cell % cols) / cols, v1 = 1 - Math.floor(cell / cols) / rows, u1 = u0 + 1 / cols, v0 = v1 - top / rows;
     // Где топчут, пучок примят: ниже до трети роста.
     const h = (low + Math.random() * (high - low)) * (1 - 0.65 * trodden(x, z)), w = h * aspect, turn = Math.random() * Math.PI, y = height(x, z), g = lush(x, z);
     const cards = turning ? [[0, 0]] : [turn, turn + Math.PI / 2].map((a) => [Math.cos(a) * w / 2, Math.sin(a) * w / 2]);
     for (const [dx, dz] of cards) {
       const k = pos.length / 3;
-      pos.push(x - dx, 0, z - dz, x + dx, 0, z + dz, x + dx, h, z + dz, x - dx, h, z - dz);
+      pos.push(x - dx, h * (1 - top), z - dz, x + dx, h * (1 - top), z + dz, x + dx, h, z + dz, x - dx, h, z - dz);
       if (turning) side.push(-w / 2, w / 2, w / 2, -w / 2);
       uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
       lift.push(y, y, y, y);
