@@ -9,7 +9,7 @@ import { planLand, buildLand } from './land.js';
 import { planRiver, buildRiver } from './river.js';
 import { planPier, buildPier } from './pier.js';
 import { planField, buildField } from './field.js';
-import { shapeGround, height } from './terrain.js';
+import { shapeGround, height, normal } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS, EYE } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
@@ -81,13 +81,14 @@ function rebuild(seed) {
 const view = { yaw: 0.7, pitch: 0.24, dist: 21, target: new THREE.Vector3() };
 // Земля или настил мостков. Пешком за боковой и передний заборы не выйти, в реку тоже.
 const ground = (x, z) => Math.max(height(x, z), layout.pier.deck(x, z));
+const groundNormal = (x, z, out) => layout.pier.deck(x, z) >= height(x, z) ? out.set(0, 1, 0) : normal(x, z, out);
 function walkable(x, z) {
   const { pad, pier, river } = layout;
   if (Math.abs(x) > YARD.w / 2 - 0.4 || z > YARD.d / 2 - 0.4) return false;
   if (Math.abs(x - pad.x) < pad.w / 2 + 0.35 && Math.abs(z - pad.z) < pad.d / 2 + 0.35) return false;
   return pier.deck(x, z) > -Infinity || (z >= river.shore(x) && height(x, z) >= river.level(x));
 }
-const game = attachGame({ scene, camera, ground, walkable });
+const game = attachGame({ scene, camera, ground, groundNormal, walkable });
 const spawn = { x: MAPLES[1].x, z: MAPLES[1].z + 4 };
 
 // В облёте мышь и палец водят камеру. Пешком мышью управляет игра, палец поворачивает взгляд или пилу.
@@ -136,7 +137,7 @@ const help = document.getElementById('help'), keys = document.getElementById('ke
 const walkButton = document.getElementById('walk'), gameHelp = document.getElementById('game-help');
 if (PHONE) {
   keys.textContent = 'Палец — обойти · два пальца: щипок — ближе, сдвиг — идти';
-  document.getElementById('play-keys').textContent = 'Палец — оглядеться или повернуть пилу. Два пальца сдвигом — идти. У клёна приставь пилу и удерживай кнопку «Пилить». Чтобы отойти от пропила, сделай движение назад двумя пальцами.';
+  document.getElementById('play-keys').textContent = 'Палец — оглядеться или повернуть пилу. Два пальца сдвигом — идти. Выбери пилу или руки в инвентаре. У дерева приставь пилу и удерживай «Пилить». Чтобы отойти от пропила, сделай движение назад двумя пальцами. Руками нажми «Взять» или «Бросить».';
   const button = document.getElementById('another');
   button.hidden = false;
   button.addEventListener('click', another);

@@ -98,6 +98,42 @@ html, body {
   text-shadow: 0 1px 3px #000;
 }
 
+/* Инвентарь: столбик ячеек в левом нижнем углу (посередине снизу — пила в руках); в руках — ярче,
+   брошенная пила — приглушена. */
+#kit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 15px;
+  text-shadow: 0 1px 3px #000;
+}
+
+#kit[hidden] {
+  display: none;
+}
+
+#kit button {
+  margin: 0;
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.8);
+  font: inherit;
+  pointer-events: auto;
+}
+
+#kit button.held {
+  border-color: #f2a33a;
+  color: #fff;
+}
+
+#kit button.away {
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.55);
+}
+
 #result {
   position: fixed;
   left: 0;
@@ -133,16 +169,25 @@ html, body {
   --help-paper: rgba(32, 29, 25, 0.9);
 }
 
-#help {
+#controls {
   position: fixed;
   left: 16px;
   bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  pointer-events: none;
+}
+
+#help {
   max-width: min(520px, calc(100vw - 48px));
   padding: 8px 12px;
   border-radius: 8px;
   font: 14px/1.4 system-ui, sans-serif;
   color: var(--help-ink);
   background: var(--help-paper);
+  pointer-events: auto;
 }
 
 #seed, #keys {
@@ -166,6 +211,8 @@ button {
 
 #game-help {
   margin-top: 6px;
+  max-height: 34vh;
+  overflow-y: auto;
 }
 
 #game-help summary {

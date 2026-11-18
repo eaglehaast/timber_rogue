@@ -17,9 +17,12 @@ export const SLIDING = 0.45;  // а когда уже поехал, трение
 // Н: держит колонка 1×1 см вдоль волокон: разрыв ≈40 МПа (не подтверждено), сжатие 16,3 МПа.
 const TENSION = 4000;
 const CRUSH = 1630;
-const SHEAR = 6.5e6;          // Па: на скалывание вдоль волокон древесина держит в разы слабее
-const E = 6e9;                // Па: модуль упругости вдоль волокон (у твёрдого клёна 10–11 ГПа)
-const WEAK_H = 0.05;          // м: высота ослабленного участка у недопила — он и гнётся
+// Па — то же на квадратный метр: у ветки сечение не из колонок, а из клеток (limbs.js).
+export const TENSILE = TENSION / VOXEL ** 2, COMPRESSIVE = CRUSH / VOXEL ** 2;
+export const SHEAR = 6.5e6;          // Па: на скалывание вдоль волокон древесина держит в разы слабее
+export const E = 6e9;                // Па: модуль упругости вдоль волокон (у твёрдого клёна 10–11 ГПа)
+export const WEAK_H = 0.05;          // м: высота ослабленного участка у недопила — он и гнётся
+export const SPLIT_MIN = 0.02;       // м: отщеп короче этого — волосяная трещина, её не видно и она ничего не меняет
 const SHUT = Math.tan(THREE.MathUtils.degToRad(8)); // падая, дерево ломает недопил, если подпил сомкнулся раньше 8°
 const G_WOOD = E / 16;         // Па: модуль сдвига — на кручение древесина в разы мягче, чем вдоль волокон
 const DIRS = 36;
@@ -28,13 +31,14 @@ const DIRS = 36;
 // по ним считается, как недопил гнётся. Перерезанный насквозь ствол оседает на самую узкую щель (sink, м),
 // у каждой колонки open — сколько её щели осталось после этого.
 export function section(voxels) {
-  const { n } = voxels;
+  const { n, m } = voxels;
   const all = [], intact = [];
-  for (let k = 0; k < n; k++) {
+  for (let k = 0; k < m; k++) {
     for (let i = 0; i < n; i++) {
       const col = k * n + i;
       const gap = voxels.gap[col];
-      if (!gap && !through(voxels, i, k)) continue;
+      // Держат только целые колонки тех стволов, что подпилены: у двойного дерева второй ствол сам по себе.
+      if ((!gap && !through(voxels, i, k)) || !voxels.held(voxels.middle * n * m + col)) continue;
       const f = {
         col, x: voxels.x(i), z: voxels.z(k), gap,
         mid: ((voxels.gapLow[col] + voxels.gapHigh[col] + 1) / 2) * VOXEL,
@@ -280,11 +284,16 @@ export function deflection(sec, c, weight, height, split = 0) {
   return theta.setLength(Math.min(size, closing(sec, dir, sec.x0 * dir.x + sec.z0 * dir.z, 0)));
 }
 
-// Ширина пропила в точке x, мм: пила оставляет щель в кубик (open, м — что от неё осталось после оседания),
-// а наклон ствола раскрывает её позади и сжимает впереди — упругий (theta) вокруг центра недопила,
-// осевший (give) вокруг оси, у которой осел.
-export function kerfWidth(sec, theta, give, x, open = VOXEL - sec.sink) {
+// На сколько (м) наклон ствола раскрывает щель в точке x (меньше нуля — сжимает): позади раскрывает,
+// впереди сжимает — упругий (theta) вокруг центра недопила (sec.x0, sec.z0), осевший (give) вокруг оси,
+// у которой осел.
+export function opening(sec, theta, give, x) {
   const t = give.tilt;
-  return Math.max(0, 1000 * (open + theta.x * (sec.x0 - x.x) + theta.z * (sec.z0 - x.z)
-    + t.x * (give.at.x - x.x) + t.z * (give.at.z - x.z)));
+  return theta.x * (sec.x0 - x.x) + theta.z * (sec.z0 - x.z) + t.x * (give.at.x - x.x) + t.z * (give.at.z - x.z);
+}
+
+// Ширина пропила в точке x, мм: пила оставляет щель в кубик (open, м — что от неё осталось после оседания),
+// а наклон ствола её раскрывает или сжимает.
+export function kerfWidth(sec, theta, give, x, open = VOXEL - sec.sink) {
+  return Math.max(0, 1000 * (open + opening(sec, theta, give, x)));
 }
