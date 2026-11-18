@@ -9,6 +9,7 @@ import { planLand, buildLand } from './land.js';
 import { planRiver, buildRiver } from './river.js';
 import { planPier, buildPier } from './pier.js';
 import { planField, buildField } from './field.js';
+import { planNeighbors, buildNeighbors, mown } from './neighbors.js';
 import { shapeGround, height } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS, EYE } from './world.js';
 import { driftClouds } from './sky.js';
@@ -36,7 +37,8 @@ const GROUND = 2 * RINGS.far[1];
 // Дом стоит фасадом к улице у забора, за палисадником в 1,5–2,5 м (Никита, 2026-11-08: фасад прямо в линию забора
 // не нравится). Боком с крыльцом — к воротам, в ASIDE от их середины. Земля под домом выровнена (terrain.js).
 const PALISADE = [1.5, 2.5], ASIDE = 5;
-const MEADOW = 106, OUTSIDE = 0.7; // м: сторона квадрата с травой (до поля за лесополосой); сколько травы за забором
+const MEADOW = 106, OUTSIDE = 0.7; // м: поперёк улицы трава до поля за лесополосой; сколько травы за забором
+const FAR = [45, 75, 0.35];         // м от середины вдоль улицы, где трава начинает и кончает редеть, и до какой доли
 let house = null, yard = null, layout = null;
 const label = document.getElementById('seed');
 function rebuild(seed) {
@@ -52,21 +54,25 @@ function rebuild(seed) {
   // Площадка под дом — всё, что он занимает с крыльцом и свесами крыши.
   const box = new THREE.Box3().setFromObject(house), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
   const pad = { x: at.x + mid.x, z: at.z + mid.z, w: size.x, d: size.z };
+  const neighbors = planNeighbors(seed), pads = [pad, ...neighbors.map((n) => n.pad)];
   const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed, road.verge), river = planRiver({ seed, back: -fence }), field = planField(seed, river);
-  shapeGround(seed, [pad], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
+  shapeGround(seed, pads, YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
   at.y = height(at.x, at.z);
   const pier = planPier(river, seed);
   house.position.set(at.x, at.y, at.z);
-  // Трава: во дворе густая, за забором — луг пореже, в лесополосе — сплошная и сочная, к краю квадрата MEADOW
-  // сходит на нет; под домом и мостками её нет, на улице — как скажет колея, на поле за рекой — пшеница.
-  // Двор — между боковыми заборами, от улицы до реки.
-  const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
-  const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.shore(x) ? 1
-    : THREE.MathUtils.lerp(OUTSIDE, 1, land.lush(x, z)) * (1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), MEADOW / 2 - 3, MEADOW / 2)));
-  const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) || pier.deck(x, z) > -Infinity ? 0 : road.grass(x, z) * lawn(x, z) * river.grass(x, z) * (1 - field.cover(x, z)));
+  // Трава: во дворах густая, за заборами — луг пореже, в лесополосе — сплошная и сочная; по z к краю MEADOW,
+  // а вдоль улицы — к краю крайних участков сходит на нет. Дальше FAR от середины пучки реже: там их видно
+  // только с улицы издали, и землю между ними не различить. Под домами и мостками травы нет, на улице — как
+  // скажет колея, на поле за рекой — пшеница. Двор — между боковыми заборами, от улицы до реки, у соседей так же.
+  const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2, s = THREE.MathUtils.smoothstep;
+  const across = Math.max(YARD.w / 2, ...neighbors.flatMap((n) => [-n.from, n.to]));
+  const lawn = (x, z) => (1 - (1 - FAR[2]) * s(Math.abs(x), FAR[0], FAR[1])) * (Math.abs(x) < across && z < fence && z > river.shore(x) ? 1
+    : THREE.MathUtils.lerp(OUTSIDE, 1, land.lush(x, z)) * (1 - s(Math.abs(z), MEADOW / 2 - 3, MEADOW / 2)) * (1 - s(Math.abs(x), across - 3, across)));
+  const grass = (x, z) => (pads.some((p) => inside(x, z, p, p.w, p.d)) || pier.deck(x, z) > -Infinity ? 0 : road.grass(x, z) * lawn(x, z) * river.grass(x, z) * (1 - field.cover(x, z)));
+  const tended = mown(neighbors, fence, river.shore);
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field));
+  yard = new THREE.Group().add(makeMeadow(grass, [2 * across, MEADOW], GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), tended(x, z)), lush: land.lush }), makeFence({ open: river.shore, lots: [{ from: -YARD.w / 2, to: YARD.w / 2, openings: [WICKET, GATES] }, ...neighbors] }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field), buildNeighbors(neighbors));
   layout = { at, gas, power, road, pier, pad, river };
   scene.add(house, yard);
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);

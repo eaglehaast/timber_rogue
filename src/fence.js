@@ -231,24 +231,29 @@ function picket({ length, place, floor, level }, { height, gap, boardWidth, post
 export const WICKET = { at: 8, width: 1.2, leaves: 1, pipe: 0.046 };
 export const GATES = { at: 8.6 + 1.7, width: 3.4, leaves: 2, pipe: 0.065 };
 
-// Без open участок обнесён со всех сторон (так в игре). open(x) — докуда по z идут боковые стороны, если сзади
-// забора нет: на стенде за двором речка, боковые заборы доходят до воды, а заднего нет (Никита, 2026-11-10: так
-// бывает в деревнях, хоть и не по закону).
-export function makeFence({ open } = {}) {
+// Участки вдоль улицы — lots: [{ from, to, openings }] по x, проёмы — с x своей середины. Без lots — один наш двор
+// с калиткой и воротами. Заборы между соседними участками общие. Без open участки обнесены со всех сторон (так в игре).
+// open(x) — докуда по z идут боковые стороны, если сзади забора нет: на стенде за дворами речка, боковые заборы
+// доходят до воды, а заднего нет (Никита, 2026-11-10: так бывает в деревнях, хоть и не по закону).
+export function makeFence({ open, lots = [{ from: -YARD.w / 2, to: YARD.w / 2, openings: [WICKET, GATES] }] } = {}) {
   const root = new THREE.Group();
   const rnd = generator(7);
   const parts = Object.fromEntries(Object.entries(materials).map(([name, list]) => [name, list.map(() => [])]));
   // Картинка детали — наугад, у стали — какая сказано.
   const put = (name, geometry, kind = Math.floor(rnd() * KINDS)) => parts[name][kind].push(geometry);
-  const x = YARD.w / 2, z = YARD.d / 2;
-  // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
-  picket(side({ x: -x, z }, { x, z }), LOOK, rnd, put, [WICKET, GATES].map((o) => ({ ...o, at: o.at + x })));
+  const z = YARD.d / 2;
   // Без заднего забора боковые стороны за двором спускаются под горку к воде. Верх там держится на уровне
   // угла двора, а столбы и доски тянутся вниз до земли.
   const end = open ?? (() => -z), rest = open && ((px, pz) => (pz < -z ? height(px, -z) : -Infinity));
-  picket(side({ x, z }, { x, z: end(x) }, rest), LOOK, rnd, put);
-  if (!open) picket(side({ x, z: -z }, { x: -x, z: -z }), LOOK, rnd, put);
-  picket(side({ x: -x, z: end(-x) }, { x: -x, z }, rest), LOOK, rnd, put);
+  // Обходим участок по часовой стрелке при взгляде сверху: тогда «наружу» у каждой стороны смотрит от двора.
+  // Общий забор между участками смотрит наружу от середины улицы (x = 0), как боковые стороны нашего двора.
+  for (const { from, to, openings } of lots) {
+    picket(side({ x: from, z }, { x: to, z }), LOOK, rnd, put, openings.map((o) => ({ ...o, at: o.at - from })));
+    if (!open) picket(side({ x: to, z: -z }, { x: from, z: -z }), LOOK, rnd, put);
+  }
+  for (const x of new Set(lots.flatMap(({ from, to }) => [from, to]))) {
+    picket(x > 0 ? side({ x, z }, { x, z: end(x) }, rest) : side({ x, z: end(x) }, { x, z }, rest), LOOK, rnd, put);
+  }
   for (const name in parts) {
     parts[name].forEach((list, i) => {
       if (!list.length) return;

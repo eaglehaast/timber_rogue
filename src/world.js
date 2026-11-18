@@ -8,6 +8,7 @@ import { makeGround, makeTufts, grassTufts, mugwortTufts, nettleTufts, tansyTuft
 
 // Мир вокруг двора — общий у игры и стенда дома: свет, небо с облаками, кольца панорамы, земля и трава.
 // Середина двора — в начале координат, улица с воротами — к +z. Земля — по рельефу terrain.js, если он задан.
+const SHADE = 36, AHEAD = 0.5; // м: полстороны квадрата тени; насколько его середина впереди камеры (доля SHADE)
 export const EYE = 1.7; // м: глаза стоя — на этой высоте горизонт панорам
 
 // Небо светит в тень почти так же, как солнце на свету: тень на досках и стволах прозрачная, а не чёрная.
@@ -28,18 +29,31 @@ export const RINGS = { middle: ['tushna-mid', 45, 300], far: ['tushna', 140, 300
 export async function makeWorld(renderer, scene, rings = Object.values(RINGS)) {
   const skyLight = new THREE.HemisphereLight(0xb4ccec, MEADOW, 1.7);
   scene.add(skyLight);
-  // Тень накрывает весь участок с забором: солнце стоит, поэтому тени не дрожат. Карта 4096 — около 1,7 см
-  // на точку, мельче щелей штакетника: полосы света сквозь забор читаются.
+  // Тень — квадрат 2·SHADE метров перед камерой: он едет за ней (у нас двор, вдоль улицы — соседи). Карта 4096 —
+  // около 1,7 см на точку, мельче щелей штакетника: полосы света сквозь забор читаются. Квадрат сдвигается
+  // только на целые точки карты, поэтому края теней не дрожат, когда идёшь.
   const sun = new THREE.DirectionalLight(0xffe2b8, SUN_POWER);
-  sun.position.copy(SUN).multiplyScalar(60);
   sun.castShadow = true;
   // На телефоне карта 2048 (16 МБ памяти вместо 64): на маленьком экране щели штакетника и так мельче точки.
-  sun.shadow.mapSize.setScalar(PHONE ? 2048 : 4096);
-  sun.shadow.camera.left = sun.shadow.camera.bottom = -36;
-  sun.shadow.camera.right = sun.shadow.camera.top = 36;
+  const map = PHONE ? 2048 : 4096;
+  sun.shadow.mapSize.setScalar(map);
+  sun.shadow.camera.left = sun.shadow.camera.bottom = -SHADE;
+  sun.shadow.camera.right = sun.shadow.camera.top = SHADE;
   sun.shadow.camera.far = 120;
   sun.shadow.normalBias = 0.03;
-  scene.add(sun);
+  scene.add(sun, sun.target);
+  // Оси карты тени: солнце смотрит по −SUN.
+  const axes = new THREE.Matrix4().lookAt(SUN, new THREE.Vector3(), new THREE.Vector3(0, 1, 0)), back = axes.clone().transpose(), texel = (2 * SHADE) / map;
+  const center = new THREE.Vector3(), ahead = new THREE.Vector3();
+  const follow = (camera) => {
+    camera.getWorldDirection(ahead).setY(0).normalize();
+    center.copy(camera.position).addScaledVector(ahead, AHEAD * SHADE).setY(0);
+    // В осях карты тени — на целые точки.
+    center.applyMatrix4(back);
+    center.set(Math.round(center.x / texel) * texel, Math.round(center.y / texel) * texel, center.z).applyMatrix4(axes);
+    sun.target.position.copy(center);
+    sun.position.copy(SUN).multiplyScalar(60).add(center);
+  };
 
   scene.add(await makeSky(SUN));
   const rays = new Rays(renderer, scene, SUN);
@@ -52,6 +66,7 @@ export async function makeWorld(renderer, scene, rings = Object.values(RINGS)) {
   return {
     rays,
     light(camera) {
+      follow(camera);
       const light = sunlight(camera.position);
       skyLight.groundColor.copy(MEADOW).multiplyScalar(0.5 + 0.5 * light);
       castShadows(renderer);
@@ -77,11 +92,12 @@ const yarrow = (x, z) => THREE.MathUtils.smoothstep(noise(x / 12 + 190, z / 12),
 const PLANTS = [[grassTufts, 22000, () => 0.5, false, 1], [mugwortTufts, 1700, colonies(40), true, -1], [nettleTufts, 1700, colonies(90), true, -1],
   [tansyTufts, 1100, colonies(140), true, -1], [dandelionTufts, 1700, lawn, false, 0], [cloverTufts, 5500, clover, false, -0.6], [yarrowTufts, 1200, yarrow, false, -0.6]];
 
-// Земля со стороной ground метров и трава на квадрате со стороной size. grass(x, z) — сколько здесь травы, 0..1:
+// Земля со стороной ground метров и трава на квадрате со стороной size (или прямоугольнике [по x, по z]). grass(x, z) — сколько здесь травы, 0..1:
 // у ствола, под домом, на дороге её нет. trodden(x, z) — насколько здесь топчут, 0..1: там трава низкая;
 // lush(x, z) — насколько трава сочная, 0..1 (в лесополосе); litter(x, z) — сколько на земле хвои (в бору). Строить после shapeGround: и земля, и пучки встают по рельефу.
 export function makeMeadow(grass, size, ground = 200, { trodden = () => 0, lush = () => 0, litter } = {}) {
+  const [w, d = w] = [size].flat();
   return new THREE.Group().add(makeGround(ground, litter), ...PLANTS.map(([atlas, perThousand, kind, tall, rich]) => makeTufts(atlas,
-    Math.round(perThousand * size * size / 1000), size,
+    Math.round(perThousand * w * d / 1000), size,
     (x, z) => grass(x, z) * kind(x, z) * (1 + rich * lush(x, z)) * (tall ? 1 - trodden(x, z) : 1), { trodden, lush })));
 }
