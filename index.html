@@ -23,17 +23,20 @@
 
   <div id="result" hidden></div>
 
-  <div id="help">
-    <b id="seed"></b>
-    <span id="keys">Мышь — обойти · колесо — ближе · стрелки или WASD — идти (Shift — быстрее) · Q/E — ниже или выше · R — новый дом</span>
-    <button id="walk" type="button" title="F" disabled>Пешком</button>
-    <button id="another" type="button" hidden>Новый дом</button>
+  <div id="controls">
+    <div id="kit" role="group" aria-label="Инвентарь" hidden></div>
+    <div id="help">
+      <b id="seed"></b>
+      <span id="keys">Мышь — обойти · колесо — ближе · стрелки или WASD — идти (Shift — быстрее) · Q/E — ниже или выше · R — новый дом</span>
+      <button id="walk" type="button" title="F" disabled>Пешком</button>
+      <button id="another" type="button" hidden>Новый дом</button>
 
-    <details id="game-help" hidden>
-      <summary>Управление</summary>
-      <p>Подпили клён со стороны, куда хочешь его уронить, потом пили с обратной стороны. Недопил направляет падение.</p>
-      <p id="play-keys">WASD — ходить · Shift — бежать · C — присесть. У ствола ЛКМ — приставить пилу, удерживать ЛКМ — пилить. Мышь, стрелки и Q/E — повернуть пилу, S — отойти.<br />ПКМ и колесо — вид сбоку · F — облёт двора · I — осмотр пропила · R — новые клёны · L — журнал · V — другая пила · B — длина шины · K — ракурс · − и = — угол обзора.</p>
-    </details>
+      <details id="game-help" hidden>
+        <summary>Управление</summary>
+        <p>Подпили клён со стороны, куда хочешь его уронить, потом пили с обратной стороны. Недопил направляет падение.</p>
+        <p id="play-keys">1 и 2 — длинная и короткая пилы · 3 — руки, ЛКМ — взять или бросить отпил.<br />WASD — ходить · Shift — бежать · C — присесть. У ствола или ветки ЛКМ — приставить пилу, удерживать ЛКМ — пилить. Мышь, стрелки и Q/E — повернуть пилу, S — отойти, U — пилить ветку с другой стороны.<br />ПКМ и колесо — вид сбоку · F — облёт двора · I — осмотр пропила · R — новые клёны · L — журнал · V — смена модели пилы · K — ракурс · − и = — угол обзора.</p>
+      </details>
+    </div>
   </div>
   <button id="touch-saw" type="button" hidden>Приставить пилу</button>
 
