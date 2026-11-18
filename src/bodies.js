@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { height, normal } from './terrain.js';
 
 // Твёрдые тела: отпилы, куски пня. У тела свои вес, центр тяжести и момент инерции, а форма — капсулы:
 // отрезок с радиусом (у шара отрезок нулевой). Кусок из кубиков — шары, вписанные в его древесину.
@@ -27,7 +28,7 @@ const NEAR = 0.05;         // м — так близко к тому, что с�
 const UP = new THREE.Vector3(0, 1, 0);
 const _u = new THREE.Vector3(), _v = new THREE.Vector3(), _w = new THREE.Vector3(), _j = new THREE.Vector3();
 const _p = new THREE.Vector3(), _n = new THREE.Vector3(), _s = new THREE.Vector3(), _a = new THREE.Vector3(), _e = new THREE.Vector3();
-const _lo = new THREE.Vector3(), _hi = new THREE.Vector3();
+const _lo = new THREE.Vector3(), _hi = new THREE.Vector3(), _g = new THREE.Vector3();
 const _c1 = new THREE.Vector3(), _c2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4(), _r = new THREE.Matrix3();
 
@@ -45,6 +46,11 @@ export class Body {
     this.quaternion = quaternion.clone();
     this.velocity = new THREE.Vector3();
     this.spin = new THREE.Vector3();
+    // Ускорение тела (центра тяжести) и углового вращения, сглаженное, как нагрузки на капсулы: по нему
+    // сечения веток чувствуют силу инерции. was — скорости в начале шага.
+    this.accel = new THREE.Vector3();
+    this.turnAccel = new THREE.Vector3();
+    this.was = { velocity: new THREE.Vector3(), spin: new THREE.Vector3() };
     // Толчок, которым расталкиваем зашедшие друг в друга тела: сдвигает их, но скорости им не даёт.
     this.shove = { velocity: new THREE.Vector3(), spin: new THREE.Vector3() };
     // force, torque — чем на капсулу давят касания: сила и её момент вокруг центра тяжести, в осях тела.
@@ -80,7 +86,7 @@ export class Body {
   }
 }
 
-// Тела у одного дерева, в осях root. Земля — плоскость y = 0. Остальное, обо что бьются, — наборы (fix):
+// Тела у одного дерева, в осях root (root только сдвинут от начала мира). Земля — рельеф terrain.js. Остальное, обо что бьются, — наборы (fix):
 // кубики (пень, упавший комель) — solid с press(p, r, reach), рамкой box и номером version, который растёт,
 // когда кубики выпиливают, — и капсулы веток на дереве. Набор двигает вместе с object: пень стоит с делянкой,
 // крону качает ветер, упавший верх летит с деревом и толкает тела своей скоростью.
@@ -89,11 +95,37 @@ export class World {
     this.root = root;
     this.bodies = [];
     this.sets = [];
+    this.grips = [];
     this.time = 0;
   }
 
   add(body) {
     this.bodies.push(body);
+  }
+
+  // Рука взялась за тело (Grip) и отпустила его.
+  hold(grip) {
+    this.grips.push(grip);
+    grip.body.wake();
+    return grip;
+  }
+
+  letGo(grip) {
+    this.grips = this.grips.filter((g) => g !== grip);
+  }
+
+  // Высота земли под точкой p в осях root; n — нормаль к земле там же.
+  floor(p, n) {
+    const o = this.root.position;
+    if (n) normal(p.x + o.x, p.z + o.z, n);
+    return height(p.x + o.x, p.z + o.z) - o.y;
+  }
+
+  // Конец end капсулы c у земли. Уклоны пологие: расстояние до земли по нормали — высота над ней, умноженная на n.y.
+  ground(b, c, end, contacts) {
+    const depth = c.r - (end.y - this.floor(end, _g)) * _g.y;
+    if (depth < -b.sweep) return;
+    contact(b, null, _p.copy(end).addScaledVector(_g, depth / 2 - c.r), _g, depth, null, contacts, c);
   }
 
   // Набора больше нет: то, что на нём лежало, просыпается.
@@ -102,8 +134,10 @@ export class World {
     this.rouse(set);
   }
 
+  // Тела больше нет — и рука, что его держала, пуста.
   remove(body) {
     this.bodies.splice(this.bodies.indexOf(body), 1);
+    this.grips = this.grips.filter((g) => g.body !== body);
   }
 
   fix(object, { solids = [], capsules = [] }) {
@@ -181,9 +215,12 @@ export class World {
   }
 
   advance(h) {
+    for (const g of this.grips) g.body.wake();
     const awake = this.bodies.filter((b) => !b.asleep);
     if (!awake.length) return;
     for (const b of awake) {
+      b.was.velocity.copy(b.velocity);
+      b.was.spin.copy(b.spin);
       b.velocity.y -= G * h;
       b.sweep = (b.velocity.length() + b.spin.length() * b.reach) * h;
       b.touching = false;
@@ -192,17 +229,22 @@ export class World {
     const contacts = [];
     awake.forEach((b, i) => {
       for (const c of b.capsules) {
-        ground(b, c, c.A, contacts);
-        if (!c.ball) ground(b, c, c.B, contacts);
+        this.ground(b, c, c.A, contacts);
+        if (!c.ball) this.ground(b, c, c.B, contacts);
       }
       for (const set of this.sets) if (overlap(b.low, b.high, set.span)) for (const c of b.capsules) against(b, c, set, contacts);
       for (let k = i + 1; k < awake.length; k++) pair(b, awake[k], contacts);
       for (const o of this.bodies) if (o.asleep) pair(b, o, contacts);
     });
     for (const c of contacts) prepare(c, h);
-    for (let pass = 0; pass < PASSES; pass++) for (const c of contacts) solve(c);
+    for (const g of this.grips) g.prepare(h);
+    for (let pass = 0; pass < PASSES; pass++) {
+      for (const c of contacts) solve(c);
+      for (const g of this.grips) g.solve();
+    }
     for (let pass = 0; pass < PASSES; pass++) for (const c of contacts) shove(c);
     for (const c of contacts) bear(c, h);
+    for (const g of this.grips) g.bear(h);
     const k = 1 - Math.exp(-h / LOAD_T);
     for (const b of awake) {
       for (const c of b.capsules) {
@@ -211,9 +253,120 @@ export class World {
         c.stepForce.set(0, 0, 0);
         c.stepTorque.set(0, 0, 0);
       }
+      b.accel.lerp(_a.copy(b.velocity).sub(b.was.velocity).divideScalar(h), k);
+      b.turnAccel.lerp(_a.copy(b.spin).sub(b.was.spin).divideScalar(h), k);
       settle(b, h);
     }
   }
+}
+
+// Рука держит тело за капсулу capsule: точку anchor (в осях тела) тянет к target (в осях root), а само тело
+// поворачивает к goal.
+// Это мягкие связи (Катто, «Мягкие связи»; так устроена «мышиная» связь Box2D): пружина с гашением, частота HZ
+// и гашение ZETA у лёгкого и у тяжёлого одни, но сила руки не больше force (Н), а поворот — не больше torque
+// (Н·м). Поэтому лёгкое поднимается целиком, у тяжёлого поднимается только конец, а другой едет по земле,
+// неподъёмное остаётся лежать. Связь решается вместе с касаниями: что в руке, бьётся о землю, пень и другие тела.
+const HZ = 4, ZETA = 0.9;
+const _k = new THREE.Matrix3();
+
+export class Grip {
+  constructor(body, anchor, capsule, { force, torque }) {
+    this.body = body;
+    this.anchor = anchor.clone();
+    this.capsule = capsule;
+    this.target = new THREE.Vector3();
+    this.goal = body.quaternion.clone();
+    this.force = force;
+    this.torque = torque;
+    this.pull = 0; // Н — с какой силой рука тянула на последнем шаге
+    this.r = new THREE.Vector3();
+    this.bias = new THREE.Vector3();
+    this.turnBias = new THREE.Vector3();
+    this.mass = new THREE.Matrix3();
+    this.turnMass = new THREE.Matrix3();
+    this.j = new THREE.Vector3();
+    this.turnJ = new THREE.Vector3();
+  }
+
+  // Точка хвата в осях root.
+  point(out) {
+    return out.copy(this.anchor).applyQuaternion(this.body.quaternion).add(this.body.position);
+  }
+
+  // Перед проходами шага h. Пружина k = m·ω² с гашением 2·m·ζ·ω становится мягкостью gamma и подтяжкой bias:
+  // скоростью, с которой связь выбирает отход точки от цели. Для поворота то же с моментом инерции вместо массы.
+  prepare(h) {
+    const b = this.body, w = 2 * Math.PI * HZ;
+    this.h = h;
+    this.j.set(0, 0, 0);
+    this.turnJ.set(0, 0, 0);
+    const m = 1 / b.invMass;
+    this.gamma = 1 / (h * m * w * (2 * ZETA + h * w));
+    this.r.copy(this.anchor).applyQuaternion(b.quaternion);
+    this.point(this.bias).sub(this.target).multiplyScalar(h * m * w * w * this.gamma);
+    // Как точка хвата отзывается на толчок: 1/m + [r]ᵀ·I⁻¹·[r], и ещё мягкость.
+    skew(this.r, _k);
+    this.mass.copy(_k).transpose().multiply(b.world).multiply(_k);
+    soften(this.mass, b.invMass + this.gamma).invert();
+    // Поворот от goal к нынешнему — вектором «ось × угол».
+    const inertia = 3 / (b.invInertia.elements[0] + b.invInertia.elements[4] + b.invInertia.elements[8]);
+    this.turnGamma = 1 / (h * inertia * w * (2 * ZETA + h * w));
+    _q.copy(this.goal).invert().premultiply(b.quaternion);
+    if (_q.w < 0) _q.set(-_q.x, -_q.y, -_q.z, -_q.w);
+    const sin = Math.hypot(_q.x, _q.y, _q.z), angle = 2 * Math.atan2(sin, _q.w);
+    this.turnBias.set(_q.x, _q.y, _q.z).multiplyScalar((sin > 1e-9 ? angle / sin : 2) * h * inertia * w * w * this.turnGamma);
+    soften(this.turnMass.copy(b.world), this.turnGamma).invert();
+  }
+
+  // Проход: толчок гасит скорость точки сверх подтяжки, но за шаг рука толкает не больше, чем force·h;
+  // то же с поворотом и torque·h.
+  solve() {
+    const b = this.body;
+    _u.copy(b.spin).cross(this.r).add(b.velocity).add(this.bias).addScaledVector(this.j, this.gamma).applyMatrix3(this.mass).negate();
+    _v.copy(this.j);
+    this.j.add(_u).clampLength(0, this.force * this.h);
+    _u.subVectors(this.j, _v);
+    b.velocity.addScaledVector(_u, b.invMass);
+    b.spin.add(_w.copy(this.r).cross(_u).applyMatrix3(b.world));
+    _u.copy(b.spin).add(this.turnBias).addScaledVector(this.turnJ, this.turnGamma).applyMatrix3(this.turnMass).negate();
+    _v.copy(this.turnJ);
+    this.turnJ.add(_u).clampLength(0, this.torque * this.h);
+    b.spin.add(_u.subVectors(this.turnJ, _v).applyMatrix3(b.world));
+  }
+
+  // Сила и поворот руки за шаг h ложатся на капсулу, за которую держишь, как касание: по ним ветку в руке
+  // гнёт, и ломается она там, где и правда тонко, а не там, где её будто бы никто не держит.
+  bear(h) {
+    this.pull = this.j.length() / h;
+    load(this.body, this.capsule, this.r, _j.copy(this.j).divideScalar(h));
+    this.capsule.stepTorque.add(_u.copy(this.turnJ).divideScalar(h).applyQuaternion(_q.copy(this.body.quaternion).invert()));
+  }
+}
+
+// [r]× — матрица векторного умножения на r: [r]×·v = r × v.
+const skew = (r, out) => out.set(0, -r.z, r.y, r.z, 0, -r.x, -r.y, r.x, 0);
+
+// Прибавить d к диагонали.
+function soften(m, d) {
+  const e = m.elements;
+  e[0] += d;
+  e[4] += d;
+  e[8] += d;
+  return m;
+}
+
+// Во что из капсул тела упирается луч from + dir·t (dir единичный, t до far): ближайшее t, капсула и точка
+// на её оси напротив луча — за неё и берётся рука. Капсулы — в осях root, как их поставило тело.
+export function rayHit(body, from, dir, far) {
+  let best = null;
+  _e.copy(from).addScaledVector(dir, far);
+  for (const c of body.capsules) {
+    const d2 = closest(from, _e, c.A, c.B, _c1, _c2);
+    if (d2 > c.r * c.r) continue;
+    const t = _c1.distanceTo(from) - Math.sqrt(c.r * c.r - d2);
+    if (t < (best?.t ?? far)) best = { t, at: _c2.clone(), capsule: c };
+  }
+  return best;
 }
 
 // Рамка набора в осях root — по углам его рамки в своих осях.
@@ -301,12 +454,6 @@ function give(c, p) {
   return THREE.MathUtils.lerp(c.soft[0], c.soft[1], k);
 }
 
-// Конец end капсулы c у земли.
-function ground(b, c, end, contacts) {
-  const depth = c.r - end.y;
-  if (depth < -b.sweep) return;
-  contact(b, null, _p.copy(end).addScaledVector(UP, depth / 2 - c.r), UP, depth, null, contacts, c);
-}
 
 // Тела a и o: каждая пара их капсул, чьи рамки пересеклись. Сначала у каждого — капсулы в рамке другого:
 // у большого сука их сотни, а рядом с другим телом — единицы. Спящее o держит, как неподвижное,
