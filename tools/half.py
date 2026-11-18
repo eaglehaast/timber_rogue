@@ -13,6 +13,15 @@ HALF = TEXTURES / 'half'
 SMALL = 256
 
 
+def shrink(image, size):
+    """Уменьшает картинку. С прозрачностью цвет и прозрачность уменьшаются порознь: иначе Pillow умножает цвет на
+    прозрачность и делит обратно, и под совсем прозрачными точками вместо цвета травинки остаётся чёрный — вдали
+    (на уменьшенных копиях текстуры) он темнит край."""
+    if image.mode != 'RGBA':
+        return image.resize(size, Image.LANCZOS)
+    return Image.merge('RGBA', [band.resize(size, Image.LANCZOS) for band in image.split()])
+
+
 def main():
     HALF.mkdir(exist_ok=True)
     for source in sorted(TEXTURES.iterdir()):
@@ -23,11 +32,12 @@ def main():
             continue
         image = Image.open(source)
         if min(image.size) > SMALL:
-            image = image.resize((image.width // 2, image.height // 2), Image.LANCZOS)
+            image = shrink(image, (image.width // 2, image.height // 2))
         alpha = image.mode in ('RGBA', 'LA', 'P')
         if source.suffix.lower() == '.webp':
-            # С прозрачностью — без потерь: края листьев и травинок по альфе, артефакты сжатия там видны.
-            image.save(target, lossless=alpha, quality=90, method=6)
+            # С прозрачностью — без потерь: края листьев и травинок по альфе, артефакты сжатия там видны;
+            # exact — цвет под прозрачными точками не обнуляется.
+            image.save(target, lossless=alpha, exact=alpha, quality=90, method=6)
         elif source.suffix.lower() == '.png':
             image.save(target, optimize=True)
         else:
