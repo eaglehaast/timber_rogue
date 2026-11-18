@@ -14,11 +14,9 @@ import { makeWorld, makeMeadow, RINGS, EYE } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
 import { PHONE } from './device.js';
+import { attachGame, MAPLES } from './main.js';
 
-// Стенд дома — тот же мир, что в игре (world.js): небо, панорамы, земля с рельефом и трава, — а во дворе
-// вместо делянки сруб у забора, грунтовая улица, газовая труба и провода с улицы.
-// Мышь — обойти дом, колесо — ближе и дальше, стрелки — идти, R — новый дом (новое зерно), F — пешком, как игрок.
-// На телефоне: палец — обойти, два пальца — щипком ближе и дальше, сдвигом идти, кнопки — новый дом и пешком.
+// Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
 // На телефоне экран втрое чаще по точкам, чем видит глаз: хватает полутора, кадр рисуется вчетверо быстрее, чем при трёх.
@@ -40,6 +38,7 @@ const MEADOW = 106, OUTSIDE = 0.7; // м: сторона квадрата с т�
 let house = null, yard = null, layout = null;
 const label = document.getElementById('seed');
 function rebuild(seed) {
+  if (game.active) toggleWalk();
   if (house) {
     scene.remove(house, yard);
     for (const part of [house, yard]) part.traverse((o) => o.geometry?.dispose());
@@ -53,7 +52,7 @@ function rebuild(seed) {
   const box = new THREE.Box3().setFromObject(house), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
   const pad = { x: at.x + mid.x, z: at.z + mid.z, w: size.x, d: size.z };
   const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed, road.verge), river = planRiver({ seed, back: -fence }), field = planField(seed, river);
-  shapeGround(seed, [pad], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
+  shapeGround(seed, [pad, ...MAPLES], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
   at.y = height(at.x, at.z);
   const pier = planPier(river, seed);
   house.position.set(at.x, at.y, at.z);
@@ -63,58 +62,42 @@ function rebuild(seed) {
   const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
   const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.shore(x) ? 1
     : THREE.MathUtils.lerp(OUTSIDE, 1, land.lush(x, z)) * (1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), MEADOW / 2 - 3, MEADOW / 2)));
-  const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) || pier.deck(x, z) > -Infinity ? 0 : road.grass(x, z) * lawn(x, z) * river.grass(x, z) * (1 - field.cover(x, z)));
+  const grass = (x, z) => {
+    if (inside(x, z, pad, pad.w, pad.d) || pier.deck(x, z) > -Infinity || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
+    return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * (1 - field.cover(x, z));
+  };
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
   yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field));
   layout = { at, gas, power, road, pier, pad, river };
   scene.add(house, yard);
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
-  if (walker.on) view.target.set(...settle(view.target.x, view.target.z));
-  else view.target.set(at.x, at.y + 1.6, at.z);
+  game.regrow(generator(seed + 41));
+  view.target.set(at.x, at.y + 2.5, at.z);
   label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов · палисадник ${front.toFixed(1)} м`;
 }
 
 // Камера на сфере вокруг точки над серединой дома: yaw — вокруг, pitch — вверх, dist — расстояние.
-const view = { yaw: 0.35, pitch: 0.12, dist: 12, target: new THREE.Vector3() };
-// Пешком — как игрок в игре (main.js): глаза на высоте EYE над землёй или настилом мостков, угол обзора тот же,
-// шаг 3 м/с, с Shift — бегом вдвое быстрее, на каждом шаге голова чуть опускается (rise; бегом вдвое).
-// Точка view.target — где стоишь, взгляд — от камеры облёта к точке. Мышь захвачена и водит взгляд (Esc отпускает).
-// Законы те же, что в игре: тело — круг радиусом body, за забор не выйти (ворота и калитка закрыты, от досок
-// держимся на fence), сквозь дом с крыльцом и свесами не пройти. Сзади двора забора нет, но в реку не зайти —
-// по воде только настил мостков. Облёт — камера, она летает свободно.
-const WALK = { speed: 3, fast: 2, fov: 55, stride: 0.75, rise: 0.012, mouse: 0.0022, body: 0.35, fence: 0.4 };
-const walker = { on: false, bob: 0, gait: 0 };
-// Можно ли стоять в точке.
-function free(x, z) {
+const view = { yaw: 0.7, pitch: 0.24, dist: 21, target: new THREE.Vector3() };
+// Земля или настил мостков. Пешком за боковой и передний заборы не выйти, в реку тоже.
+const ground = (x, z) => Math.max(height(x, z), layout.pier.deck(x, z));
+function walkable(x, z) {
   const { pad, pier, river } = layout;
-  if (Math.abs(x) > YARD.w / 2 - WALK.fence || z > YARD.d / 2 - WALK.fence) return false;
-  if (Math.abs(x - pad.x) < pad.w / 2 + WALK.body && Math.abs(z - pad.z) < pad.d / 2 + WALK.body) return false;
-  return pier.deck(x, z) > -Infinity || height(x, z) >= river.level(x);
+  if (Math.abs(x) > YARD.w / 2 - 0.4 || z > YARD.d / 2 - 0.4) return false;
+  if (Math.abs(x - pad.x) < pad.w / 2 + 0.35 && Math.abs(z - pad.z) < pad.d / 2 + 0.35) return false;
+  return pier.deck(x, z) > -Infinity || (z >= river.shore(x) && height(x, z) >= river.level(x));
 }
-// Где встать, если зашёл пешком из облёта (или под ногами вырос новый дом): во дворе ближе всего к точке x, z —
-// внутри забора, не дальше задней границы двора (до воды) и у ближней стороны дома, если точка в нём. Возвращает [x, y, z].
-function settle(x, z) {
-  const { pad } = layout, half = [pad.w / 2 + WALK.body, pad.d / 2 + WALK.body];
-  x = THREE.MathUtils.clamp(x, -YARD.w / 2 + WALK.fence, YARD.w / 2 - WALK.fence);
-  z = THREE.MathUtils.clamp(z, -YARD.d / 2, YARD.d / 2 - WALK.fence);
-  const [bx, bz] = [[x, z], [pad.x - half[0], z], [pad.x + half[0], z], [x, pad.z - half[1]], [x, pad.z + half[1]]]
-    .filter(([a, b]) => free(a, b)).reduce((p, q) => (Math.hypot(q[0] - x, q[1] - z) < Math.hypot(p[0] - x, p[1] - z) ? q : p));
-  return [bx, 0, bz];
-}
-rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
-// Пальцы и мышь — указатели: один ведёт камеру вокруг точки (пешком — взгляд), два — щипок (ближе и дальше)
-// и сдвиг (точка идёт, как будто тянешь землю: пальцы вверх — вперёд).
+const game = attachGame({ scene, camera, ground, walkable });
+const spawn = { x: MAPLES[1].x, z: MAPLES[1].z + 4 };
+
+// В облёте мышь и палец водят камеру. Пешком мышью управляет игра, палец поворачивает взгляд или пилу.
 const pointers = new Map();
 canvas.addEventListener('pointerdown', (e) => {
+  if (game.active && e.pointerType === 'mouse') return;
   pointers.set(e.pointerId, [e.clientX, e.clientY]);
   canvas.setPointerCapture(e.pointerId);
-  if (walker.on && e.pointerType === 'mouse' && document.pointerLockElement !== canvas) canvas.requestPointerLock()?.catch(() => {});
 });
-document.addEventListener('mousemove', (e) => {
-  if (document.pointerLockElement === canvas) turn(e.movementX * WALK.mouse, e.movementY * WALK.mouse);
-});
-for (const type of ['pointerup', 'pointercancel']) canvas.addEventListener(type, (e) => pointers.delete(e.pointerId));
+for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(type, (e) => pointers.delete(e.pointerId));
 canvas.addEventListener('pointermove', (e) => {
   const was = pointers.get(e.pointerId);
   if (!was) return;
@@ -122,87 +105,90 @@ canvas.addEventListener('pointermove', (e) => {
   pointers.set(e.pointerId, [e.clientX, e.clientY]);
   const dx = e.clientX - was[0], dy = e.clientY - was[1];
   if (pointers.size === 1) {
-    turn(dx * 0.006, dy * 0.004);
+    if (game.active) game.look(dx * 0.006, dy * 0.004);
+    else {
+      view.yaw -= dx * 0.006;
+      view.pitch = THREE.MathUtils.clamp(view.pitch + dy * 0.004, -0.05, 1.3);
+    }
   } else if (pointers.size === 2) {
+    if (game.active) {
+      const metres = 6 / canvas.clientHeight;
+      game.touchWalk(-dx / 2 * metres, dy / 2 * metres);
+      return;
+    }
     const span = ([a, b]) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-    view.dist = THREE.MathUtils.clamp(view.dist * span(before) / span([...pointers.values()]), 2, 60);
+    view.dist = THREE.MathUtils.clamp(view.dist * span(before) / Math.max(1, span([...pointers.values()])), 2, 60);
     // Середина пальцев сдвинулась на половину сдвига этого пальца; метров на точку экрана — сколько их видно на расстоянии dist.
     const metres = view.dist / canvas.clientHeight;
     shift(-dx / 2 * metres, dy / 2 * metres);
   }
 });
-canvas.addEventListener('wheel', (e) => { view.dist = THREE.MathUtils.clamp(view.dist * Math.exp(e.deltaY * 0.001), 2, 60); e.preventDefault(); }, { passive: false });
+canvas.addEventListener('wheel', (e) => {
+  if (!game.active) view.dist = THREE.MathUtils.clamp(view.dist * Math.exp(e.deltaY * 0.001), 2, 60);
+  e.preventDefault();
+}, { passive: false });
 // Стрелки (или WASD) двигают точку, вокруг которой ходит камера: вперёд — куда смотришь, вбок — вбок;
 // с Shift — втрое быстрее. Q и E — точку ниже и выше.
 const held = new Set();
 const MOVE = { speed: 5, fast: 3, keys: { ArrowUp: [0, 1], KeyW: [0, 1], ArrowDown: [0, -1], KeyS: [0, -1], ArrowLeft: [-1, 0], KeyA: [-1, 0], ArrowRight: [1, 0], KeyD: [1, 0] } };
 const another = () => rebuild(1 + Math.floor(Math.random() * 1e6));
-const keys = document.getElementById('keys'), walkButton = document.getElementById('walk');
-// Подсказка облёта и пешком.
-const HELP = PHONE ? ['Палец — обойти · два пальца: щипок — ближе, сдвиг — идти', 'Палец — оглядеться · два пальца сдвигом — идти']
-  : [keys.textContent, 'Щелчок — мышь водит взгляд (Esc — отпустить) · WASD — шаги (Shift — бегом) · F — облёт · R — новый дом'];
-keys.textContent = HELP[0];
+const help = document.getElementById('help'), keys = document.getElementById('keys');
+const walkButton = document.getElementById('walk'), gameHelp = document.getElementById('game-help');
 if (PHONE) {
+  keys.textContent = 'Палец — обойти · два пальца: щипок — ближе, сдвиг — идти';
+  document.getElementById('play-keys').textContent = 'Палец — оглядеться или повернуть пилу. Два пальца сдвигом — идти. У клёна приставь пилу и удерживай кнопку «Пилить». Чтобы отойти от пропила, сделай движение назад двумя пальцами.';
   const button = document.getElementById('another');
   button.hidden = false;
   button.addEventListener('click', another);
 }
 walkButton.addEventListener('click', () => { toggleWalk(); walkButton.blur(); });
 addEventListener('keydown', (e) => {
-  if (e.code === 'KeyR') another();
-  if (e.code === 'KeyF' && !e.repeat) toggleWalk();
-  held.add(e.code);
-  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.code === 'KeyF') {
+    if (!e.repeat) toggleWalk();
+  } else if (!game.active) {
+    if (e.code === 'KeyR' && !e.repeat) another();
+    held.add(e.code);
+  }
+  if (e.code.startsWith('Arrow') || (game.active && e.code === 'Space' && e.target === document.body)) e.preventDefault();
 });
 addEventListener('keyup', (e) => held.delete(e.code));
 addEventListener('blur', () => held.clear());
-// Пешком встаём туда, где висела камера облёта, и смотрим туда же; обратно — камера отлетает за спину.
+// Из-за забора или с крыши начинаем у клёна. Возвращаясь в облёт, оставляем точку обзора у ног игрока.
 function toggleWalk() {
-  walker.on = !walker.on;
-  if (walker.on) view.target.set(...settle(camera.position.x, camera.position.z)), view.pitch = 0;
-  else {
-    document.exitPointerLock?.();
-    view.target.y = ground(view.target.x, view.target.z) + EYE;
-    Object.assign(view, { pitch: 0.3, dist: 6 });
+  held.clear();
+  pointers.clear();
+  if (game.active) {
+    const { pos, yaw } = game.leave();
+    view.target.copy(pos).setY(pos.y + EYE);
+    Object.assign(view, { yaw, pitch: 0.3, dist: 6 });
+    camera.fov = FOV;
+    camera.updateProjectionMatrix();
+  } else {
+    const point = [view.target, camera.position].find(({ x, z }) => game.canStand(x, z));
+    game.enter(point ?? spawn, point ? view.yaw : 0, PHONE);
   }
-  camera.fov = walker.on ? WALK.fov : FOV;
-  camera.updateProjectionMatrix();
-  walkButton.textContent = walker.on ? 'Облёт' : 'Пешком';
-  keys.textContent = HELP[walker.on ? 1 : 0];
+  walkButton.textContent = game.active ? 'Облёт' : 'Пешком';
+  help.classList.toggle('playing', game.active);
+  gameHelp.hidden = !game.active;
+  gameHelp.open = false;
 }
-// Повернуть взгляд: облёт — камеру вокруг точки, пешком — голову (вниз и вверх почти до отвеса).
-function turn(dx, dy) {
-  view.yaw -= dx;
-  view.pitch = THREE.MathUtils.clamp(view.pitch + dy, walker.on ? -1.4 : -0.05, walker.on ? 1.4 : 1.3);
-}
-// Под ногами земля или настил мостков: на них можно зайти.
-const ground = (x, z) => Math.max(height(x, z), layout.pier.deck(x, z));
 // Сдвинуть точку на side метров вбок и ahead вперёд.
 function shift(side, ahead) {
   // Камера смотрит из (sin yaw, cos yaw) на точку: вперёд — обратно этому направлению.
   const dx = -Math.sin(view.yaw) * ahead + Math.cos(view.yaw) * side, dz = -Math.cos(view.yaw) * ahead - Math.sin(view.yaw) * side;
-  if (walker.on) {
-    // Упёрся — скользишь вдоль препятствия: шаг идёт по той оси, по которой можно.
-    const { x, z } = view.target, [mx, mz] = [[dx, dz], [dx, 0], [0, dz]].find(([a, b]) => free(x + a, z + b)) ?? [0, 0];
-    view.target.x += mx, view.target.z += mz;
-    return;
-  }
   view.target.x += dx, view.target.z += dz;
   // Ходим внутри карты: дальше видно, что горы — картинка на кольце.
   const out = Math.hypot(view.target.x, view.target.z) / BOUND;
   if (out > 1) view.target.x /= out, view.target.z /= out;
   view.target.y = Math.max(ground(view.target.x, view.target.z) + 0.2, view.target.y);
 }
-function walk(dt) {
+function pan(dt) {
   let side = 0, ahead = 0;
   for (const code of held) [side, ahead] = [side + (MOVE.keys[code]?.[0] ?? 0), ahead + (MOVE.keys[code]?.[1] ?? 0)];
-  const fast = held.has('ShiftLeft') || held.has('ShiftRight'), { speed, fast: faster } = walker.on ? WALK : MOVE;
-  const pace = side || ahead ? speed * (fast ? faster : 1) : 0, step = (pace * dt) / (Math.hypot(side, ahead) || 1);
-  if (!walker.on) view.target.y += ((held.has('KeyE') ? 1 : 0) - (held.has('KeyQ') ? 1 : 0)) * speed * dt * (fast ? faster : 1);
+  const fast = held.has('ShiftLeft') || held.has('ShiftRight');
+  const travel = MOVE.speed * (fast ? MOVE.fast : 1) * dt, step = travel / (Math.hypot(side, ahead) || 1);
+  view.target.y += (Number(held.has('KeyE')) - Number(held.has('KeyQ'))) * travel;
   shift(side * step, ahead * step);
-  // Шаги как в игре: фаза идёт по пройденному пути (шаг — полоборота), размах растёт со скоростью.
-  walker.gait += (pace / WALK.speed - walker.gait) * (1 - Math.exp(-6 * dt));
-  walker.bob += (pace * dt * Math.PI) / WALK.stride;
 }
 // Камера тоже не дальше BOUND от середины двора: на луче от точки к камере — сколько до этой границы.
 const BOUND = 100;
@@ -212,34 +198,35 @@ function reach(target, dir) {
 }
 
 const clock = new THREE.Clock();
-function frame() {
+function frame(now) {
   // Живые части дома и двора (дым из трубы, огонёк счётчика) двигаются во времени, траву клонит ветер, облака плывут.
-  const dt = Math.min(clock.getDelta(), 0.1);
+  const dt = Math.min(clock.getDelta(), 0.05);
   stepWind(dt);
   driftClouds(dt);
   for (const part of [house, yard]) part.traverse((o) => o.tick?.(dt));
-  walk(dt);
   const w = canvas.clientWidth, h = canvas.clientHeight;
-  if (canvas.width !== Math.floor(w * renderer.getPixelRatio())) {
+  const ratio = renderer.getPixelRatio();
+  if (canvas.width !== Math.floor(w * ratio) || canvas.height !== Math.floor(h * ratio)) {
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     world.rays.setSize(size.x, size.y);
   }
-  const dir = new THREE.Vector3(Math.sin(view.yaw) * Math.cos(view.pitch), Math.sin(view.pitch), Math.cos(view.yaw) * Math.cos(view.pitch));
-  if (walker.on) {
-    const { x, z } = view.target;
-    camera.position.set(x, ground(x, z) + EYE - WALK.rise * walker.gait * Math.sin(walker.bob) ** 2, z);
-    camera.lookAt(camera.position.clone().sub(dir));
-  } else {
+  game.tick(now, dt);
+  if (!game.active) {
+    pan(dt);
+    const dir = new THREE.Vector3(Math.sin(view.yaw) * Math.cos(view.pitch), Math.sin(view.pitch), Math.cos(view.yaw) * Math.cos(view.pitch));
     camera.position.copy(view.target).addScaledVector(dir, Math.min(view.dist, reach(view.target, dir)));
     camera.lookAt(view.target);
   }
+  renderer.setViewport(0, 0, w, h);
   const light = world.light(camera);
   renderer.render(scene, camera);
   world.rays.render(camera, light, dt);
-  requestAnimationFrame(frame);
+  game.renderInset(renderer);
 }
-frame();
+rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
+walkButton.disabled = false;
+renderer.setAnimationLoop(frame);
 window.stand = { view, rebuild, renderer, scene, get layout() { return layout; } };

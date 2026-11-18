@@ -32,6 +32,11 @@ export function beat(now) {
   }
 }
 
+export function pauseWatch() {
+  last = 0;
+  save(false);
+}
+
 function record() {
   let state;
   try { state = snapshot(); } catch (e) { state = { error: String(e) }; }

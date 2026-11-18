@@ -12,6 +12,7 @@ html, body {
   display: block;
   width: 100%;
   height: 100%;
+  touch-action: none;
 }
 
 #hud {
@@ -115,28 +116,75 @@ html, body {
   font-weight: 400;
 }
 
-#start {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  background: rgba(20, 30, 20, 0.75);
-  cursor: pointer;
+:root {
+  --help-ink: #2b2620;
+  --help-paper: rgba(250, 246, 236, 0.9);
 }
 
-#start[hidden] {
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --help-ink: #f1ebdf;
+    --help-paper: rgba(32, 29, 25, 0.9);
+  }
+}
+
+:root[data-theme="dark"] {
+  --help-ink: #f1ebdf;
+  --help-paper: rgba(32, 29, 25, 0.9);
+}
+
+#help {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  max-width: min(520px, calc(100vw - 48px));
+  padding: 8px 12px;
+  border-radius: 8px;
+  font: 14px/1.4 system-ui, sans-serif;
+  color: var(--help-ink);
+  background: var(--help-paper);
+}
+
+#seed, #keys {
+  display: block;
+}
+
+#help.playing :is(#seed, #keys, #another) {
   display: none;
 }
 
-#start .keys {
-  opacity: 0.8;
+button {
+  margin: 6px 6px 0 0;
+  padding: 8px 14px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
 }
 
-#start .click {
-  margin-top: 24px;
-  font-size: 22px;
-  font-weight: 700;
+#game-help {
+  margin-top: 6px;
+}
+
+#game-help summary {
+  cursor: pointer;
+}
+
+#touch-saw {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  margin: 0;
+  color: var(--help-ink);
+  background: var(--help-paper);
+  touch-action: none;
+}
+
+@media (pointer: coarse) {
+  #side {
+    width: min(28vw, 180px);
+    height: min(37vw, 240px);
+  }
 }
