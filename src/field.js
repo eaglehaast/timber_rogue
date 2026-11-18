@@ -1,28 +1,29 @@
 import * as THREE from 'three';
 import { generator } from './random.js';
 import { tiles, soften } from './surface.js';
-import { height } from './terrain.js';
+import { groundPatch, height } from './terrain.js';
 import { atlas, makeTufts, noise } from './grass.js';
 import { windUniforms, GUST_GLSL } from './wind.js';
 
 // Пшеничное поле за рекой (Никита, 2026-11-14: холм убрать, за рекой поле; с другой стороны двора берёзовая
-// лесополоса, по бокам соседи). Река широкая, и поле начинается прямо за дальним берегом: кромка идёт вдоль уреза
-// в GAP метрах от воды — ближе трактор не подходит, туда пшеница лишь обтрёпана куртинами (Никита 2026-11-17:
-// пустая пойма с клочками травы — «ни о чём»). Поле тянется до кольца панорамы.
+// лесополоса, по бокам соседи). Река широкая, и пшеница растёт с самой бровки дальнего берега, до голой глины откоса.
+// Кроме неё за рекой ничего нет, и земля под ней жёлтая — плитки того же поля (Никита 2026-11-17: пустая пойма
+// с клочками травы — «ни о чём»; 2026-11-18: зелёные травы и подложка за рекой — мешанина). Поле тянется до кольца панорамы.
 // Поле — сплошная масса стеблей. Её верх лежит на высоте TOP, под слоем колосьев, и покрыт плитками ChatGPT —
 // спелое поле сверху, потемнее (DEPTH): это уже глубина между колосьями.
-// У кромки масса обрывается стенкой до земли, книзу стенка темнеет: в гуще стеблей сумрак. Перед стенкой
-// густо стоят пучки пшеницы — стебли с колосьями, а по всей массе торчат колосья: верхушки тех же пучков.
+// Масса начинается в GAP метрах от бровки и обрывается к реке стенкой до земли, книзу стенка темнеет: в гуще стеблей
+// сумрак. Перед стенкой стоят пучки пшеницы — стебли с колосьями, к бровке реже, куртинами: у воды трактор
+// сеет с опаской. По всей массе торчат колосья: верхушки тех же пучков.
 // Колосья качаются на ветру, а верх массы под порывом сдвигается с ними и светлеет — по полю бегут волны
 // (Никита 2026-11-17: живой был только первый ряд, за ним мёртвая картинка). Вдали колосьев реже: там их
 // не разглядеть, а рисовать их дорого.
 // Поле пересекают технологические колеи — следы колёс трактора, что опрыскивает посев: пары борозд через
 // TRAM.gap м. В бороздах пшеница примята: масса ниже и темнее, колосьев нет.
 // Всё в метрах двора, речка — к −z.
-const GAP = 3;                                  // м от уреза дальнего берега до кромки поля
+const GAP = 1.5;                                // м от бровки дальнего берега до кромки массы
 const REACH = 140;                              // м: поле в стороны и вглубь — до кольца панорамы
 const TOP = 0.62, INSET = 1.5, STEP = 2;        // м: верх массы; на сколько стенка глубже кромки; шаг сетки
-const DEPTH = 0.8;                              // яркость верха массы против колосьев над ним
+const DEPTH = 0.8, SOIL = 0.7;                  // яркость верха массы и земли поля против колосьев над ними
 // Пшеница выше травы класса tall у tools/tufts.py (0,7–0,9 м): Никита 2026-11-17 — «чуть более высокой».
 const HEIGHT = [0.85, 1.05];
 // В гуще стеблей сумрак: у земли пучки и стенка темнее — [яркость у земли, с какой высоты, м, освещены целиком].
@@ -34,9 +35,10 @@ const FIELD_TILE = 4;
 // Волны по полю: на сколько верх массы светлее под самым сильным порывом; с какой силы ветра (wind.max) волны полные.
 const WAVE = 0.3, CALM = 0.15;
 const [map] = tiles(['assets/textures/wheat-field.jpg']);
-const material = soften(new THREE.MeshLambertMaterial({ map, vertexColors: true, color: new THREE.Color().setScalar(DEPTH) }), {
-  contrast: 0.9, saturation: 1, scales: [0.04, 0.2], low: [0.76, 0.68, 0.58], high: [1.04, 0.94, 0.84], cells: [4, 1],
-});
+const look = { contrast: 0.9, saturation: 1, scales: [0.04, 0.2], low: [0.76, 0.68, 0.58], high: [1.04, 0.94, 0.84], cells: [4, 1] };
+const material = soften(new THREE.MeshLambertMaterial({ map, vertexColors: true, color: new THREE.Color().setScalar(DEPTH) }), look);
+// Земля поля лежит на сетке земли вершина в вершину и сдвинута к камере, как дно реки (river.js), — не мерцает с травой.
+const soil = soften(new THREE.MeshLambertMaterial({ map, color: new THREE.Color().setScalar(SOIL), polygonOffset: true, polygonOffsetFactor: -1 }), look);
 // Порыв клонит колос на windMax · (0,5 + 2,5 · gust) на метр высоты (sway в grass.js) — на столько же сдвигаем
 // плитки верха, а светлеет он по самому порыву.
 const soft = material.onBeforeCompile, key = material.customProgramCacheKey();
@@ -61,38 +63,45 @@ material.customProgramCacheKey = () => `${key} wind`;
 // Пучки с колосьями (tools/tufts.py), попыток на 1000 м²: у кромки — целиком, до BAND м вглубь (дальше их низ
 // всё равно в массе); по всему полю — только верхушки, EAR доли роста. Густота сходит с расстоянием от двора r:
 // (NEAR / r)², у кромки — медленнее (FRONT): её видно вдоль, издали пучки сливаются.
-// Между водой и кромкой поле обтрёпано: у кромки пшеница сплошная, к воде редеет куртинами в пару метров
-// и в полуметре от уреза кончается.
+// Между бровкой и кромкой массы пшеница обтрёпана: у кромки сплошная, к бровке редеет куртинами в пару метров.
 const WHEAT = { ...(await atlas('wheat-tufts', { dusk: DUSK })), heights: Array(8).fill(HEIGHT) };
 const BAND = 2.5, EAR = 0.45, PER = { band: 16000, ears: 5000 }, NEAR = 55, FRONT = 80;
 
-// river — русло (river.js): кромка поля идёт вдоль дальнего уреза.
+// river — русло (river.js): кромка поля идёт вдоль бровки дальнего берега.
 export function planField(seed, river) {
   const rnd = generator(seed + 61), phase = rnd() * TRAM.gap;
-  const edge = (x) => river.shore(x, -1) - GAP;
-  // Сколько метров от кромки вглубь поля; у воды — меньше нуля.
+  const edge = (x) => river.brow(x, -1) - GAP;
+  // Сколько метров от кромки массы вглубь поля; к воде — меньше нуля.
   const into = (x, z) => edge(x) - z;
   // Середины борозд колей.
   const tracks = [];
   for (let c = phase - REACH; c < REACH; c += TRAM.gap) tracks.push(c - TRAM.gauge / 2, c + TRAM.gauge / 2);
-  // Трава луга за рекой — лишь у самой воды, до метра от уреза; дальше пшеница.
-  return { edge, into, tracks, cover: (x, z) => THREE.MathUtils.smoothstep(into(x, z), -GAP, 1 - GAP) };
+  // Всё за урезом дальнего берега — поле: трава луга там не растёт (cover = 1). Пшеница растёт, где на берегу
+  // выросла бы трава (grows): не на голой глине откоса.
+  return { edge, into, tracks, grows: river.grass, cover: (x, z) => (z < river.shore(x, -1) ? 1 : 0) };
 }
 
-// Строить после shapeGround: масса и пучки встают по рельефу.
+// Строить после makeMeadow: земля поля — кусок её сетки, масса и пучки встают по рельефу.
 export function buildField(field) {
   const s = THREE.MathUtils.smoothstep, size = 2 * REACH;
   const free = (x) => field.tracks.every((c) => Math.abs(x - c) > TRAM.half);
   const far = (x, z, near) => Math.min(1, (near / Math.hypot(x, z)) ** 2);
   const tufts = (per, density, top) => makeTufts(WHEAT, Math.round((per * size * size) / 1000), size,
     (x, z) => (free(x) ? density(field.into(x, z), x, z) : 0), { top });
-  const fray = (d, x, z) => {
-    const k = s(d, 0.5 - GAP, 0);
-    return k * THREE.MathUtils.lerp(s(noise(x / 2 + 70, z / 2), 0.35, 0.65), 1, k);
-  };
-  return new THREE.Group().add(mass(field),
+  const fray = (d, x, z) => field.cover(x, z) * field.grows(x, z) * THREE.MathUtils.lerp(0.3 + 0.7 * s(noise(x / 2 + 70, z / 2), 0.35, 0.65), 1, s(d, -GAP, 0));
+  return new THREE.Group().add(floor(field), mass(field),
     tufts(PER.band, (d, x, z) => (d < BAND ? fray(d, x, z) * far(x, z, FRONT) : 0)),
     tufts(PER.ears, (d, x, z) => (d > INSET - 0.3 ? far(x, z, NEAR) : 0), EAR));
+}
+
+// Земля поля — кусок сетки земли от уреза до стенки массы (под массой землю не видно); голую глину откоса кладёт
+// поверх русло (river.js). Плитка — как у верха массы.
+function floor({ cover, into }) {
+  const geometry = groundPatch((x, z) => cover(x, z) > 0 && into(x, z) < INSET), pos = geometry.attributes.position;
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(Array.from({ length: pos.count }, (_, i) => [pos.getX(i) / FIELD_TILE, -pos.getZ(i) / FIELD_TILE]).flat(), 2));
+  const mesh = new THREE.Mesh(geometry, soil);
+  mesh.receiveShadow = true;
+  return mesh;
 }
 
 // Верх массы — сетка рядами от дальнего края к стенке, стенка — два ряда: верх и низ у земли. Плитка по x и z,

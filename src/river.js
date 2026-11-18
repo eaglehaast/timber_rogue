@@ -125,10 +125,12 @@ export function planRiver({ seed, back }) {
     const sec = section(x), u = across(x, z), h = rise(u, sec);
     return THREE.MathUtils.lerp(2 * side(u, sec).out, 1, s(-h, 0.05, 0.25));
   };
-  // Сколько осоки: куртинами по урезу, где берег не круче откоса.
+  // Сколько осоки: куртинами по урезу нашего берега, где он не круче откоса. За рекой поле до самой воды,
+  // и кроме пшеницы там ничего не растёт (Никита 2026-11-18: иначе мешанина).
   const sedge = (x, z) => {
     if (Math.abs(z - AXIS.z) > AXIS.bend + AXIS.wander + WIDTH[1]) return 0;
     const sec = section(x), u = across(x, z), h = rise(u, sec);
+    if (side(u, sec).sign < 0) return 0;
     return s(h, -0.15, -0.03) * (1 - s(h, 0.15, 0.4)) * (1 - s(steepness(u, sec), 0.5, 1)) * s(smooth(x / 3, z / 3 + 77), 0.35, 0.65);
   };
   // Камни лежат на отмели куртинами — от трёх ладоней над урезом до метра в воду; у откоса их почти нет.
@@ -145,17 +147,19 @@ export function planRiver({ seed, back }) {
   // Наш берег от двора до воды — выпас (гуси, коза): трава там низкая, и со двора видно воду.
   const trodden = (x, z) => (plainAt(x, z).far ? 0 : GRAZE * s(back - z, 0, 3));
   // Урез по z: sign = 1 — нашего берега (докуда идёт боковой забор, open для makeFence: в воде его нет), −1 — дальнего.
-  const shore = (x, sign = 1) => {
-    const sec = section(x);
-    return center(x) + side(sign * sec.w, sec).shore * Math.sqrt(1 + slope(x) ** 2);
+  // Бровка — верх берега, где он выходит на пойму (за ней на дальнем берегу поле, field.js).
+  const bank = (x, sign, top) => {
+    const sec = section(x), b = side(sign * sec.w, sec);
+    return center(x) + (b.shore + (top ? sign * b.run : 0)) * Math.sqrt(1 + slope(x) ** 2);
   };
+  const shore = (x, sign = 1) => bank(x, sign, false), brow = (x, sign = 1) => bank(x, sign, true);
   // Частая сетка — полосой у каждого берега: от самого близкого к оси уреза до самого далёкого вместе с отмелью.
   // Середина русла ровная, ей хватает обычной сетки.
   const wobble = AXIS.bend + AXIS.wander;
   const rows = [-1, 1].map((sign) => [WIDTH[0] / 2 - wobble - BAND.margin, WIDTH[1] / 2 + wobble + BANK.shoal + BAND.margin]
     .map((u) => AXIS.z + sign * u).sort((a, b) => a - b))
     .map(([a, b]) => [a, Math.min(back, b), BAND.step]);
-  return { center, slope, level, section, across, side, rise, dug, calm: plain, grass, bare, wet, stage, sedge, stones, trodden, shore, rows };
+  return { center, slope, level, section, across, side, rise, dug, calm: plain, grass, bare, wet, stage, sedge, stones, trodden, shore, brow, rows };
 }
 
 // Строить после makeMeadow: дно и берег лежат на куске той же сетки земли. size — сторона квадрата травы.
