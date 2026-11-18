@@ -114,16 +114,17 @@ export const yarrowTufts = await atlas('yarrow-tufts', { turning: true });
 // Плавный шум 0..1 с ячейкой в метр: по нему трава то выше и гуще, то ниже и реже.
 export const noise = smoothNoise(Math.random);
 
-// Трава сплошным покровом: на каждый квадратный метр около density(x, z) × count / size² попыток.
+// Трава сплошным покровом на квадрате со стороной size или прямоугольнике size = [по x, по z]:
+// на каждый квадратный метр около density(x, z) × count / площадь попыток.
 // Где травы нет (дорога, дом, у ствола) — там density равна нулю.
 // Куртины: где шум «дикий», берём в основном высокие пучки и сажаем гуще, между ними — низкая трава.
 // Где траву топчут (между колеями), trodden близко к 1: куртин высокой там нет, растёт низкая.
 // Где трава сочная (lush близко к 1), она сплошная и ровная: куртин почти нет, пучок зеленее.
 // top — какую долю роста пучка оставить сверху: верхушки торчат из сплошной массы (колосья над полем), низ не рисуем.
 export function makeTufts({ material, cols, rows, aspect, heights, rank, turning }, count, size, density, { trodden = () => 0, lush = () => 0, top = 1 } = {}) {
-  const pos = [], uv = [], index = [], side = [], lift = [], green = [];
+  const pos = [], uv = [], index = [], side = [], lift = [], green = [], [across, along = across] = [size].flat();
   for (let n = 0; n < count; n++) {
-    const x = (Math.random() - 0.5) * size, z = (Math.random() - 0.5) * size;
+    const x = (Math.random() - 0.5) * across, z = (Math.random() - 0.5) * along;
     const wild = THREE.MathUtils.smoothstep(noise(x / 5, z / 5), 0.3, 0.7) * (1 - trodden(x, z)) * (1 - 0.7 * lush(x, z));
     if (Math.random() > density(x, z) * (0.5 + 0.5 * wild)) continue;
     const weights = rank.map((t) => t * wild + (1 - t) * (1 - wild) + 0.05);
