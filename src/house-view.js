@@ -14,6 +14,7 @@ import { makeWorld, makeMeadow, RINGS, EYE } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
 import { PHONE } from './device.js';
+import { planScans, buildScans } from './scan.js';
 
 // Стенд дома — тот же мир, что в игре (world.js): небо, панорамы, земля с рельефом и трава, — а во дворе
 // вместо делянки сруб у забора, грунтовая улица, газовая труба и провода с улицы.
@@ -66,8 +67,11 @@ function rebuild(seed) {
   const grass = (x, z) => (inside(x, z, pad, pad.w, pad.d) || pier.deck(x, z) > -Infinity ? 0 : road.grass(x, z) * lawn(x, z) * river.grass(x, z) * (1 - field.cover(x, z)));
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field));
-  layout = { at, gas, power, road, pier, pad, river };
+  // Предметы по сканам — во дворе, между заборами и рекой, не ближе r к дому с крыльцом.
+  const scans = planScans(rnd, (x, z, r) => Math.abs(x) < YARD.w / 2 - r && z < fence - r && z - r > river.shore(x)
+    && (Math.abs(x - pad.x) > pad.w / 2 + r || Math.abs(z - pad.z) > pad.d / 2 + r));
+  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field), buildScans(scans));
+  layout = { at, gas, power, road, pier, pad, river, scans };
   scene.add(house, yard);
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
   if (walker.on) view.target.set(...settle(view.target.x, view.target.z));
@@ -81,15 +85,16 @@ const view = { yaw: 0.35, pitch: 0.12, dist: 12, target: new THREE.Vector3() };
 // шаг 3 м/с, с Shift — бегом вдвое быстрее, на каждом шаге голова чуть опускается (rise; бегом вдвое).
 // Точка view.target — где стоишь, взгляд — от камеры облёта к точке. Мышь захвачена и водит взгляд (Esc отпускает).
 // Законы те же, что в игре: тело — круг радиусом body, за забор не выйти (ворота и калитка закрыты, от досок
-// держимся на fence), сквозь дом с крыльцом и свесами не пройти. Сзади двора забора нет, но в реку не зайти —
+// держимся на fence), сквозь дом с крыльцом и свесами и сквозь предметы по сканам не пройти. Сзади двора забора нет, но в реку не зайти —
 // по воде только настил мостков. Облёт — камера, она летает свободно.
 const WALK = { speed: 3, fast: 2, fov: 55, stride: 0.75, rise: 0.012, mouse: 0.0022, body: 0.35, fence: 0.4 };
 const walker = { on: false, bob: 0, gait: 0 };
 // Можно ли стоять в точке.
 function free(x, z) {
-  const { pad, pier, river } = layout;
+  const { pad, pier, river, scans } = layout;
   if (Math.abs(x) > YARD.w / 2 - WALK.fence || z > YARD.d / 2 - WALK.fence) return false;
   if (Math.abs(x - pad.x) < pad.w / 2 + WALK.body && Math.abs(z - pad.z) < pad.d / 2 + WALK.body) return false;
+  if (scans.some((o) => Math.hypot(x - o.x, z - o.z) < o.r + WALK.body)) return false;
   return pier.deck(x, z) > -Infinity || height(x, z) >= river.level(x);
 }
 // Где встать, если зашёл пешком из облёта (или под ногами вырос новый дом): во дворе ближе всего к точке x, z —
