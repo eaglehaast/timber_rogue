@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { PHONE } from './device.js';
+import { mode } from './device.js';
+import { EYE } from './player.js';
 import { YARD } from './fence.js';
 import { makePanorama } from './panorama.js';
 import { makeSky, sunlight, castShadows } from './sky.js';
@@ -8,7 +9,6 @@ import { makeGround, makeTufts, grassTufts, mugwortTufts, nettleTufts, tansyTuft
 
 // Мир вокруг двора — общий у игры и стенда дома: свет, небо с облаками, кольца панорамы, земля и трава.
 // Середина двора — в начале координат, улица с воротами — к +z. Земля — по рельефу terrain.js, если он задан.
-export const EYE = 1.7; // м: глаза стоя — на этой высоте горизонт панорам
 
 // Небо светит в тень почти так же, как солнце на свету: тень на досках и стволах прозрачная, а не чёрная.
 // Снизу в тень светит залитый солнцем луг. Тень облака гасит солнце там, где лежит (sky.js), а отсвет
@@ -34,7 +34,7 @@ export async function makeWorld(renderer, scene, rings = Object.values(RINGS)) {
   sun.position.copy(SUN).multiplyScalar(60);
   sun.castShadow = true;
   // На телефоне карта 2048 (16 МБ памяти вместо 64): на маленьком экране щели штакетника и так мельче точки.
-  sun.shadow.mapSize.setScalar(PHONE ? 2048 : 4096);
+  sun.shadow.mapSize.setScalar(mode === 'game' ? 2048 : 4096);
   sun.shadow.camera.left = sun.shadow.camera.bottom = -36;
   sun.shadow.camera.right = sun.shadow.camera.top = 36;
   sun.shadow.camera.far = 120;

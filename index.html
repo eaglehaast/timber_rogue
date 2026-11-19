@@ -1,45 +1,51 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#18231f">
   <title>Timber Rogue</title>
-  <link rel="stylesheet" href="style.css" />
-  <!-- Пути относительные: игра должна открываться и с github.io, и архивом на itch. -->
-  <script type="importmap">
-    { "imports": { "three": "./vendor/three.module.min.js" } }
-  </script>
+  <link rel="stylesheet" href="menu.css">
 </head>
 <body>
-  <canvas id="scene"></canvas>
-
-  <div id="hud" hidden>
-    <div id="log"></div>
-    <div id="hint"></div>
-    <div id="depth"><div id="depthFill"></div></div>
-    <div id="side"></div>
-    <div id="gap" hidden></div>
-  </div>
-
-  <div id="result" hidden></div>
-
-  <div id="controls">
-    <div id="kit" role="group" aria-label="Инвентарь" hidden></div>
-    <div id="help">
-      <b id="seed"></b>
-      <span id="keys">Мышь — обойти · колесо — ближе · стрелки или WASD — идти (Shift — быстрее) · Q/E — ниже или выше · R — новый дом</span>
-      <button id="walk" type="button" title="F" disabled>Пешком</button>
-      <button id="another" type="button" hidden>Новый дом</button>
-
-      <details id="game-help" hidden>
-        <summary>Управление</summary>
-        <p>Подпили клён со стороны, куда хочешь его уронить, потом пили с обратной стороны. Недопил направляет падение.</p>
-        <p id="play-keys">1 и 2 — длинная и короткая пилы · 3 — руки, ЛКМ — взять или бросить отпил.<br />WASD — ходить · Shift — бежать · C — присесть. У ствола или ветки ЛКМ — приставить пилу, удерживать ЛКМ — пилить. Мышь, стрелки и Q/E — повернуть пилу, S — отойти, U — пилить ветку с другой стороны.<br />ПКМ и колесо — вид сбоку · F — облёт двора · I — осмотр пропила · R — новые клёны · L — журнал · V — смена модели пилы · K — ракурс · − и = — угол обзора.</p>
-      </details>
-    </div>
-  </div>
-  <button id="touch-saw" type="button" hidden>Приставить пилу</button>
-
-  <script type="module" src="src/house-view.js"></script>
+  <main class="menu">
+    <section id="home" aria-labelledby="title">
+      <h1 id="title" lang="en">Timber<br>Rogue</h1>
+      <nav aria-label="Главное меню">
+        <a class="primary" href="game.html">Игра <span aria-hidden="true">→</span></a>
+        <a href="#stands">Стенды <span aria-hidden="true">→</span></a>
+      </nav>
+    </section>
+    <section id="stands" aria-labelledby="stands-title" hidden>
+      <a class="back" href="#home">← Главное меню</a>
+      <h2 id="stands-title" tabindex="-1">Стенды</h2>
+      <nav id="stand-links" aria-label="Стенды">
+        <a href="game.html?stand=fly">Летающая камера <span aria-hidden="true">→</span></a>
+        <a href="game.html?stand=hud">Редактор HUD <span aria-hidden="true">→</span></a>
+      </nav>
+      <p id="desktop-note" hidden>Стенды открываются на компьютере.<br>На телефоне можно играть.</p>
+    </section>
+  </main>
+  <script type="module">
+    import { PHONE } from './src/device.js';
+    const home = document.querySelector('#home'), stands = document.querySelector('#stands');
+    document.querySelector('#stand-links').hidden = PHONE;
+    document.querySelector('#desktop-note').hidden = !PHONE;
+    const seed = new URLSearchParams(location.search).get('seed');
+    if (seed) for (const link of document.querySelectorAll('a[href^="game.html"]')) {
+      const url = new URL(link.href);
+      url.searchParams.set('seed', seed);
+      link.href = url;
+    }
+    function show() {
+      const inStands = location.hash === '#stands';
+      home.hidden = inStands;
+      stands.hidden = !inStands;
+      document.title = inStands ? 'Стенды · Timber Rogue' : 'Timber Rogue';
+      if (inStands) document.querySelector('#stands-title').focus();
+    }
+    addEventListener('hashchange', show);
+    show();
+  </script>
 </body>
 </html>

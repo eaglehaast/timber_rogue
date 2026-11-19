@@ -1,11 +1,9 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="UTF-8" />
-  <title>Timber Rogue</title>
-  <script>location.replace('./' + location.search + location.hash);</script>
-</head>
-<body>
-  <a href="./">Открыть двор Timber Rogue</a>
-</body>
-</html>
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Двор · Timber Rogue</title></head>
+<body><a href="game.html?stand=fly">Летающая камера</a>
+<script>
+  const url = new URL('game.html', location.href);
+  url.search = location.search;
+  url.searchParams.set('stand', 'fly');
+  location.replace(url);
+</script></body></html>

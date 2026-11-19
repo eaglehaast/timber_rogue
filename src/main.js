@@ -4,7 +4,8 @@ import {
   section, tipping, lever, closing, contact, pivotHeight, tearAngle, slope, twist, deflection, kerfWidth, opening, splitLength, pulledFibres, FRICTION, SLIDING,
   SPLIT_MIN,
 } from './physics.js';
-import { EYE } from './world.js';
+import { EYE, MOUSE, FOV_MIN, FOV_MAX, fieldOfView, makePlayer, forwardOf, turnHead, walkInput, walkSpeed, stepEyes, eyeCamera, bindStick } from './player.js';
+import { mode as screenMode } from './device.js';
 import { makeSaw, dressSaw, lamp, runChain, PACKS, BAR_W } from './saw.js';
 import { Arms } from './arms.js';
 import { Chips } from './chips.js';
@@ -39,10 +40,6 @@ const MAX_TILT = THREE.MathUtils.degToRad(60);
 const MAX_TURN = THREE.MathUtils.degToRad(30);
 const SNAP_DIST = 0.03;   // прицел прилипает к начатому пропилу, если почти совпал с ним
 const SNAP_COS = Math.cos(THREE.MathUtils.degToRad(10));
-// Глаза стоя и присев: присев можно пилить у самой земли.
-const EYE_CROUCH = 1.0;
-const STRIDE = 0.75;   // м — длина шага
-const STEP_RISE = 0.012; // м — на сколько опускается голова на шаге при ходьбе; бегом вдвое больше
 // Точная настройка пилы: шаг стрелками и замедление мыши с зажатым Shift.
 const STEP = THREE.MathUtils.degToRad(0.5);
 const PLAY = VOXEL / 4;    // настолько шина болтается в щели: цепь шире шины
@@ -66,7 +63,6 @@ const SHOTS = [
 ];
 const SWAP = 0.4; // с: столько камера переезжает из одного ракурса в другой
 const G = 9.8;
-const MOUSE = 0.0022;
 
 const canvas = document.getElementById('scene');
 const hudEl = document.getElementById('hud');
@@ -78,7 +74,9 @@ const logEl = document.getElementById('log');
 const gapEl = document.getElementById('gap');
 const sideEl = document.getElementById('side');
 const kitEl = document.getElementById('kit');
-
+const heldSawEl = document.getElementById('held-saw');
+const stickEl = document.getElementById('stick');
+const stick = bindStick(stickEl);
 const touchSaw = document.getElementById('touch-saw');
 
 let scene, camera, ground, groundNormal, walkable;
@@ -87,9 +85,7 @@ let resultTimer;
 let sawPointer = null;
 // Угол обзора по вертикали. Широкий угол у ствола растягивает картинку и укачивает,
 // поэтому по умолчанию он умеренный, а клавиши − и = его меняют.
-const FOV_MIN = 40, FOV_MAX = 75;
-let fov = 55;
-try { fov = THREE.MathUtils.clamp(Number(localStorage.getItem('fov')) || fov, FOV_MIN, FOV_MAX); } catch {}
+let fov = fieldOfView();
 // Выбор пилы, шины и ракурса тоже запоминаем: что было в list под key, а нет — первое.
 const recall = (key, list) => {
   try { return list.find((v) => String(v) === localStorage.getItem(key)) ?? list[0]; } catch { return list[0]; }
@@ -146,12 +142,11 @@ sawModel.name = 'saw';
 const dirOf = (az) => new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
 const azimuthOf = (v) => Math.atan2(-v.z, v.x);
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
-const forwardOf = (yaw) => new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
 // Куда смотришь — с наклоном взгляда.
 const lookOf = () => new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
 const yawOf = (v) => Math.atan2(-v.x, -v.z);
 
-const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0, gait: 0, step: new THREE.Vector3(), eye: EYE, crouch: false };
+const player = makePlayer();
 // Осмотр с летающей камерой: игрок и пила замирают, камера летает сама по себе.
 let fly = null;
 const keys = new Set();
@@ -616,7 +611,6 @@ function arm(i) {
   held = i;
   const { bar, pack } = kit[i];
   if (bar && grasp) letGo();
-  sawModel.visible = playing && Boolean(bar);
   if (bar) dressSaw(sawModel, pack, bar);
   showKit();
 }
@@ -646,24 +640,20 @@ let noted = { text: '', until: 0 };
 const notice = (text) => { noted = { text, until: performance.now() + 2500 }; };
 
 // Ячейки инвентаря внизу экрана: что в руках, где брошенные пилы.
-const kitCells = kit.map((_, i) => {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.addEventListener('click', () => {
-    if (playing && !fly) take(i);
-    button.blur();
-  });
-  return kitEl.appendChild(button);
-});
+const kitCells = [...kitEl.querySelectorAll('button')];
+kitCells.forEach((button, i) => button.addEventListener('click', () => {
+  if (playing && !fly) take(i);
+  button.blur();
+}));
 function showKit() {
   kit.forEach((item, i) => {
     const where = item.left ? (item.stuck ? 'зажата' : `лежит, ${Math.round(item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()))} м`)
       : !item.bar && grasp ? `${Math.round(grasp.mass)} кг` : '';
-    const text = `${i + 1} · ${item.name}${item.bar ? ` ${item.bar * 100} см` : ''}${where ? ` — ${where}` : ''}`;
+    const text = `${item.bar ? `Пила ${item.bar * 100} см` : item.name}${where ? ` · ${where}` : ''}`;
     if (kitCells[i].textContent !== text) kitCells[i].textContent = text;
     kitCells[i].classList.toggle('held', i === held);
     kitCells[i].classList.toggle('away', Boolean(item.left));
-    kitCells[i].setAttribute('aria-pressed', i === held);
+    if (kitCells[i].getAttribute('aria-pressed') !== String(i === held)) kitCells[i].setAttribute('aria-pressed', i === held);
   });
 }
 
@@ -1565,16 +1555,12 @@ function update(dt) {
 
   const shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
   // Ходить можно, только пока пила не приставлена к стволу и камера не летает.
+  const input = walkInput(keys, stick);
   const move = new THREE.Vector3();
-  if (mode === 'free' && !fly) {
-    if (keys.has('KeyW')) move.add(forward);
-    if (keys.has('KeyS')) move.sub(forward);
-    if (keys.has('KeyD')) move.add(right);
-    if (keys.has('KeyA')) move.sub(right);
-  }
+  if (mode === 'free' && !fly) move.addScaledVector(forward, input.ahead).addScaledVector(right, input.side);
   const moving = move.lengthSq() > 0;
   // С грузом идёшь медленнее: чем сильнее тянет рука, тем медленнее, при полной силе — вдвое.
-  const speed = moving ? (player.crouch ? 1.5 : shift ? 6 : 3) * (grasp ? 1 - Math.min(1, grasp.load / HAND) / 2 : 1) : 0;
+  const speed = moving ? move.length() * walkSpeed(player, keys) * (grasp ? 1 - Math.min(1, grasp.load / HAND) / 2 : 1) : 0;
   if (moving) {
     const step = move.normalize().multiplyScalar(speed * dt);
     if (grasp) {
@@ -1586,17 +1572,9 @@ function update(dt) {
     }
     movePlayer(step.x, step.z);
   }
-  // Шаги: голова на каждом шаге чуть опускается и за два шага раз качается из стороны в сторону.
-  // Фаза bob идёт по пройденному пути (шаг — полоборота), поэтому бегом шаги чаще, а встал — замерли.
-  // Размах растёт со скоростью и плавно приходит и уходит. Головой не крутим: только сдвиг.
-  // gait — скорость в долях обычной ходьбы: 0 стоим, 0.5 присев, 1 идём, 2 бежим.
-  player.gait += (speed / 3 - player.gait) * (1 - Math.exp(-6 * dt));
-  player.bob += (speed * dt * Math.PI) / STRIDE;
-  const rise = STEP_RISE * player.gait;
-  player.step.copy(right).multiplyScalar(Math.sin(player.bob) * rise / 2).setY(-rise * Math.sin(player.bob) ** 2);
-  player.eye += ((player.crouch ? EYE_CROUCH : EYE) - player.eye) * (1 - Math.exp(-8 * dt));
+  stepEyes(player, right, speed, dt);
   // Шаг назад от приставленной пилы — уходишь от пропила. Зажатая пила остаётся в стволе, руки свободны.
-  if (saw && !fly && keys.has('KeyS')) stepBack();
+  if (saw && !fly && input.ahead < -0.2) stepBack();
 
   const candidate = mode === 'free' && kit[held].bar ? sawAt(forward) : null;
   showKit();
@@ -1633,8 +1611,10 @@ function update(dt) {
 
   const shown = saw ?? candidate;
   if (touch) {
-    touchSaw.hidden = Boolean(fly) || !(shown || grasp || (!kit[held].bar && reachable(eyeOf(), lookOf())));
-    touchSaw.textContent = kit[held].bar ? (saw ? 'Пилить' : 'Приставить пилу') : (grasp ? 'Бросить' : 'Взять');
+    touchSaw.hidden = Boolean(fly);
+    const label = kit[held].bar ? (saw ? 'Пилить' : candidate ? 'Приставить пилу' : 'Газ') : (grasp ? 'Бросить' : 'Взять');
+    if (touchSaw.textContent !== label) touchSaw.textContent = label;
+    heldSawEl.classList.toggle('running', trigger && !saw);
   }
   aimPlane.visible = Boolean(shown) && mode !== 'cut';
   if (shown) {
@@ -1645,7 +1625,8 @@ function update(dt) {
     aimPlane.scale.set(barL(), 2 * r, 1);
   }
 
-  hintEl.textContent = hint();
+  const message = hint();
+  if (hintEl.textContent !== message) hintEl.textContent = message;
   depthEl.style.visibility = saw ? 'visible' : 'hidden';
   if (saw) depthFillEl.style.width = `${(saw.depth / (saw.depth + ahead(saw))) * 100}%`;
 
@@ -1681,17 +1662,21 @@ function update(dt) {
   if (fly) flyCamera(dt, shift);
   else frame(dt);
 
-  // Руки держат пилу или кусок, а пустые — внизу у края взгляда. Видно их только из глаз: из-за плеча
-  // и с летающей камеры они висели бы в воздухе без тела — там пила висит сама. Пока пила приставлена
-  // к стволу или ветке (shown: примерка или рез), рук нет и из глаз: в кадре пила, рез и опилки.
-  arms.group.visible = !fly && !SHOTS[shot].back && !shown;
+  updateSawVisibility();
+  arms.group.visible = !fly && !SHOTS[shot].back && !kit[held].bar;
+  if (!arms.group.visible) return;
   const eye = eyeOf().add(player.step);
-  if (sawModel.visible) arms.holdSaw(sawModel, trigger && mode === 'cut', eye, player.yaw);
-  else if (grasp) {
+  if (grasp) {
     const { grip, tree } = grasp, o = tree.root.position, [a, b] = endsOf(grip.body, grip.capsule);
     arms.holdPiece(grip.point(new THREE.Vector3()).add(o), a.add(o), b.add(o), grip.capsule.r, eye, player.yaw);
   } else arms.rest(eye, new THREE.Quaternion().setFromEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ')));
   arms.update(eye, player.yaw, dt);
+}
+
+// Рисунок виден при ходьбе. Как только пила приставлена, её показывает сцена.
+function updateSawVisibility() {
+  sawModel.visible = playing && Boolean(saw);
+  heldSawEl.hidden = !playing || Boolean(fly || saw) || !kit[held].bar;
 }
 
 // Все деревья продолжают падать, а куски — двигаться, когда игрок переключается в облёт.
@@ -1713,7 +1698,7 @@ function updateTrees(dt) {
 
 // Камера по ракурсу shot. Сменился ракурс, или пилу приставили, или отошли — камера не прыгает,
 // а за SWAP секунд переезжает из того места, где была.
-let shot = SHOTS.findIndex((s) => s.name === recall('shot', SHOTS.map((s) => s.name)));
+let shot = screenMode === 'game' ? 0 : SHOTS.findIndex((s) => s.name === recall('shot', SHOTS.map((s) => s.name)));
 const swap = { kind: '', t: 1, position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
 function frame(dt) {
   const { low, back } = SHOTS[shot];
@@ -1724,8 +1709,7 @@ function frame(dt) {
     swap.position.copy(camera.position);
     swap.quaternion.copy(camera.quaternion);
   }
-  camera.position.copy(eyeOf()).add(player.step);
-  camera.rotation.set(player.pitch, player.yaw, 0);
+  eyeCamera(camera, player);
   if (saw && (low || back)) {
     // Смотрим между лампой и пропилом: в кадре и шина в древесине, и корпус с лампой.
     const lit = sawModel.getObjectByName('lamp').getWorldPosition(new THREE.Vector3());
@@ -1854,7 +1838,7 @@ function hint() {
 
 // Захват мыши может не дать браузер (например, без жеста пользователя); игра от этого не ломается.
 function lockPointer() {
-  canvas.requestPointerLock()?.catch(() => {});
+  canvas.requestPointerLock?.()?.catch(() => {});
 }
 
 addEventListener('keydown', (e) => {
@@ -1878,15 +1862,17 @@ addEventListener('keydown', (e) => {
     unsay('fov');
     say('fov', `Угол обзора ${fov}°`);
   }
-  if (e.code === 'KeyI' && !e.repeat) setFlying(!fly);
+  if (screenMode === 'fly' && e.code === 'KeyI' && !e.repeat) setFlying(!fly);
   if (fly) return;
   if (e.repeat && !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyQ', 'KeyE'].includes(e.code)) return;
+  // Отход от пропила — разовое действие. Даже нажатие короче кадра должно отпустить пилу.
+  if (e.code === 'KeyS' && saw) stepBack();
   if (e.code === 'KeyC') player.crouch = !player.crouch;
   if (e.code === 'KeyL') hudEl.classList.toggle('details');
   // Цифры — взять вещь из инвентаря.
   const digit = /^Digit(\d)$/.exec(e.code);
   if (digit) take(Number(digit[1]) - 1);
-  // V — другой вид у пилы в руках.
+  // V — другая модель пилы у пропила.
   if (e.code === 'KeyV' && kit[held].bar) {
     const item = kit[held];
     item.pack = PACKS[(PACKS.indexOf(item.pack) + 1) % PACKS.length];
@@ -1911,7 +1897,7 @@ addEventListener('keydown', (e) => {
     unsay('under');
     say('under', under ? 'Ветку пилишь снизу, верхней кромкой шины' : 'Ветку пилишь сверху');
   }
-  if (e.code === 'KeyK') {
+  if (screenMode === 'fly' && e.code === 'KeyK') {
     shot = (shot + 1) % SHOTS.length;
     keep('shot', SHOTS[shot].name);
     unsay('shot');
@@ -1971,7 +1957,7 @@ addEventListener('mouseup', (e) => {
   if (e.button === 2) setInspecting(false);
 });
 touchSaw.addEventListener('pointerdown', (e) => {
-  if (!playing || sawPointer !== null) return;
+  if (!playing || sawPointer !== null || e.button !== 0) return;
   e.preventDefault();
   sawPointer = e.pointerId;
   touchSaw.setPointerCapture(e.pointerId);
@@ -2010,8 +1996,7 @@ function look(dx, dy) {
     fly.yaw -= dx;
     fly.pitch = THREE.MathUtils.clamp(fly.pitch - dy, -1.5, 1.5);
   } else if (mode === 'free') {
-    player.yaw -= dx;
-    player.pitch = THREE.MathUtils.clamp(player.pitch - dy, -1.5, 1.5);
+    turnHead(player, dx, dy);
   } else {
     // Мышь водит пилу: вбок — поворот, вверх-вниз — наклон; с Shift — в пять раз точнее.
     const k = keys.has('ShiftLeft') || keys.has('ShiftRight') ? FINE : 1;
@@ -2032,9 +2017,9 @@ function touchWalk(side, ahead) {
   for (let i = 0; i < steps; i++) movePlayer((x * ahead - z * side) / steps, (z * ahead + x * side) / steps);
 }
 
-function enter({ x, z }, yaw, byTouch) {
+function enter({ x, z }, yaw, byTouch, capture = !byTouch) {
   playing = true;
-  touch = byTouch;
+  touch = byTouch || screenMode === 'game';
   keys.clear();
   player.pos.set(x, ground(x, z), z);
   player.yaw = yaw;
@@ -2055,10 +2040,11 @@ function enter({ x, z }, yaw, byTouch) {
   swap.kind = `${shot} false`;
   swap.t = 1;
   frame(0);
-  hudEl.hidden = kitEl.hidden = false;
-  sawModel.visible = Boolean(kit[held].bar);
+  hudEl.hidden = false;
+  stickEl.hidden = touchSaw.hidden = !touch;
+  updateSawVisibility();
   showKit();
-  if (!touch) lockPointer();
+  if (capture) lockPointer();
 }
 
 function leave() {
@@ -2075,9 +2061,10 @@ function leave() {
   setInspecting(false);
   if (document.pointerLockElement === canvas) document.exitPointerLock();
   camera.layers.disable(TOOLS);
-  aimPlane.visible = sawModel.visible = arms.group.visible = false;
+  aimPlane.visible = arms.group.visible = false;
+  updateSawVisibility();
   clearTimeout(resultTimer);
-  hudEl.hidden = kitEl.hidden = resultEl.hidden = touchSaw.hidden = true;
+  hudEl.hidden = resultEl.hidden = true;
   pauseWatch();
   return player;
 }
@@ -2103,21 +2090,30 @@ function tick(now, dt) {
   } else updateTrees(dt);
 }
 
-function renderInset(renderer) {
-  if (!playing) return;
-  // Вид сбоку рисуем в рамку #side поверх основного, тем же рендером.
-  const r = sideEl.getBoundingClientRect();
-  const bottom = canvas.clientHeight - r.bottom;
-  renderer.setScissorTest(true);
-  renderer.setScissor(r.left, bottom, r.width, r.height);
-  renderer.setViewport(r.left, bottom, r.width, r.height);
-  sideCamera.aspect = r.width / r.height;
+// Снимок маленькой камеры живёт в самом элементе HUD. Его можно повернуть и перекрыть
+// другими элементами. Между снимками основной вид продолжает рисоваться каждый кадр.
+const inset = sideEl.querySelector('canvas'), insetInk = inset.getContext('2d', { alpha: false });
+let nextInset = 0;
+function renderInset(renderer, now) {
+  if (!playing || sideEl.hasAttribute('data-layout-off') || now < nextInset) return;
+  nextInset = now + 100;
+  const ratio = renderer.getPixelRatio();
+  const hudScale = hudEl.getBoundingClientRect().width / hudEl.offsetWidth;
+  const width = Math.max(1, Math.min(canvas.clientWidth, Math.round(sideEl.clientWidth * hudScale)));
+  const height = Math.max(1, Math.min(canvas.clientHeight, Math.round(sideEl.clientHeight * hudScale)));
+  const w = Math.floor(width * ratio), h = Math.floor(height * ratio);
+  if (inset.width !== w || inset.height !== h) { inset.width = w; inset.height = h; }
+  sideCamera.aspect = width / height;
   sideCamera.updateProjectionMatrix();
   const shadows = renderer.shadowMap.autoUpdate;
-  renderer.shadowMap.autoUpdate = false; // карта теней уже нарисована для этого кадра
+  renderer.shadowMap.autoUpdate = false;
+  renderer.setScissorTest(true);
+  renderer.setScissor(0, 0, width, height);
+  renderer.setViewport(0, 0, width, height);
   renderer.render(scene, sideCamera);
-  renderer.shadowMap.autoUpdate = shadows;
+  insetInk.drawImage(canvas, 0, canvas.height - h, w, h, 0, 0, w, h);
   renderer.setScissorTest(false);
+  renderer.shadowMap.autoUpdate = shadows;
 }
 
 // Стенд владеет сценой, камерой и кадром. Игра добавляет в его двор клёны, пилу и управление.

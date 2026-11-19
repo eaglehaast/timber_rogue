@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { tiles } from './surface.js';
+import { texture as sized } from './device.js';
 import { generator } from './random.js';
 import { wind } from './wind.js';
 
@@ -119,7 +120,7 @@ export async function makeSky(sun) {
     const files = aspects.map((_, i) => `assets/textures/${name}-${i + 1}.webp`);
     const maps = tiles(files);
     maps.forEach((m) => { m.wrapS = m.wrapT = THREE.ClampToEdgeWrapping; });
-    return maps.map((map, i) => ({ map, aspect: aspects[i], file: files[i] }));
+    return maps.map((map, i) => ({ map, aspect: aspects[i], file: sized(files[i]) }));
   };
   const [sides, belows] = await Promise.all([load('cloud'), load('cloud-below')]);
   // Толща облака — по картинке сбоку: такой его видит низкое солнце.

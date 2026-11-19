@@ -1,6 +1,6 @@
-// Телефон или планшет: палец вместо мыши. Памяти у вкладки там в разы меньше, чем на компьютере (iOS закрывает
-// вкладку, когда она берёт больше ~1 ГБ, а одни картинки стенда в полном размере занимают на видеокарте 1,1 ГБ).
-// Поэтому на нём картинки вдвое меньше по стороне (вчетверо меньше памяти) — копии в assets/textures/half
-// (tools/half.py), — сетка земли вдвое реже, тень и чёткость экрана проще. На компьютере всё как было.
-export const PHONE = matchMedia('(pointer: coarse)').matches;
-export const texture = (file) => (PHONE ? file.replace('assets/textures/', 'assets/textures/half/') : file);
+// Стенды рассчитаны на мышь. Сенсорный ноутбук с мышью тоже может их открыть.
+export const PHONE = Boolean(navigator.userAgentData?.mobile) || /iPhone|iPod|Android.+Mobile/i.test(navigator.userAgent)
+  || (navigator.maxTouchPoints > 0 && !matchMedia('(any-pointer: fine)').matches);
+const stand = new URLSearchParams(location.search).get('stand');
+export const mode = stand === 'fly' || stand === 'hud' ? stand : 'game';
+export const texture = (file) => mode === 'game' ? file.replace('assets/textures/', 'assets/textures/half/') : file;
