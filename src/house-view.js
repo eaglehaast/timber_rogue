@@ -10,17 +10,17 @@ import { planRiver, buildRiver } from './river.js';
 import { planPier, buildPier } from './pier.js';
 import { planField, buildField } from './field.js';
 import { shapeGround, height, normal } from './terrain.js';
-import { makeWorld, makeMeadow, RINGS, EYE } from './world.js';
+import { makeWorld, makeMeadow, RINGS } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
-import { PHONE } from './device.js';
+import { EYE } from './player.js';
+import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
 
 // Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
 const canvas = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-// На телефоне экран втрое чаще по точкам, чем видит глаз: хватает полутора, кадр рисуется вчетверо быстрее, чем при трёх.
-renderer.setPixelRatio(Math.min(devicePixelRatio, PHONE ? 1.5 : 2));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(mode === 'game' ? 1 : Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -36,9 +36,10 @@ const GROUND = 2 * RINGS.far[1];
 const PALISADE = [1.5, 2.5], ASIDE = 5;
 const MEADOW = 106, OUTSIDE = 0.7; // м: сторона квадрата с травой (до поля за лесополосой); сколько травы за забором
 let house = null, yard = null, layout = null;
+const animated = [];
 const label = document.getElementById('seed');
 function rebuild(seed) {
-  if (game.active) toggleWalk();
+  if (game.active && mode === 'fly') toggleWalk();
   if (house) {
     scene.remove(house, yard);
     for (const part of [house, yard]) part.traverse((o) => o.geometry?.dispose());
@@ -71,9 +72,12 @@ function rebuild(seed) {
   yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field));
   layout = { at, gas, power, road, pier, pad, river };
   scene.add(house, yard);
+  animated.length = 0;
+  for (const group of [house, yard]) group.traverse(part => { if (part.tick) animated.push(part); });
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
   game.regrow(generator(seed + 41));
   view.target.set(at.x, at.y + 2.5, at.z);
+  if (game.active) game.enter(spawn, 0, PHONE, false);
   label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов · палисадник ${front.toFixed(1)} м`;
 }
 
@@ -133,27 +137,24 @@ canvas.addEventListener('wheel', (e) => {
 const held = new Set();
 const MOVE = { speed: 5, fast: 3, keys: { ArrowUp: [0, 1], KeyW: [0, 1], ArrowDown: [0, -1], KeyS: [0, -1], ArrowLeft: [-1, 0], KeyA: [-1, 0], ArrowRight: [1, 0], KeyD: [1, 0] } };
 const another = () => rebuild(1 + Math.floor(Math.random() * 1e6));
-const help = document.getElementById('help'), keys = document.getElementById('keys');
-const walkButton = document.getElementById('walk'), gameHelp = document.getElementById('game-help');
-if (PHONE) {
-  keys.textContent = 'Палец — обойти · два пальца: щипок — ближе, сдвиг — идти';
-  document.getElementById('play-keys').textContent = 'Палец — оглядеться или повернуть пилу. Два пальца сдвигом — идти. Выбери пилу или руки в инвентаре. У дерева приставь пилу и удерживай «Пилить». Чтобы отойти от пропила, сделай движение назад двумя пальцами. Руками нажми «Взять» или «Бросить».';
-  const button = document.getElementById('another');
-  button.hidden = false;
-  button.addEventListener('click', another);
+const flight = document.querySelector('#flight'), walkButton = document.querySelector('#walk');
+document.querySelector('#regrow').addEventListener('click', () => { game.regrow(); document.querySelector('#help').open = false; });
+if (mode === 'fly') {
+  flight.hidden = false;
+  document.querySelector('#another').addEventListener('click', another);
+  walkButton.addEventListener('click', () => { toggleWalk(); walkButton.blur(); });
+  addEventListener('keydown', e => {
+    if (walkButton.disabled) return;
+    if (e.code === 'KeyF' && !e.repeat) toggleWalk();
+    else if (!game.active) {
+      if (e.code === 'KeyR' && !e.repeat) another();
+      held.add(e.code);
+    }
+    if (e.code.startsWith('Arrow')) e.preventDefault();
+  });
+  addEventListener('keyup', e => held.delete(e.code));
+  addEventListener('blur', () => held.clear());
 }
-walkButton.addEventListener('click', () => { toggleWalk(); walkButton.blur(); });
-addEventListener('keydown', (e) => {
-  if (e.code === 'KeyF') {
-    if (!e.repeat) toggleWalk();
-  } else if (!game.active) {
-    if (e.code === 'KeyR' && !e.repeat) another();
-    held.add(e.code);
-  }
-  if (e.code.startsWith('Arrow') || (game.active && e.code === 'Space' && e.target === document.body)) e.preventDefault();
-});
-addEventListener('keyup', (e) => held.delete(e.code));
-addEventListener('blur', () => held.clear());
 // Из-за забора или с крыши начинаем у клёна. Возвращаясь в облёт, оставляем точку обзора у ног игрока.
 function toggleWalk() {
   held.clear();
@@ -169,9 +170,9 @@ function toggleWalk() {
     game.enter(point ?? spawn, point ? view.yaw : 0, PHONE);
   }
   walkButton.textContent = game.active ? 'Облёт' : 'Пешком';
-  help.classList.toggle('playing', game.active);
-  gameHelp.hidden = !game.active;
-  gameHelp.open = false;
+  flight.classList.toggle('walking', game.active);
+  document.querySelector('#help').open = false;
+  document.querySelector('#help').hidden = !game.active;
 }
 // Сдвинуть точку на side метров вбок и ahead вперёд.
 function shift(side, ahead) {
@@ -204,7 +205,7 @@ function frame(now) {
   const dt = Math.min(clock.getDelta(), 0.05);
   stepWind(dt);
   driftClouds(dt);
-  for (const part of [house, yard]) part.traverse((o) => o.tick?.(dt));
+  for (const part of animated) part.tick(dt);
   const w = canvas.clientWidth, h = canvas.clientHeight;
   const ratio = renderer.getPixelRatio();
   if (canvas.width !== Math.floor(w * ratio) || canvas.height !== Math.floor(h * ratio)) {
@@ -221,13 +222,19 @@ function frame(now) {
     camera.position.copy(view.target).addScaledVector(dir, Math.min(view.dist, reach(view.target, dir)));
     camera.lookAt(view.target);
   }
-  renderer.setViewport(0, 0, w, h);
   const light = world.light(camera);
+  game.renderInset(renderer, now);
+  renderer.setViewport(0, 0, w, h);
   renderer.render(scene, camera);
   world.rays.render(camera, light, dt);
-  game.renderInset(renderer);
 }
 rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
-walkButton.disabled = false;
-renderer.setAnimationLoop(frame);
-window.stand = { view, rebuild, renderer, scene, get layout() { return layout; } };
+export async function startYard() {
+  if (mode === 'game') game.enter(spawn, 0, PHONE, false);
+  document.querySelector('#help').hidden = !game.active;
+  await renderer.compileAsync(scene, camera);
+  frame(performance.now());
+  walkButton.disabled = false;
+  renderer.setAnimationLoop(frame);
+  window.stand = { view, rebuild, renderer, scene, get layout() { return layout; } };
+}

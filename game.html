@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#18231f">
+  <title>Игра · Timber Rogue</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+  <main id="desk">
+    <header id="editor-bar" hidden>
+      <a href="./#stands">← Стенды</a><h1>Редактор HUD</h1>
+      <div class="switch" role="group" aria-label="Режим стенда">
+        <button id="arrange" type="button" aria-pressed="true">Расстановка</button><button id="try" type="button" aria-pressed="false">Проба</button>
+      </div>
+      <button id="export" type="button">Выгрузить JSON ↓</button>
+    </header>
+    <div id="room"><div id="stage">
+      <canvas id="scene" aria-label="Вид от первого лица"></canvas>
+      <div id="hud" hidden>
+        <div id="held-saw"><img alt="Руки с пилой" draggable="false"></div>
+        <div id="kit" role="group" aria-label="Инвентарь">
+          <button id="slot-long" type="button" aria-label="Длинная пила, 70 см">Пила 70 см</button>
+          <button id="slot-short" type="button" aria-label="Короткая пила, 30 см">Пила 30 см</button>
+          <button id="slot-hands" type="button">Руки</button>
+        </div>
+        <div id="side" aria-label="Вид на дерево сбоку"><canvas></canvas></div>
+        <div id="hint"></div><div id="depth"><div id="depthFill"></div></div><div id="gap" hidden></div>
+        <div id="log"></div><div id="result" hidden></div>
+        <div id="stick" role="group" aria-label="Движение"><span></span></div>
+        <button id="touch-saw" type="button">Пилить</button>
+        <div id="utility">
+          <a id="back" href="./">← Меню</a>
+          <details id="help"><summary aria-label="Управление">?</summary>
+            <div id="help-body">
+              <b>Управление</b>
+              <p class="desktop-only">WASD — ходить, мышь — смотреть. У древесины нажми левую кнопку, затем удерживай её для пропила. S — отойти. Клавиши 1–3 выбирают инструмент.</p>
+              <p class="touch-only">Левый круг — ходьба. Веди пальцем по двору, чтобы смотреть или поворачивать пилу. У дерева приставь пилу кнопкой, затем удерживай «Пилить». Потяни круг назад, чтобы отойти.</p>
+              <p class="desktop-only">C — присесть, Shift — бежать, U — сменить сторону реза, L — журнал. Правая кнопка и колесо — вид сбоку. Esc освобождает мышь.</p>
+              <button id="regrow" type="button">Новые клёны</button>
+            </div>
+          </details>
+        </div>
+      </div>
+      <div id="flight" hidden><a href="./#stands">← Стенды</a><b id="seed"></b><span id="keys">Мышь — облететь · колесо — приблизить · WASD — сдвиг · Q/E — высота</span>
+        <button id="walk" type="button" title="F" disabled>Пешком</button><button id="another" type="button">Новый двор</button>
+      </div>
+      <div id="loading" role="status"><span>Загрузка…</span><a href="./">В меню</a></div>
+    </div></div>
+    <p id="orientation" hidden>Для большего игрового поля поверни телефон.</p>
+    <aside id="inspector" aria-label="Свойства элемента" hidden>
+      <label class="element-label">Элемент<select id="objects"></select></label>
+      <label class="file-button">+ Слой из картинки<input id="new-layer" type="file" accept="image/png,image/webp,image/jpeg"></label>
+      <fieldset id="geometry"><legend>Положение и вид</legend><div id="numbers"></div>
+        <label class="check"><input id="visible" type="checkbox"> Показывать в игре</label>
+      </fieldset>
+      <div id="art-controls" hidden>
+        <label>Рисунок<select id="art"></select></label>
+        <label class="file-button">Добавить рисунок<input id="new-art" type="file" accept="image/png,image/webp,image/jpeg"></label>
+      </div>
+      <label>Комментарий к элементу<textarea id="comment" rows="3" placeholder="Что нужно изменить?"></textarea></label>
+      <button id="restore" class="minor" type="button">Сбросить элемент</button>
+      <footer><label class="file-button">Открыть JSON<input id="import" type="file" accept="application/json,.json"></label><output id="status" aria-live="polite"></output></footer>
+    </aside>
+    <p id="editor-help" hidden></p>
+  </main>
+  <script type="module" src="src/entry.js"></script>
+</body>
+</html>
