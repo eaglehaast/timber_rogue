@@ -16,7 +16,7 @@ if (PHONE && mode !== 'game') {
       await startEditor(hud);
     } else if (mode === 'wood') {
       document.title = 'Костёр и поленница · Timber Rogue';
-      for (const id of Object.keys(hud.base.elements)) hud.apply(hud.base, id);
+      for (const id of ['back', 'help', 'stick', 'touch-saw']) hud.apply(hud.base, id);
       const { startWoodStand } = await import('./wood-stand.js');
       await startWoodStand();
     } else {
