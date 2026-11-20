@@ -85,7 +85,7 @@ function makeLogAxis(length, radius, seedPhase = 0) {
   }
   const profile = (az, s) => 1 + 0.035 * Math.cos(2 * az + seedPhase) + 0.02 * Math.sin(3 * az - seedPhase + s * 2);
   return {
-    id: 0, parent: null, attach: 0, joint: 'trunk', level: 0, dead: false,
+    id: 0, stem: 0, parent: null, attach: 0, joint: 'trunk', level: 0, dead: false,
     included: 0, includedTo: 0, len: length, points, profile, children: [],
   };
 }
