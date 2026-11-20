@@ -1,0 +1,432 @@
+From cc300684e41ef32d9e747f6dd0e9d0e116d5eb41 Mon Sep 17 00:00:00 2001
+From: "qwen.ai[bot]" <qwenlm-intl@service.alibaba.com>
+Date: Fri, 20 Nov 2026 09:20:14 +0000
+Subject: [PATCH] task snapshot 06262011-5519-4871-93c5-20df704d67be
+
+---
+ src/campfire.js | 313 ++++++++++++++++++++++++++++++++++++++++++++++++
+ src/main.js     |  63 +++++++++-
+ 2 files changed, 374 insertions(+), 2 deletions(-)
+ create mode 100644 src/campfire.js
+
+diff --git a/src/campfire.js b/src/campfire.js
+new file mode 100644
+index 0000000..cb75f4d
+--- /dev/null
++++ b/src/campfire.js
+@@ -0,0 +1,313 @@
++import * as THREE from 'three';
++import { barkMaterial } from './bark.js';
++import { DENSITY } from './maple.js';
++
++// Переиспользуемый модуль «Костёр и поленница» — один и тот же для игры и стенда.
++// Экспортирует: buildCampfire, buildWoodpileFrame, buildDropZone, placeProcessingSite,
++// classifyPiece, addLogToPile, burnLogInFire.
++// Всё рисуется примитивами и процедурными текстурами (как трава в main.js), чтобы модуль
++// работал без внешних ассетов; когда в стенде появятся нарисованные текстуры — их положим сюда же,
++// и игра получит их автоматически.
++
++const rand = (a, b) => a + Math.random() * (b - a);
++
++export const PILE_SIZE = { w: 2.4, d: 1.15, h: 1.85 }; // габариты каркаса поленницы
++export const FIRE_SIDE = 2.7;                          // сторона площадки костра
++export const DROP_HALF = { x: 1.6, z: 1.1 };           // зона приёмки: кладёшь кусок внутри — он уходит в переработку
++const LOG_R = 0.09;                                    // толщина дровины в укладке
++const ROWS = 7;                                        // сколько рядов вмещает поленница
++
++// Пятнистая заглушка под нарисованную текстуру: тот же приём, что с травой в игре.
++function blotches(base, hue, spread, count = 1400) {
++  const c = document.createElement('canvas');
++  c.width = c.height = 256;
++  const g = c.getContext('2d');
++  g.fillStyle = base;
++  g.fillRect(0, 0, 256, 256);
++  for (let i = 0; i < count; i++) {
++    g.fillStyle = `hsl(${hue + Math.random() * spread}, ${25 + Math.random() * 20}%, ${22 + Math.random() * 16}%)`;
++    g.fillRect(Math.random() * 256, Math.random() * 256, 2 + Math.random() * 5, 2 + Math.random() * 5);
++  }
++  const texture = new THREE.CanvasTexture(c);
++  texture.colorSpace = THREE.SRGBColorSpace;
++  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
++  return texture;
++}
++
++const boardsTex = blotches('#6f5b40', 30, 22, 900);   // тёплые доски каркаса
++const pavingTex = blotches('#7d7f76', 90, 14, 700);   // плитняк площадки
++const ashTex = blotches('#8d8880', 40, 10, 500);      // золяное дно костра
++
++// Доска: геометрия с растянутой текстурой, чтобы доска любой длины была доской, а не квадратом.
++function board(w, h, d, material, x, y, z, rx = 0) {
++  const geo = new THREE.BoxGeometry(w, h, d);
++  const uv = geo.attributes.uv;
++  const span = Math.max(w, h, d);
++  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i), uv.getY(i) * (span / 0.7));
++  const mesh = new THREE.Mesh(geo, material);
++  mesh.position.set(x, y, z);
++  mesh.rotation.x = rx;
++  mesh.castShadow = mesh.receiveShadow = true;
++  return mesh;
++}
++
++// Каркас поленницы: настил, столбы с перекладинами, задняя стенка и покатая крыша.
++export function buildWoodpileFrame(pos) {
++  const group = new THREE.Group();
++  const material = new THREE.MeshLambertMaterial({ map: boardsTex });
++  const { w: W, d: D, h: H } = PILE_SIZE, T = 0.045;
++  const roofYAt = (z) => H + 0.06 - z * Math.tan(0.08);
++  // Нижний настил
++  for (let i = -2; i <= 2; i++) group.add(board(W - 0.04, T, 0.16, material, 0, 0.06 + T / 2, i * 0.19));
++  // Столбы и перекладины
++  for (const sx of [-1, 1]) {
++    for (const sz of [-1, 1]) group.add(board(0.09, H, 0.09, material, sx * (W / 2 - 0.045), H / 2, sz * (D / 2 - 0.045)));
++    for (let h = 0.22; h <= H - 0.1; h += 0.22) group.add(board(T, 0.14, D - 0.04, material, sx * (W / 2 - T / 2), h, 0));
++  }
++  // Задняя стенка
++  for (const y of [0.35, 0.8, 1.25]) group.add(board(W, 0.12, T, material, 0, y, -D / 2 + T / 2));
++  // Крыша
++  for (let i = -2; i <= 2; i++) group.add(board(W + 0.14, T, 0.21, material, 0, roofYAt(i * 0.21) + 0.04, i * 0.21, 0.07));
++  group.position.copy(pos);
++  return group;
++}
++
++// Чурка: кора вдоль, свежий срез с кольцами на торцах. Тот же материал коры, что у ствола.
++function endGrainTexture() {
++  const c = document.createElement('canvas');
++  c.width = c.height = 128;
++  const g = c.getContext('2d');
++  g.fillStyle = '#c9a06a';
++  g.fillRect(0, 0, 128, 128);
++  for (let r = 6; r < 64; r += 5 + Math.random() * 4) {
++    g.strokeStyle = `rgba(110, 78, 40, ${0.35 + Math.random() * 0.3})`;
++    g.beginPath();
++    g.arc(64, 64, r, 0, Math.PI * 2);
++    g.stroke();
++  }
++  const texture = new THREE.CanvasTexture(c);
++  texture.colorSpace = THREE.SRGBColorSpace;
++  return texture;
++}
++
++const logEndMat = new THREE.MeshLambertMaterial({ map: endGrainTexture() });
++
++export function makeLog(length, radius = LOG_R) {
++  const geo = new THREE.CylinderGeometry(radius, radius * 0.96, length, 12, 1);
++  const uv = geo.attributes.uv;
++  for (let i = 0; i < uv.count; i++) {
++    uv.setXY(i, (uv.getX(i) * 2 * Math.PI * radius) / 0.4, (uv.getY(i) * length) / 0.4);
++  }
++  const mesh = new THREE.Mesh(geo, [barkMaterial, logEndMat, logEndMat]);
++  mesh.castShadow = mesh.receiveShadow = true;
++  return mesh;
++}
++
++// Сколько чурок в row-м ряду: от front к back, по ширине каркаса.
++const rowCapacity = (row) => Math.floor((PILE_SIZE.w - 0.2) / (LOG_R * 2)) - (row % 2 ? 1 : 0);
++
++// Кладёт бревно в поленницу: ряды снизу вверх, крайние ряды чуть отступают от передней кромки,
++// чтобы торец был виден.
++export function addLogToPile(pile, piece) {
++  const cap = rowCapacity(pile.row);
++  if (pile.row >= ROWS) return false;
++  const log = makeLog(piece.length, piece.radius);
++  const y = 0.14 + pile.row * LOG_R * 1.9 + LOG_R;
++  const z = -PILE_SIZE.d / 2 + 0.16 + pile.row * 0.05;
++  log.rotation.z = Math.PI / 2;
++  log.position.set(
++    -PILE_SIZE.w / 2 + 0.14 + pile.col * LOG_R * 2 + rand(-0.01, 0.01),
++    y + rand(-0.005, 0.005),
++    z + rand(-0.01, 0.01),
++  );
++  log.rotation.y = rand(-0.03, 0.03);
++  pile.group.add(log);
++  if (++pile.col >= cap) { pile.col = 0; pile.row++; }
++  return true;
++}
++
++// Бросает чурку в костёр: она ложится к центру и начинает гореть.
++export function burnLogInFire(fire, piece) {
++  const angle = rand(0, Math.PI * 2), rad = rand(0.15, 0.4);
++  const log = makeLog(Math.min(piece.length, 1.3), piece.radius);
++  log.position.set(Math.cos(angle) * rad, 0.12, Math.sin(angle) * rad);
++  log.rotation.set(rand(-0.1, 0.1), angle + Math.PI / 2, rand(-0.15, 0.15));
++  fire.burning.push({ body: log, life: rand(18, 30) });
++  fire.group.add(log);
++}
++
++// Костёр: зольное дно, головни, живое пламя из спрайтов, свет и дым.
++export function buildCampfire(pos, rnd = Math.random) {
++  const group = new THREE.Group();
++
++  const ash = new THREE.Mesh(
++    new THREE.CircleGeometry(FIRE_SIDE / 2, 24),
++    new THREE.MeshLambertMaterial({ map: ashTex }),
++  );
++  ash.rotation.x = -Math.PI / 2;
++  ash.position.y = 0.005;
++  ash.receiveShadow = true;
++  group.add(ash);
++
++  // Обугленные головни вперемешку с ещё целыми чурками
++  const charred = new THREE.MeshLambertMaterial({ color: 0x2a2420 });
++  for (let i = 0; i < 5; i++) {
++    const len = rand(1.1, 1.5);
++    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.07, len, 10), i < 3 ? charred : barkMaterial);
++    const angle = (i / 5) * Math.PI * 2 + rand(-0.3, 0.3);
++    log.position.set(Math.cos(angle) * 0.2, rand(0.08, 0.2), Math.sin(angle) * 0.2);
++    log.rotation.set(rand(-0.1, 0.1), angle + Math.PI / 2, rand(-0.12, 0.12));
++    log.castShadow = true;
++    group.add(log);
++  }
++
++  // Камни по краю
++  const stoneMat = new THREE.MeshLambertMaterial({ color: 0x8b8b88, flatShading: true });
++  for (let i = 0; i < 12; i++) {
++    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(rand(0.1, 0.16), 0), stoneMat);
++    const angle = (i / 12) * Math.PI * 2;
++    stone.position.set(Math.cos(angle) * (FIRE_SIDE / 2 - 0.1), 0.06, Math.sin(angle) * (FIRE_SIDE / 2 - 0.1));
++    stone.rotation.set(rnd() * 3, rnd() * 3, rnd() * 3);
++    stone.castShadow = stone.receiveShadow = true;
++    group.add(stone);
++  }
++
++  // Пламя: мягкие пятна одного цвета, летят вверх, расходятся, гаснут.
++  const puff = (() => {
++    const c = document.createElement('canvas');
++    c.width = c.height = 64;
++    const g = c.getContext('2d');
++    const grad = g.createRadialGradient(32, 32, 2, 32, 32, 30);
++    grad.addColorStop(0, 'rgba(255,255,255,1)');
++    grad.addColorStop(1, 'rgba(255,255,255,0)');
++    g.fillStyle = grad;
++    g.fillRect(0, 0, 64, 64);
++    return new THREE.CanvasTexture(c);
++  })();
++  const LIFE = 1.35;
++  const flames = Array.from({ length: 26 }, () => {
++    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: puff, transparent: true, depthWrite: false }));
++    group.add(sprite);
++    return { sprite, age: rnd() * LIFE, base: new THREE.Vector3(), sway: rnd() * 6.28 };
++  });
++  const renew = (f) => {
++    const angle = rnd() * Math.PI * 2, rad = Math.sqrt(rnd()) * 0.4;
++    f.base.set(Math.cos(angle) * rad, 0.14 + rnd() * 0.1, Math.sin(angle) * rad);
++    f.sway = rnd() * 6.28;
++  };
++
++  const light = new THREE.PointLight(0xff8844, 2.5, 8, 1.6);
++  light.position.set(0, 0.55, 0);
++  group.add(light);
++
++  // Дым: те же мягкие пятна, серые и медленные.
++  const smokeBase = new THREE.Vector3(0, 0.9, 0);
++  const puffs = Array.from({ length: 14 }, () => {
++    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: puff, color: 0xb9b5ae, transparent: true, depthWrite: false }));
++    group.add(sprite);
++    return { sprite, age: rnd() * 4, side: rnd() < 0.5 ? -1 : 1 };
++  });
++
++  const colPure = new THREE.Color(1.0, 1.0, 1.0);
++  const colWarm = new THREE.Color(0.96, 0.78, 0.58);
++  const colFade = new THREE.Color(0.55, 0.45, 0.4);
++  const burning = [];
++  group.position.copy(pos);
++
++  function tick(dt, time) {
++    // Голодни догорают: чурка темнеет и исчезает, огонь разгорается от каждой горящей.
++    for (let i = burning.length - 1; i >= 0; i--) {
++      const b = burning[i];
++      b.life -= dt;
++      if (b.life < 4) b.body.material.opacity = b.life / 4, b.body.material.transparent = true;
++      if (b.life <= 0) { group.remove(b.body); burning.splice(i, 1); }
++    }
++    const boost = Math.min(1, burning.length * 0.3);
++
++    light.intensity = 2.2 + boost * 1.5 + Math.sin(time * 7.3) * 0.18 + Math.sin(time * 11.7) * 0.12;
++    for (const f of flames) {
++      f.age += dt;
++      if (f.age >= LIFE) { f.age = 0; renew(f); }
++      const t = f.age / LIFE;
++      const s = (0.3 + 0.6 * Math.sqrt(t)) * (1 + boost * 0.35);
++      f.sprite.position.set(
++        f.base.x * (1 - 0.3 * t) + 0.08 * t * Math.sin(time * 3.2 + f.sway),
++        f.base.y + (0.9 * f.age + 0.3 * f.age * f.age / LIFE) * (1 + boost * 0.35),
++        f.base.z * (1 - 0.3 * t),
++      );
++      f.sprite.scale.set(s, s * 1.4, 1);
++      f.sprite.material.opacity = 0.8 * Math.min(1, f.age / 0.2) * (1 - t) ** 1.4;
++      f.sprite.material.color.copy(t < 0.6 ? colPure.clone().lerp(colWarm, t / 0.6) : colWarm.clone().lerp(colFade, (t - 0.6) / 0.4));
++    }
++    for (const p of puffs) {
++      p.age += dt;
++      if (p.age >= 4) p.age = 0;
++      const t = p.age / 4;
++      p.sprite.position.set(smokeBase.x + p.side * 0.15 * t + 0.2 * t, smokeBase.y + 1.1 * p.age, smokeBase.z + 0.1 * t * t);
++      const s = 0.4 + 1.6 * t;
++      p.sprite.scale.set(s, s, 1);
++      p.sprite.material.opacity = (0.25 + boost * 0.25) * Math.min(1, p.age / 0.5) * (1 - t);
++    }
++  }
++  return { group, tick, burning };
++}
++
++// Зона приёмки: площадка плитняка между костром и поленницей.
++export function buildDropZone(pos, half = DROP_HALF) {
++  const map = pavingTex.clone();
++  map.repeat.set((half.x * 2) / 2, (half.z * 2) / 2);
++  map.needsUpdate = true;
++  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(half.x * 2, half.z * 2), new THREE.MeshLambertMaterial({ map }));
++  mesh.rotation.x = -Math.PI / 2;
++  mesh.position.set(pos.x, 0.004, pos.z);
++  mesh.receiveShadow = true;
++  return { mesh, pos, half };
++}
++
++export const isInDropZone = (p, zone) => Math.abs(p.x - zone.pos.x) <= zone.half.x && Math.abs(p.z - zone.pos.z) <= zone.half.z;
++
++// Участок переработки целиком: кострище, зона приёмки, поленница. Ставится вдоль забора
++// или реки, но не рядом с домом; ничего из построек не пересекает.
++export function placeProcessingSite(objects, treeReach = 2) {
++  const house = objects.find((o) => o.kind.name === 'house');
++  for (let tries = 0; tries < 300; tries++) {
++    const az = Math.random() * Math.PI * 2;
++    const r = rand(7, 11);
++    const site = { pos: new THREE.Vector3(Math.cos(az) * r, 0, -Math.sin(az) * r) };
++    site.yaw = Math.atan2(site.pos.x, site.pos.z) + Math.PI + rand(-0.5, 0.5); // каркасом к стволу
++    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, site.yaw, 0));
++    // Костёр слева, поленница справа, между ними площадка приёмки.
++    site.firePos = site.pos.clone().add(new THREE.Vector3(-2.6, 0, 0).applyQuaternion(q));
++    site.pilePos = site.pos.clone().add(new THREE.Vector3(2.4, 0, 0).applyQuaternion(q));
++    const boxes = [
++      { x: site.pos.x, z: site.pos.z, yaw: site.yaw, w: DROP_HALF.x * 2, d: DROP_HALF.z * 2 },
++      { x: site.firePos.x, z: site.firePos.z, yaw: site.yaw, w: FIRE_SIDE, d: FIRE_SIDE },
++      { x: site.pilePos.x, z: site.pilePos.z, yaw: site.yaw, w: PILE_SIZE.w + 0.4, d: PILE_SIZE.d + 0.4 },
++    ];
++    const near = (p) => Math.hypot(p.x, p.z) < treeReach + 4;
++    const clear = boxes.every((b) => !near(b) && objects.every((o) => Math.hypot(b.x - o.x, b.z - o.z) > b.w / 2 + o.w / 2 + 1.5));
++    // От дома — отдельный увеличенный отступ.
++    const farHouse = !house || Math.hypot(site.pos.x - house.x, site.pos.z - house.z) > 8;
++    if (clear && farHouse) return site;
++  }
++  return null;
++}
++
++// Что это за кусок: в поленницу, в костёр или оставить лежать — решают размеры.
++export function classifyPiece(part) {
++  const box = new THREE.Box3().setFromObject(part.group);
++  const size = box.getSize(new THREE.Vector3());
++  const length = Math.max(size.x, size.y, size.z);
++  const thickness = Math.min(size.x, size.y, size.z);
++  const volume = part.measure ? part.measure().volume : size.x * size.y * size.z;
++  const mass = Math.round(DENSITY * volume * 10) / 10;
++  const cm = Math.round(length * 100);
++  const isLog = thickness >= 0.09;
++  return {
++    kind: isLog ? 'log' : 'branch',
++    length, cm, radius: thickness / 2, mass,
++    fitsPile: isLog && cm >= 50 && cm <= 100,
++    title: isLog ? `Бревно (${cm} см, ${mass} кг)` : `Ветвь (~${cm} см)`,
++    verdict: isLog ? (cm >= 50 && cm <= 100 ? 'В поленницу' : 'Слишком длинное — в костёр') : 'В костёр',
++  };
++}
+diff --git a/src/main.js b/src/main.js
+index 2de7392..d457cde 100644
+--- a/src/main.js
++++ b/src/main.js
+@@ -8,6 +8,10 @@ import { makeSaw, BAR_L, BAR_W } from './saw.js';
+ import { growMaple, DENSITY } from './maple.js';
+ import { dressBark } from './bark.js';
+ import { watch, note, beat } from './watch.js';
++import {
++  buildCampfire, buildWoodpileFrame, buildDropZone, placeProcessingSite, isInDropZone,
++  classifyPiece, addLogToPile, burnLogInFire,
++} from './campfire.js';
+ 
+ const TRUNK_R = 0.3;      // радиус ствола выше корневых наплывов
+ const TREE_H = 12;
+@@ -157,10 +161,11 @@ const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0, eye:
+ // Осмотр с летающей камерой: игрок и пила замирают, камера летает сама по себе.
+ let fly = null;
+ const keys = new Set();
+-// free — ходим и смотрим; aim — пила приставлена, мышь крутит полотно; cut — пилим.
++// free — ходим и смотрим; aim — пила приставлена, мышь крутит полотно; cut — пилим; carry — несём кусок.
+ let mode = 'free';
+ let saw = null;
+ let round = null;
++let carried = null; // { body, piece } — поднятый кусок: лежит в руке, у зоны приёмки уходит в переработку
+ 
+ // Выше зоны пиления — клён (maple.js): кривой ствол, ветви по всей высоте, иногда два ствола.
+ // Он продолжает низ ствола с той же точки, в том же направлении и с тем же сечением
+@@ -186,6 +191,58 @@ function growTree(voxels) {
+   };
+ }
+ 
++// Участок переработки — один на все раунды (campfire.js): тот же модуль, что и на стенде,
++// поэтому ассеты и правки со стенда приходят в игру сами. Ставится вдоль забора или реки,
++// но с отступом от дома и самого дерева; yard — постройки участка, если их вернут yard.js.
++const site = { root: new THREE.Group(), fire: null, pile: null, zone: null };
++scene.add(site.root);
++
++function buildSite(yard = []) {
++  const place = placeProcessingSite(yard, round ? round.voxels.shape.reach : 2);
++  if (!place) return;
++  site.fire = buildCampfire(place.firePos);
++  site.pile = { group: buildWoodpileFrame(place.pilePos), row: 0, col: 0 };
++  site.zone = buildDropZone(place.pos);
++  site.root.clear();
++  site.root.add(site.fire.group, site.pile.group, site.zone.mesh);
++}
++
++// Поднять ближайший лежащий кусок дерева (G).
++function pickPiece() {
++  if (carried || !round) return;
++  let best = null, bestDist = 1.6;
++  for (const piece of round.debris) {
++    if (!piece.landed) continue;
++    const d = piece.body.position.clone().setY(player.eye).distanceTo(player.pos.clone().setY(player.eye));
++    if (d < bestDist) { bestDist = d; best = piece; }
++  }
++  if (!best) return;
++  carried = { body: best.body, piece: classifyPiece(best) };
++  round.debris.splice(round.debris.indexOf(best), 1);
++  mode = 'carry';
++  say('pick', `${carried.piece.title}: ${carried.piece.verdict}`);
++}
++
++// Сбросить кусок: в зоне приёмки он уходит в переработку, мимо — снова под ноги.
++function dropCarried() {
++  if (!carried) return;
++  const at = player.pos;
++  if (isInDropZone(at, site.zone)) {
++    if (carried.piece.fitsPile && addLogToPile(site.pile, carried.piece)) {
++      say('pile', `${carried.piece.title} — в поленницу (${site.pile.row + 1}-й ряд)`);
++    } else {
++      burnLogInFire(site.fire, carried.piece);
++      say('fire', `${carried.piece.title} — в костёр`);
++    }
++    scene.remove(carried.body);
++  } else {
++    carried.body.position.set(at.x, 0.08, at.z);
++    round.debris.push({ body: carried.body, velocity: new THREE.Vector3(), spin: new THREE.Vector3(), rest: 0.08, landed: true });
++  }
++  carried = null;
++  mode = 'free';
++}
++
+ // Ветер налетает порывами: сумма несоизмеримых волн, обрезанная снизу, — от 0 до 1.
+ function gust(t, phase) {
+   const g = Math.sin(0.31 * t + phase) + 0.5 * Math.sin(0.87 * t + 2 * phase) + 0.3 * Math.sin(2.3 * t);
+@@ -207,8 +264,10 @@ function newRound() {
+   upper.add(voxels.lift);
+   root.add(voxels.group, upper);
+   scene.add(root);
+-  const yard = []; // постройки (yard.js) пока убраны: отвлекают от дерева
++  // Постройки (yard.js) по-прежнему убраны, но участок переработки стоит: его ставит campfire.js.
++  const yard = [];
+   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
++  buildSite(yard);
+ 
+   round = {
+     root, voxels, upper, yard, ...tree,
+-- 
+2.39.5
+
