@@ -13,13 +13,16 @@ export const FIRE_POS = new THREE.Vector3(3.2, 0, -2.3), FIRE_SIDE = 2.7;
 export const MAX_LIFT_KG = 45;
 
 // Координаты хоздвора (плитка + поленница + костёр) в игровом дворе (house-view.js / main.js):
-// стоит между клёнами и берегом, лицом к деревьям и дому (+Z), на выровненной площадке WOODYARD_PAD.
-export const WOODYARD_ORIGIN = new THREE.Vector3(-6.9, 0, -7.4);
+// стоит вплотную к настоящему левому забору участка (x = -30), напротив клёнов (z = -3),
+// повёрнут на +90° (yaw = Math.PI / 2) лицом к деревьям (+X), так что за спиной поленницы — настоящий забор двора!
+export const WOODYARD_YAW = Math.PI / 2;
+export const WOODYARD_ORIGIN = new THREE.Vector3(-25.65, 0, -3.0);
+// При повороте на +90° локальное смещение плитняка PAVING_POS (-1.6, 0, -2.1) переходит в мировое (z_local, -x_local) = (-2.1, +1.6)
 export const WOODYARD_PAD = {
-  x: WOODYARD_ORIGIN.x + PAVING_POS.x,
-  z: WOODYARD_ORIGIN.z + PAVING_POS.z,
-  w: PAVING_HALF.x * 2 + 0.6,
-  d: PAVING_HALF.z * 2 + 0.6,
+  x: WOODYARD_ORIGIN.x + PAVING_POS.z,
+  z: WOODYARD_ORIGIN.z - PAVING_POS.x,
+  w: PAVING_HALF.z * 2 + 0.8,
+  d: PAVING_HALF.x * 2 + 0.8,
 };
 
 const [ash, flames, paint, heat, ashCrust, pavingTex, fenceBoardMap] = tiles([
@@ -297,37 +300,50 @@ export function classifyLimbBody(body) {
     const cm = Math.round(length * 100);
 
     const sideParts = limb.parts.slice(1);
-    const hasMajorFork = sideParts.some((p) => (p.to - p.from) > 0.55 || pointAt(p.axis, p.from).r > 0.028);
-    const isLog = radius >= 0.055 && !hasMajorFork;
+    const hasMajorFork = sideParts.some((p) => p.axis.joint === 'codominant' || (p.to - p.from) > 0.45 || pointAt(p.axis, p.from).r > 0.028);
+    const isThickStem = radius >= 0.055;
+    const isLog = isThickStem && !hasMajorFork;
     const minorTwigs = isLog ? sideParts.length : 0;
 
-    const tooHeavy = isLog ? cm > 100 || mass > MAX_LIFT_KG : mass > MAX_LIFT_KG;
-    const fitsPile = isLog && !tooHeavy && cm >= 50 && cm <= 100;
+    // Любое чистое бревно длиной до 100 см можно либо нести (до 30 кг), либо катить по земле как колесо (> 30 кг)!
+    // А если на толстом бревне остались крупные боковые ветки / развилка и оно тяжёлое, их нужно сначала отпилить.
+    const needsBranchTrim = isThickStem && hasMajorFork;
+    const canRoll = isLog && cm <= 100 && mass > 30;
+    const tooHeavy = isLog
+      ? cm > 100
+      : (needsBranchTrim && (mass > 28 || cm > 100)) || mass > MAX_LIFT_KG;
+    const fitsPile = isLog && cm >= 50 && cm <= 100;
     const kind = !isLog ? (cm <= 40 && mass < 2.5 ? 'twig' : 'branch') : 'log';
 
     const title = tooHeavy
-      ? `Тяжёлое бревно (${cm} см, ${mass} кг)`
-      : kind === 'twig'
-        ? `Откушенная мелкая ветка с листвой (${cm} см)`
-        : kind === 'branch'
-          ? `Ветвь клёна с листвой (~${cm} см, ${mass} кг)`
-          : minorTwigs > 0
-            ? `Бревно с веточками (${cm} см, ${mass} кг)`
-            : `Бревно (${cm} см, ${mass} кг)`;
+      ? (needsBranchTrim ? `Сдвоенное бревно / с сучьями (${cm} см, ${mass} кг)` : `Длинное бревно (${cm} см, ${mass} кг)`)
+      : canRoll
+        ? `Тяжёлое бревно (${cm} см, ${mass} кг)`
+        : kind === 'twig'
+          ? `Откушенная мелкая ветка с листвой (${cm} см)`
+          : kind === 'branch'
+            ? (needsBranchTrim ? `Бревно с развилкой (${cm} см, ${mass} кг)` : `Ветвь клёна с листвой (~${cm} см, ${mass} кг)`)
+            : minorTwigs > 0
+              ? `Бревно с веточками (${cm} см, ${mass} кг)`
+              : `Бревно (${cm} см, ${mass} кг)`;
 
     const verdict = tooHeavy
-      ? 'Бревно тяжёлое — распили на части!'
+      ? (needsBranchTrim ? 'Сначала отпили крупные боковые ветки / развилку!' : 'Бревно длиннее метра — распили на части!')
       : fitsPile
-        ? (minorTwigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки с листвой откусятся для костра' : 'Подходит в поленницу (50–100 см)')
-        : kind === 'twig'
-          ? 'Мелкая ветка от полена → в костёр'
-          : kind === 'branch'
-            ? `Крупная ветка (${mass} кг) → в костёр (горит с дымом)`
-            : `Короткий чурбак (${cm} см < 50 см) → пойдёт в костёр`;
+        ? (canRoll
+          ? 'В поленницу (50–100 см) · тяжёлое — катим по земле как колесо'
+          : minorTwigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки с листвой откусятся для костра' : 'Подходит в поленницу (50–100 см)')
+        : needsBranchTrim
+          ? 'С развилкой в поленницу не ляжет — отпили сук или брось в костёр'
+          : kind === 'twig'
+            ? 'Мелкая ветка от полена → в костёр'
+            : kind === 'branch'
+              ? `Крупная ветка (${mass} кг) → в костёр (горит с дымом)`
+              : `Короткий чурбак (${cm} см < 50 см) → пойдёт в костёр`;
 
     body.wood = {
       kind, length, cm, radius, mass, cutDir,
-      twigs: minorTwigs, fitsPile, tooHeavy,
+      twigs: minorTwigs, fitsPile, tooHeavy, canRoll, needsBranchTrim,
       holdDist: kind === 'branch' ? THREE.MathUtils.clamp(1.6 + body.reach * 0.45, 1.7, 2.45) : 1.65,
       title, verdict,
     };
@@ -335,41 +351,62 @@ export function classifyLimbBody(body) {
   }
 
   // Воксельный кусок низа ствола (клин из подпила или отпиленный чурбак комля из dropPiece в main.js)
-  const box = new THREE.Box3().setFromObject(body.object);
-  const size = box.getSize(new THREE.Vector3());
-  const length = Math.max(size.x, size.y, size.z);
-  const radius = Math.max(0.04, Math.min(size.x, size.z) / 2);
-  const cutDir = size.y >= size.x && size.y >= size.z
-    ? new THREE.Vector3(0, 1, 0)
-    : size.x >= size.z ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+  body.object.updateMatrixWorld(true);
+  const localBox = new THREE.Box3();
+  body.object.traverse((child) => {
+    if (!child.isMesh || !child.geometry) return;
+    child.geometry.computeBoundingBox();
+    if (child.geometry.boundingBox) {
+      const b = child.geometry.boundingBox.clone();
+      b.min.add(child.position);
+      b.max.add(child.position);
+      localBox.union(b);
+    }
+  });
+  const size = localBox.isEmpty() ? new THREE.Vector3(0.3, 0.5, 0.3) : localBox.getSize(new THREE.Vector3());
+  // На стоящем комле волокна идут вдоль Y, а ширина и глубина сечения — X и Z
+  const length = size.y;
+  const maxCross = Math.max(size.x, size.z), minCross = Math.max(0.04, Math.min(size.x, size.z));
+  const isTwinBase = maxCross > minCross * 1.45 && maxCross > 0.42;
+  const radius = Math.max(0.05, (size.x + size.z) / 4);
+  const cutDir = new THREE.Vector3(0, 1, 0);
   const mass = Math.round((1 / body.invMass) * 10) / 10;
   const cm = Math.round(length * 100);
-  const tooHeavy = cm > 100 || mass > MAX_LIFT_KG;
+  const tooHeavy = isTwinBase || cm > 100;
+  const canRoll = !tooHeavy && cm <= 100 && mass > 30;
   const fitsPile = !tooHeavy && cm >= 50 && cm <= 100 && radius >= 0.055;
   const kind = fitsPile ? 'log' : 'chunk';
-  const title = tooHeavy
-    ? `Тяжёлый комель (${cm} см, ${mass} кг)`
-    : fitsPile
-      ? `Бревно комля (${cm} см, ${mass} кг)`
-      : `Обрезок ствола (${cm} см, ${mass} кг)`;
-  const verdict = tooHeavy
-    ? 'Бревно тяжёлое — распили на части!'
-    : fitsPile
-      ? 'Подходит в поленницу (50–100 см)'
-      : `Короткий кусок (${cm} см < 50 см) → пойдёт в костёр`;
+  const title = isTwinBase
+    ? `Сдвоенный комель (${cm} см, ${mass} кг)`
+    : tooHeavy
+      ? `Длинный комель (${cm} см, ${mass} кг)`
+      : canRoll
+        ? `Тяжёлый комель (${cm} см, ${mass} кг)`
+        : fitsPile
+          ? `Бревно комля (${cm} см, ${mass} кг)`
+          : `Обрезок ствола (${cm} см, ${mass} кг)`;
+  const verdict = isTwinBase
+    ? 'Сдвоенное бревно — сначала раздели стволы пилой!'
+    : tooHeavy
+      ? 'Бревно длиннее метра — распили на части!'
+      : fitsPile
+        ? (canRoll ? 'В поленницу (50–100 см) · тяжёлое — катим как колесо' : 'Подходит в поленницу (50–100 см)')
+        : `Короткий кусок (${cm} см < 50 см) → пойдёт в костёр`;
 
   body.wood = {
     kind, length, cm, radius, mass, cutDir,
-    twigs: 0, fitsPile, tooHeavy, holdDist: 1.65,
+    twigs: 0, fitsPile, tooHeavy, canRoll,
+    holdDist: 1.65,
     title, verdict,
   };
   return body;
 }
 
 // Единый контроллер хоздвора (плитняк + поленница + костёр) — работает одинаково на стенде (wood-stand.js) и в игре (main.js).
-export function createWoodyard({ scene, origin = new THREE.Vector3(), withFence = true, rnd = generator(42), onNotice = () => {}, onPileCount = () => {} }) {
+export function createWoodyard({ scene, origin = new THREE.Vector3(), yaw = 0, withFence = true, rnd = generator(42), onNotice = () => {}, onPileCount = () => {} }) {
   const root = new THREE.Group();
   root.position.copy(origin);
+  root.rotation.y = yaw;
   scene.add(root);
 
   const paving = makeYardPaving();
@@ -427,52 +464,54 @@ export function createWoodyard({ scene, origin = new THREE.Vector3(), withFence 
   reset();
 
   function dropZoneAt(worldPos) {
-    const lx = worldPos.x - root.position.x, lz = worldPos.z - root.position.z;
-    if (isOnEmberBed(lx - FIRE_POS.x, lz - FIRE_POS.z)) return 'embers';
-    if (Math.abs(lx - PAVING_POS.x) <= PAVING_HALF.x && Math.abs(lz - PAVING_POS.z) <= PAVING_HALF.z) return 'paving';
+    root.updateMatrixWorld();
+    const local = root.worldToLocal(worldPos.clone());
+    if (isOnEmberBed(local.x - FIRE_POS.x, local.z - FIRE_POS.z)) return 'embers';
+    if (Math.abs(local.x - PAVING_POS.x) <= PAVING_HALF.x && Math.abs(local.z - PAVING_POS.z) <= PAVING_HALF.z) return 'paving';
     return null;
   }
 
   function canWalk(wx, wz) {
+    root.updateMatrixWorld();
+    const local = root.worldToLocal(new THREE.Vector3(wx, root.position.y, wz));
     const fireBlock = FIRE_SIDE * 0.46 + 0.35;
-    const fx = root.position.x + FIRE_POS.x, fz = root.position.z + FIRE_POS.z;
-    return !(Math.abs(wx - fx) < fireBlock && Math.abs(wz - fz) < fireBlock);
+    return !(Math.abs(local.x - FIRE_POS.x) < fireBlock && Math.abs(local.z - FIRE_POS.z) < fireBlock);
   }
 
   function clampPlayer(pos) {
+    root.updateMatrixWorld();
+    const local = root.worldToLocal(pos.clone());
     const fireBlock = FIRE_SIDE * 0.46 + 0.35;
-    const fx = root.position.x + FIRE_POS.x, fz = root.position.z + FIRE_POS.z;
-    const fdx = pos.x - fx, fdz = pos.z - fz;
+    const fdx = local.x - FIRE_POS.x, fdz = local.z - FIRE_POS.z;
     if (Math.abs(fdx) < fireBlock && Math.abs(fdz) < fireBlock) {
       if (fireBlock - Math.abs(fdx) < fireBlock - Math.abs(fdz)) {
-        pos.x = fx + (fdx >= 0 ? fireBlock : -fireBlock);
+        local.x = FIRE_POS.x + (fdx >= 0 ? fireBlock : -fireBlock);
       } else {
-        pos.z = fz + (fdz >= 0 ? fireBlock : -fireBlock);
+        local.z = FIRE_POS.z + (fdz >= 0 ? fireBlock : -fireBlock);
       }
+      pos.copy(root.localToWorld(local));
     }
   }
 
   function sendToCampfire(body, customNotice = null) {
     if (!body.wood) classifyLimbBody(body);
-    const worldPos = body.object.getWorldPosition(new THREE.Vector3());
-    const worldQuat = body.object.getWorldQuaternion(new THREE.Quaternion());
-    root.add(body.object);
-    const startLocalPos = worldPos.sub(root.position);
-    body.object.position.copy(startLocalPos);
-    body.object.quaternion.copy(worldQuat);
+    root.updateMatrixWorld();
+    root.attach(body.object);
+    const startLocalPos = body.object.position.clone();
+    const startLocalQuat = body.object.quaternion.clone();
 
     const local = new THREE.Vector2(startLocalPos.x - FIRE_POS.x, startLocalPos.z - FIRE_POS.z);
     if (local.lengthSq() > 1.3 ** 2) local.set((rnd() - 0.5) * 0.87, (rnd() - 0.5) * 0.74);
     local.clampLength(0, 0.68);
     const support = campfire.heightAt(local.x, local.y);
     const targetPos = new THREE.Vector3(FIRE_POS.x + local.x, support + body.wood.radius, FIRE_POS.z + local.y);
-    const yaw = rnd() * Math.PI * 2;
-    const targetQuat = new THREE.Quaternion().setFromUnitVectors(body.wood.cutDir, new THREE.Vector3(Math.cos(yaw), 0, Math.sin(yaw)));
+    const fYaw = rnd() * Math.PI * 2;
+    const targetQuat = new THREE.Quaternion().setFromUnitVectors(body.wood.cutDir, new THREE.Vector3(Math.cos(fYaw), 0, Math.sin(fYaw)));
 
     burningItems.push({
       object: body.object, limb: body.limb, mass: body.wood.mass, local,
-      length: body.wood.length, reach: body.reach ?? body.wood.length / 2, yaw,
-      fromPos: startLocalPos, fromQuat: worldQuat, toPos: targetPos, toQuat: targetQuat,
+      length: body.wood.length, reach: body.reach ?? body.wood.length / 2, yaw: fYaw,
+      fromPos: startLocalPos, fromQuat: startLocalQuat, toPos: targetPos, toQuat: targetQuat,
       flyT: 0, flyDuration: 0.48, burnT: 0, burnDuration: body.wood.kind === 'twig' ? 4.2 : 6.8,
       coating: null, deposited: false,
     });
@@ -481,39 +520,52 @@ export function createWoodyard({ scene, origin = new THREE.Vector3(), withFence 
 
   function acceptLogIntoWoodpile(body) {
     if (!body.wood) classifyLimbBody(body);
-    const worldPos = body.object.getWorldPosition(new THREE.Vector3());
-    const worldQuat = body.object.getWorldQuaternion(new THREE.Quaternion());
-    root.add(body.object);
-    const startLocalPos = worldPos.sub(root.position);
-    body.object.position.copy(startLocalPos);
-    body.object.quaternion.copy(worldQuat);
+    root.updateMatrixWorld();
+    root.attach(body.object);
+    const startLocalPos = body.object.position.clone();
+    const startLocalQuat = body.object.quaternion.clone();
 
     let snippedNote = '';
-    if (body.limb && body.limb.parts.length > 1) {
-      const sideParts = body.limb.parts.slice(1);
-      const sideCards = body.limb.cards;
-      const twigLimb = new Limb(sideParts, sideCards, {
-        skin: body.limb.skin,
-        cloud: body.limb.cloud,
-        zone: 0,
-      }).dress();
-      const twigObj = new THREE.Group();
-      twigLimb.group.position.copy(twigLimb.weight.com).negate();
-      twigLimb.group.quaternion.identity();
-      twigObj.add(twigLimb.group);
-      twigObj.position.copy(startLocalPos).add(root.position);
-      twigObj.quaternion.copy(worldQuat);
-      scene.add(twigObj);
-      const twigFakeBody = { object: twigObj, limb: twigLimb, reach: 0.35, invMass: 1 / Math.max(0.5, twigLimb.weight.mass) };
-      classifyLimbBody(twigFakeBody);
-      sendToCampfire(twigFakeBody);
-
-      body.limb.parts = [body.limb.parts[0]];
+    if (body.limb) {
+      if (body.limb.parts.length > 1) {
+        const sideParts = body.limb.parts.slice(1);
+        const sideCards = body.limb.cards;
+        const twigLimb = new Limb(sideParts, sideCards, {
+          skin: body.limb.skin,
+          cloud: body.limb.cloud,
+          zone: 0,
+        }).dress();
+        const twigObj = new THREE.Group();
+        twigLimb.group.position.copy(twigLimb.weight.com).negate();
+        twigLimb.group.quaternion.identity();
+        twigObj.add(twigLimb.group);
+        twigObj.position.copy(startLocalPos);
+        twigObj.quaternion.copy(startLocalQuat);
+        root.add(twigObj);
+        const twigFakeBody = { object: twigObj, limb: twigLimb, reach: 0.35, invMass: 1 / Math.max(0.5, twigLimb.weight.mass) };
+        classifyLimbBody(twigFakeBody);
+        sendToCampfire(twigFakeBody);
+        snippedNote = ' · мелкие веточки с листвой улетели в костёр';
+      }
+      // Сбрасываем возможный отщеп/жёлоб (tongue / groove) и закрываем оба торца, чтобы в поленнице лежало цельное круглое полено
+      const cleanPart = { ...body.limb.parts[0], tongue: null, groove: null, cutFrom: true, cutTo: true };
+      body.limb.parts = [cleanPart];
       body.limb.cards = [];
       body.limb.dress();
       body.limb.group.position.copy(body.limb.weight.com).negate();
       classifyLimbBody(body);
-      snippedNote = ' · мелкие веточки с листвой улетели в костёр';
+    }
+
+    // Если полено толще ячейки поленницы (например, толстый комель у корня), аккуратно подгоняем его поперечник под соту SLOT_R,
+    // чтобы оно не проваливалось сквозь настил и не пересекало соседние брёвна
+    if (body.wood.radius > SLOT_R * 1.04) {
+      const s = SLOT_R / body.wood.radius;
+      const d = body.wood.cutDir;
+      body.object.scale.set(
+        Math.abs(d.x) > 0.7 ? 1 : s,
+        Math.abs(d.y) > 0.7 ? 1 : s,
+        Math.abs(d.z) > 0.7 ? 1 : s,
+      );
     }
 
     let pile = piles[piles.length - 1];
@@ -531,7 +583,7 @@ export function createWoodyard({ scene, origin = new THREE.Vector3(), withFence 
     flyingLogs.push({
       object: body.object,
       fromPos: startLocalPos,
-      fromQuat: worldQuat,
+      fromQuat: startLocalQuat,
       toPos: targetPos,
       toQuat: targetQuat,
       t: 0,

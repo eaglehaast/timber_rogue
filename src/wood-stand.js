@@ -274,6 +274,7 @@ export async function startWoodStand() {
       { length: 0.60, radius: 0.095, twigs: 0, pos: new THREE.Vector3(-1.6, 0.14, 0.85), yaw: 0.15 },
       { length: 0.76, radius: 0.105, twigs: 4, pos: new THREE.Vector3(-0.5, 0.16, 0.95), yaw: -0.25 },
       { length: 0.92, radius: 0.105, twigs: 3, pos: new THREE.Vector3(0.65, 0.15, 0.85), yaw: 0.1 },
+      { length: 0.84, radius: 0.155, twigs: 0, pos: new THREE.Vector3(1.1, 0.18, 0.85), yaw: 0.25 }, // тяжёлый комель (~48 кг) — катится как колесо!
       { length: 0.54, radius: 0.095, twigs: 2, pos: new THREE.Vector3(-2.1, 0.14, 1.45), yaw: -0.15 },
       { length: 0.85, radius: 0.10,  twigs: 0, pos: new THREE.Vector3(0.05, 0.14, 1.55), yaw: 0.35 },
       { length: 0.34, radius: 0.095, twigs: 0, pos: new THREE.Vector3(-1.25, 0.13, 1.75), yaw: 0.6 },
@@ -329,12 +330,22 @@ export async function startWoodStand() {
       const twigBody = createLimbBody(world, scene, twigLimb, body.position.clone(), body.quaternion.clone());
       sendToCampfire(twigBody);
 
-      body.limb.parts = [body.limb.parts[0]];
+      const cleanPart = { ...body.limb.parts[0], tongue: null, groove: null, cutFrom: true, cutTo: true };
+      body.limb.parts = [cleanPart];
       body.limb.cards = [];
       body.limb.dress();
       body.limb.group.position.copy(body.limb.weight.com).negate();
       classifyLimbBody(body);
       snippedNote = ' · мелкие веточки с листвой улетели в костёр';
+    }
+    if (body.wood.radius > SLOT_R * 1.04) {
+      const s = SLOT_R / body.wood.radius;
+      const d = body.wood.cutDir;
+      body.object.scale.set(
+        Math.abs(d.x) > 0.7 ? 1 : s,
+        Math.abs(d.y) > 0.7 ? 1 : s,
+        Math.abs(d.z) > 0.7 ? 1 : s,
+      );
     }
 
     let pile = piles[piles.length - 1];
@@ -418,7 +429,8 @@ export async function startWoodStand() {
   const keys = new Set(), stick = bindStick(el('stick')), actionBtn = el('touch-saw');
   actionBtn.textContent = 'Взять / Бросить';
 
-  let held = null, heldYawOffset = 0, aimed = null;
+  let held = null, heldYawOffset = 0, heldRollAngle = 0, aimed = null;
+  const prevHeldPos = new THREE.Vector3();
   const raycaster = new THREE.Raycaster(), centerNdc = new THREE.Vector2(0, 0);
   const holdTargetPos = new THREE.Vector3(), holdTargetQuat = new THREE.Quaternion(), viewDir = new THREE.Vector3();
 
@@ -452,7 +464,7 @@ export async function startWoodStand() {
     const target = findAimedBody();
     if (!target) return;
     if (target.wood.tooHeavy) {
-      sayNotice('Бревно тяжёлое — распили на части!', 3500);
+      sayNotice(target.wood.verdict || 'Бревно тяжёлое — распили на части!', 3500);
       updateHudText();
       return;
     }
@@ -461,6 +473,8 @@ export async function startWoodStand() {
     droppedItems.delete(target);
     held = target;
     heldYawOffset = new THREE.Euler().setFromQuaternion(held.quaternion, 'YXZ').y - player.yaw;
+    heldRollAngle = 0;
+    prevHeldPos.copy(held.position);
     updateHudText();
   }
 
@@ -589,17 +603,32 @@ export async function startWoodStand() {
     eyeCamera(camera, player);
 
     if (held) {
-      camera.getWorldDirection(viewDir);
-      holdTargetPos.copy(camera.position).addScaledVector(viewDir, held.wood.holdDist ?? 1.7);
-      holdTargetPos.y += HOLD_DROP_LOW;
-      const minHeight = Math.max(0.18, held.wood.radius + 0.08);
-      if (holdTargetPos.y < minHeight) holdTargetPos.y = minHeight;
-
       const lerpFactor = 1 - Math.exp(-18 * dt);
-      held.position.lerp(holdTargetPos, lerpFactor);
-      holdTargetQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw + heldYawOffset);
-      held.quaternion.slerp(holdTargetQuat, lerpFactor);
-      held.place();
+      if (held.wood.canRoll) {
+        const r = Math.max(0.08, held.wood.radius || 0.14);
+        holdTargetPos.copy(player.pos).addScaledVector(forward, 1.45);
+        holdTargetPos.y = r;
+        held.position.lerp(holdTargetPos, lerpFactor);
+        const signedDist = held.position.clone().sub(prevHeldPos).dot(forward);
+        heldRollAngle += signedDist / r;
+        prevHeldPos.copy(held.position);
+        const alignAcross = new THREE.Quaternion().setFromUnitVectors(held.wood.cutDir, right);
+        const wheelSpin = new THREE.Quaternion().setFromAxisAngle(right, heldRollAngle);
+        holdTargetQuat.copy(wheelSpin.multiply(alignAcross));
+        held.quaternion.slerp(holdTargetQuat, lerpFactor);
+        held.place();
+      } else {
+        camera.getWorldDirection(viewDir);
+        holdTargetPos.copy(camera.position).addScaledVector(viewDir, held.wood.holdDist ?? 1.7);
+        holdTargetPos.y += HOLD_DROP_LOW;
+        const minHeight = Math.max(0.18, held.wood.radius + 0.08);
+        if (holdTargetPos.y < minHeight) holdTargetPos.y = minHeight;
+
+        held.position.lerp(holdTargetPos, lerpFactor);
+        holdTargetQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), player.yaw + heldYawOffset);
+        held.quaternion.slerp(holdTargetQuat, lerpFactor);
+        held.place();
+      }
       aimed = null;
     } else {
       aimed = findAimedBody();

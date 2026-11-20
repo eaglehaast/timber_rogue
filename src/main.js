@@ -16,7 +16,7 @@ import { dressBark, dressLimbs } from './bark.js';
 import { watch, note, beat, pauseWatch, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, gust } from './wind.js';
-import { createWoodyard, classifyLimbBody, WOODYARD_ORIGIN, HOLD_DROP_LOW, PICK_RANGE } from './campfire.js';
+import { createWoodyard, classifyLimbBody, WOODYARD_ORIGIN, WOODYARD_YAW, HOLD_DROP_LOW, PICK_RANGE } from './campfire.js';
 
 let woodyard = null;
 
@@ -687,18 +687,21 @@ function grab() {
   const { tree, body } = got;
   if (!body.wood) classifyLimbBody(body);
   if (body.wood.tooHeavy) {
-    notice('Бревно тяжёлое — распили на части!');
+    notice(body.wood.verdict || 'Бревно тяжёлое — распили на части!');
     return;
   }
   const idx = tree.world.bodies.indexOf(body);
   if (idx !== -1) tree.world.bodies.splice(idx, 1);
   const yawOffset = new THREE.Euler().setFromQuaternion(body.quaternion, 'YXZ').y - player.yaw;
+  const worldPos = body.position.clone().add(tree.root.position);
   grasp = {
     tree,
     body,
     yawOffset,
+    rollAngle: 0,
+    prevWorldPos: worldPos.clone(),
     mass: body.wood.mass,
-    worldPos: body.position.clone().add(tree.root.position),
+    worldPos,
   };
 }
 
@@ -737,9 +740,36 @@ function letGo(why) {
   if (why) notice(why);
 }
 
-// Кусок плавно парит в воздухе перед взглядом игрока (не проваливаясь ниже земли), поворачиваясь вместе с игроком.
+// Лёгкие и средние куски плавно парят в воздухе перед игроком, а тяжёлые брёвна (до 1 м длиной) катятся по земле перед игроком как колесо.
 function carry(dt) {
   const { tree, body, yawOffset } = grasp;
+  const lerpFactor = 1 - Math.exp(-18 * dt);
+
+  if (body.wood?.canRoll) {
+    const forward = forwardOf(player.yaw);
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+    const r = Math.max(0.08, body.wood.radius || 0.14);
+    const targetWorld = player.pos.clone().addScaledVector(forward, 1.45);
+    targetWorld.y = ground(targetWorld.x, targetWorld.z) + r;
+
+    const targetLocal = targetWorld.clone().sub(tree.root.position);
+    body.position.lerp(targetLocal, lerpFactor);
+    grasp.worldPos.copy(body.position).add(tree.root.position);
+
+    const moveVec = grasp.worldPos.clone().sub(grasp.prevWorldPos);
+    const signedDist = moveVec.dot(forward);
+    grasp.rollAngle += signedDist / r;
+    grasp.prevWorldPos.copy(grasp.worldPos);
+
+    // Ось бревна (cutDir) ставим поперёк хода (вдоль right) и крутим вокруг right на угол качения rollAngle
+    const alignAcross = new THREE.Quaternion().setFromUnitVectors(body.wood.cutDir, right);
+    const wheelSpin = new THREE.Quaternion().setFromAxisAngle(right, grasp.rollAngle);
+    const targetQuat = wheelSpin.multiply(alignAcross);
+    body.quaternion.slerp(targetQuat, lerpFactor);
+    body.place();
+    return;
+  }
+
   const holdDist = body.wood?.holdDist ?? 1.7;
   const targetWorld = eyeOf().addScaledVector(lookOf(), holdDist);
   targetWorld.y += HOLD_DROP_LOW;
@@ -747,7 +777,6 @@ function carry(dt) {
   if (targetWorld.y < minHeight) targetWorld.y = minHeight;
 
   const targetLocal = targetWorld.clone().sub(tree.root.position);
-  const lerpFactor = 1 - Math.exp(-18 * dt);
   body.position.lerp(targetLocal, lerpFactor);
   const targetQuat = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw + yawOffset);
   body.quaternion.slerp(targetQuat, lerpFactor);
@@ -1841,15 +1870,16 @@ function hint() {
   if (kit[held].bar) return '';
   if (grasp) {
     const zone = woodyard?.dropZoneAt(grasp.worldPos);
+    const rolling = grasp.body.wood?.canRoll;
     if (zone === 'embers') return 'ЛКМ — бросить в угли (сгорит целиком)';
-    if (zone === 'paving') return grasp.body.wood?.fitsPile ? 'ЛКМ — уложить в поленницу' : 'ЛКМ — отправить в костёр';
-    return `Несёшь: ${grasp.body.wood?.title ?? `${Math.round(grasp.mass)} кг`} · ЛКМ — положить`;
+    if (zone === 'paving') return grasp.body.wood?.fitsPile ? (rolling ? 'ЛКМ — закатить в поленницу' : 'ЛКМ — уложить в поленницу') : 'ЛКМ — отправить в костёр';
+    return `${rolling ? 'Катишь' : 'Несёшь'}: ${grasp.body.wood?.title ?? `${Math.round(grasp.mass)} кг`} · ЛКМ — отпустить`;
   }
   const got = reachable(eyeOf(), lookOf());
   if (!got) return '';
   return got.body.wood?.tooHeavy
-    ? `${got.body.wood.title} — Бревно тяжёлое, распили на части!`
-    : `${got.body.wood?.title ?? `${Math.round(1 / got.body.invMass)} кг`} · ЛКМ — взять`;
+    ? `${got.body.wood.title} — ${got.body.wood.verdict}`
+    : `${got.body.wood?.title ?? `${Math.round(1 / got.body.invMass)} кг`} · ЛКМ — ${got.body.wood?.canRoll ? 'катить' : 'взять'}`;
 }
 
 // Захват мыши может не дать браузер (например, без жеста пользователя); игра от этого не ломается.
@@ -2144,7 +2174,8 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
   woodyard = createWoodyard({
     scene,
     origin: WOODYARD_ORIGIN,
-    withFence: true,
+    yaw: WOODYARD_YAW,
+    withFence: false,
     onNotice: (msg) => {
       notice(msg);
       if (round) {
