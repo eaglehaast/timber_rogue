@@ -3,7 +3,7 @@ import { MOUSE, fieldOfView, makePlayer, forwardOf, turnHead, walkInput, walkSpe
 import { Body, World } from './bodies.js';
 import { dressBark, dressLimbs } from './bark.js';
 import { trunkShape, dressWood } from './trunk.js';
-import { growMaple, barkGeometry } from './maple.js';
+import { growMaple, barkGeometry, pointAt } from './maple.js';
 import { Limb } from './limbs.js';
 import { tiles, soften } from './surface.js';
 import { Smoke } from './smoke.js';
@@ -88,99 +88,134 @@ function makeLogAxis(length, radius, seedPhase = 0) {
   };
 }
 
-// Собирает мелкую веточку с листвой (которая сидит на бревне и «откусывается» в зоне приёмки).
-function makeTwigMesh(tLen = 0.28) {
-  const g = new THREE.Group();
-  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.016, tLen, 7), limbSkin[0]);
-  stem.castShadow = true;
-  g.add(stem);
-  const leafMat = new THREE.MeshLambertMaterial({ color: 0x5c7d3e, side: THREE.DoubleSide });
-  for (let k = 0; k < 3; k++) {
-    const leaf = new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.07), leafMat);
-    const a = k * 2.1;
-    leaf.position.set(Math.cos(a) * 0.04, tLen * (0.15 + k * 0.14), Math.sin(a) * 0.04);
-    leaf.rotation.set(0.4, a, 0.3);
-    g.add(leaf);
-  }
-  return g;
-}
-
-// Создаёт отдельное физическое тело для «откушенной» от полена мелкой ветки с листвой, остающейся в зоне приёмки.
-function createSnippedTwigBody(world, scene, worldPos, yaw) {
-  const length = 0.32, radius = 0.025, mass = 0.6;
-  const group = new THREE.Group();
-  const mesh = makeTwigMesh(length);
-  mesh.rotation.x = Math.PI / 2;
-  group.add(mesh);
-  scene.add(group);
-  const body = new Body(group, {
-    mass,
-    inertia: rodInertia(mass, radius, length),
-    position: worldPos.clone(),
-    quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
-    capsules: [{ a: new THREE.Vector3(0, 0, -0.12), b: new THREE.Vector3(0, 0, 0.12), r: radius }],
-  });
-  body.wood = {
-    kind: 'twig', length, cm: 32, radius, mass, fitsPile: false, holdDist: 1.45,
-    title: 'Откушенная мелкая ветка с листвой (32 см)',
-    verdict: 'Мелкая ветка от полена → осталась в зоне приёмки для костра',
-  };
-  world.add(body);
-  return body;
-}
-
-// Собирает настоящее игровое бревно-отпил ствола вдоль локальной оси Z (срез смотрит вдоль +Z и -Z).
-function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }) {
-  const group = new THREE.Group();
-  const axis = makeLogAxis(length, radius, pos.x * 3.1 + pos.z * 1.7 + length * 5);
-  const geo = barkGeometry([{ axis, from: 0, to: length, cutFrom: true, cutTo: true }]);
-  // Центрируем вертикальный ствол (0..length по Y) и кладём горизонтально вдоль оси Z:
-  geo.translate(0, -length / 2, 0);
-  geo.rotateX(Math.PI / 2);
-  const trunkMesh = new THREE.Mesh(geo, limbSkin);
-  trunkMesh.castShadow = trunkMesh.receiveShadow = true;
-  group.add(trunkMesh);
-
-  const twigGroup = new THREE.Group();
-  for (let i = 0; i < twigs; i++) {
-    const tLen = 0.24 + (i % 2) * 0.08;
-    const mesh = makeTwigMesh(tLen);
-    const z = (i / Math.max(1, twigs - 1) - 0.5) * (length * 0.62), a = i * 2.1 + 0.6;
-    mesh.position.set(Math.cos(a) * (radius + tLen * 0.36), Math.sin(a) * (radius + tLen * 0.36), z);
-    mesh.rotation.set((i % 2 ? 1 : -1) * 0.45, 0, -Math.sin(a) * 0.85);
-    twigGroup.add(mesh);
-  }
-  if (twigs > 0) group.add(twigGroup);
-  scene.add(group);
-
-  const half = Math.max(0.02, length / 2 - radius);
-  const mass = Math.round(Math.PI * radius * radius * length * 750 * 10) / 10;
-  const body = new Body(group, {
-    mass,
-    inertia: rodInertia(mass, radius, length),
-    position: pos.clone(),
-    quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
-    capsules: [{ a: new THREE.Vector3(0, 0, -half), b: new THREE.Vector3(0, 0, half), r: radius }],
-  });
-
+// Анализирует любое настоящее игровое тело отпила (body с body.limb из src/main.js):
+// находит главную ось (mainPart), вектор направления между спилами (cutDir), длину, вес и наличие боковых веточек.
+function classifyLimbBody(body) {
+  const { limb } = body;
+  const mainPart = limb.parts[0];
+  const p0 = pointAt(mainPart.axis, mainPart.from), p1 = pointAt(mainPart.axis, mainPart.to);
+  const cutVec = p1.p.clone().sub(p0.p);
+  const length = mainPart.to - mainPart.from;
+  const cutDir = cutVec.lengthSq() > 1e-6 ? cutVec.normalize() : new THREE.Vector3(0, 0, 1);
+  const radius = (p0.r + p1.r) / 2;
+  const mass = Math.round(limb.weight.mass * 10) / 10;
   const cm = Math.round(length * 100);
-  const tooHeavy = cm > 100;
-  const fitsPile = cm >= 50 && cm <= 100;
+
+  // Боковые оси на этом куске: мелкие веточки (до 55 см и тоньше 2.5 см) откусываются при укладке в поленницу,
+  // а крупные развилки делают кусок веткой для костра.
+  const sideParts = limb.parts.slice(1);
+  const hasMajorFork = sideParts.some((p) => (p.to - p.from) > 0.55 || pointAt(p.axis, p.from).r > 0.028);
+  const isLog = radius >= 0.055 && !hasMajorFork;
+  const minorTwigs = isLog ? sideParts.length : 0;
+
+  const tooHeavy = isLog ? cm > 100 || mass > MAX_LIFT_KG : mass > MAX_LIFT_KG;
+  const fitsPile = isLog && !tooHeavy && cm >= 50 && cm <= 100;
+  const kind = !isLog ? (cm <= 40 && mass < 2.5 ? 'twig' : 'branch') : 'log';
+
+  const title = tooHeavy
+    ? `Тяжёлое бревно (${cm} см, ${mass} кг)`
+    : kind === 'twig'
+      ? `Откушенная мелкая ветка с листвой (${cm} см)`
+      : kind === 'branch'
+        ? `Ветвь клёна с листвой (~${cm} см, ${mass} кг)`
+        : minorTwigs > 0
+          ? `Бревно с веточками (${cm} см, ${mass} кг)`
+          : `Бревно (${cm} см, ${mass} кг)`;
+
+  const verdict = tooHeavy
+    ? 'Бревно тяжёлое — распили на части!'
+    : fitsPile
+      ? (minorTwigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки с листвой откусятся для костра' : 'Подходит в поленницу (50–100 см)')
+      : kind === 'twig'
+        ? 'Мелкая ветка от полена → осталась в зоне приёмки для костра'
+        : kind === 'branch'
+          ? `Крупная ветка (${mass} кг) → в костёр (горит с дымом)`
+          : `Короткий чурбак (${cm} см < 50 см) → пойдёт в костёр`;
+
   body.wood = {
-    kind: 'log', length, cm, radius, mass, twigs, twigGroup, fitsPile, tooHeavy, holdDist: 1.65,
-    title: tooHeavy
-      ? `Тяжёлое бревно (${cm} см, ${Math.round(mass)} кг)`
-      : twigs > 0
-        ? `Бревно с веточками (${cm} см, ${Math.round(mass)} кг)`
-        : `Бревно (${cm} см, ${Math.round(mass)} кг)`,
-    verdict: tooHeavy
-      ? 'Бревно тяжёлое — распили на части!'
-      : fitsPile
-        ? (twigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки с листвой откусятся для костра' : 'Подходит в поленницу (50–100 см)')
-        : `Короткий чурбак (${cm} см < 50 см) → пойдёт в костёр`,
+    kind, length, cm, radius, mass, cutDir,
+    twigs: minorTwigs, fitsPile, tooHeavy,
+    holdDist: kind === 'branch' ? THREE.MathUtils.clamp(1.6 + body.reach * 0.45, 1.7, 2.45) : 1.65,
+    title, verdict,
   };
+  return body;
+}
+
+// Игровая функция создания физического тела Body из любого отпиленного куска Limb (один-в-один с limbBody в src/main.js).
+function createLimbBody(world, scene, limb, position, quaternion) {
+  const { mass, com, inertia } = limb.weight;
+  const object = new THREE.Group();
+  limb.group.position.copy(com).negate();
+  limb.group.quaternion.identity();
+  object.add(limb.group);
+  scene.add(object);
+
+  const capsules = limb.shape.map((c) => ({
+    a: c.a.clone().sub(com),
+    b: c.b.clone().sub(com),
+    r: Math.max(0.015, c.r),
+    soft: c.soft,
+    src: { limb, capsule: c },
+  }));
+  const body = new Body(object, {
+    mass,
+    inertia,
+    position: position.clone(),
+    quaternion: quaternion.clone(),
+    capsules,
+  });
+  body.limb = limb;
+  classifyLimbBody(body);
   world.add(body);
   return body;
+}
+
+// Создаёт настоящее игровое бревно как Limb (со стволовой осью и, при twigs > 0, живыми боковыми веточками и листьями из maple.js).
+function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }) {
+  const axis = makeLogAxis(length, radius, pos.x * 3.1 + pos.z * 1.7 + length * 5);
+  const parts = [{ axis, from: 0, to: length, cutFrom: true, cutTo: true }];
+  const cards = [];
+
+  for (let i = 0; i < twigs; i++) {
+    const tLen = 0.26 + (i % 2) * 0.08;
+    const attachS = length * (0.22 + (i / Math.max(1, twigs - 1)) * 0.56);
+    const az = i * 2.2 + 0.7;
+    const p0 = new THREE.Vector3(Math.cos(az) * (radius * 0.85), attachS, Math.sin(az) * (radius * 0.85));
+    const dir = new THREE.Vector3(Math.cos(az) * 0.85, 0.45, Math.sin(az) * 0.85).normalize();
+    const tPoints = [0, 0.33, 0.66, 1].map((u) => ({
+      s: u * tLen,
+      p: p0.clone().addScaledVector(dir, u * tLen),
+      t: dir.clone(),
+      n: new THREE.Vector3(-dir.y, dir.x, 0).normalize(),
+      b: new THREE.Vector3(0, 0, 1),
+      r: Math.max(0.006, 0.016 * (1 - u * 0.65)),
+    }));
+    const twigAxis = {
+      id: i + 1, parent: axis, attach: attachS, joint: 'twig', level: 2, dead: false,
+      included: 0, includedTo: 0, len: tLen, points: tPoints, profile: null, children: [],
+    };
+    axis.children = axis.children || [];
+    axis.children.push(twigAxis);
+    parts.push({ axis: twigAxis, from: 0, to: tLen, cutFrom: false, cutTo: false });
+
+    // Настоящие кленовые листья (cards для leafMesh из src/maple.js) на боковой веточке
+    for (const u of [0.55, 0.85]) {
+      const at = p0.clone().addScaledVector(dir, u * tLen);
+      const up = dir.clone().add(new THREE.Vector3(0, 0.3, 0)).normalize();
+      const face = new THREE.Vector3(0, 1, 0).addScaledVector(up, -up.y).normalize();
+      cards.push({
+        axis: twigAxis, s: u * tLen, at, up, face,
+        cell: (i * 3 + Math.round(u * 10)) % 6, h: 0.22,
+        center: at.clone().addScaledVector(up, 0.1), mass: 0.05,
+      });
+    }
+  }
+
+  const cloud = new THREE.Vector3(0, length / 2, 0);
+  const limb = new Limb(parts, cards, { skin: limbSkin, cloud, zone: 0 }).dress();
+  // Поворачиваем бревно горизонтально на землю с курсом yaw
+  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, yaw, 0, 'YXZ'));
+  return createLimbBody(world, scene, limb, pos, q);
 }
 
 // Выращивает настоящий игровой клён (growMaple) и отрезает от него крупные ветви с листвой (Limb) весом до 45 кг.
@@ -218,41 +253,11 @@ function spawnRealMapleBranches(world, scene, treeSeed = 107) {
     { pos: new THREE.Vector3(2.5, 0.55, 2.1), yaw: 1.2 },
     { pos: new THREE.Vector3(-0.9, 0.5, 3.6), yaw: -0.3 },
   ];
-  const created = [];
-  pickedLimbs.slice(0, 4).forEach((limb, idx) => {
-    const { mass, com, inertia } = limb.weight;
-    const object = new THREE.Group();
-    limb.group.position.copy(com).negate();
-    limb.group.quaternion.identity();
-    object.add(limb.group);
-    scene.add(object);
-
-    const capsules = limb.shape.map((cap) => ({
-      a: cap.a.clone().sub(com),
-      b: cap.b.clone().sub(com),
-      r: Math.max(0.015, cap.r),
-    }));
+  return pickedLimbs.slice(0, 4).map((limb, idx) => {
     const spot = branchSpots[idx % branchSpots.length];
-    const body = new Body(object, {
-      mass, inertia, position: spot.pos.clone(),
-      quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, spot.yaw, 0.2, 'YXZ')),
-      capsules,
-    });
-    body.limb = limb;
-
-    const mainLen = Math.max(...limb.parts.map((p) => p.to - p.from));
-    const spanM = Math.min(2.6, Math.max(mainLen, body.reach * 1.6));
-    const cm = Math.round(spanM * 100), kg = Math.round(mass * 10) / 10;
-    body.wood = {
-      kind: 'branch', length: spanM, cm, radius: 0.06, mass: kg, fitsPile: false,
-      holdDist: THREE.MathUtils.clamp(1.6 + body.reach * 0.45, 1.7, 2.45),
-      title: `Ветвь клёна с листвой (~${cm} см, ${kg} кг)`,
-      verdict: `Крупная ветка (${kg} кг, нести можно до ${MAX_LIFT_KG} кг) → в костёр (горит с дымом)`,
-    };
-    world.add(body);
-    created.push(body);
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.35, spot.yaw, 0.2, 'YXZ'));
+    return createLimbBody(world, scene, limb, spot.pos, q);
   });
-  return created;
 }
 
 // Брусок доски с правильной развёрткой UV (как block в src/fence.js), чтобы текстура забора не тянулась.
@@ -408,17 +413,39 @@ function buildCampfire(rnd) {
   group.add(light);
   group.position.copy(FIRE_POS);
 
+  // Базовый дым костра + два дополнительных генератора густого дыма, которые включаются, когда горит свежая ветка
   const smoke = new Smoke(new THREE.Vector3(FIRE_POS.x, 0.75, FIRE_POS.z), rnd);
-  function tick(dt, time) {
-    smoke.tick(dt);
-    light.intensity = 3.0 + 0.45 * Math.sin(time * 9.5) + 0.25 * Math.cos(time * 15.3);
+  const freshSmoke1 = new Smoke(new THREE.Vector3(FIRE_POS.x - 0.32, 0.65, FIRE_POS.z + 0.22), rnd);
+  const freshSmoke2 = new Smoke(new THREE.Vector3(FIRE_POS.x + 0.32, 0.68, FIRE_POS.z - 0.22), rnd);
+  const smokeGroup = new THREE.Group();
+  smokeGroup.add(smoke, freshSmoke1, freshSmoke2);
+  let smokeBoost = 0; // 0..1 — насколько густо дымит костёр от свежих веток
+
+  function tick(dt, time, burningCount = 0) {
+    const targetBoost = burningCount > 0 ? Math.min(1, 0.65 + burningCount * 0.25) : 0;
+    smokeBoost += (targetBoost - smokeBoost) * (1 - Math.exp(-2.2 * dt));
+
+    // Когда горит свежая ветка, дым идёт быстрее и гуще
+    smoke.tick(dt * (1 + smokeBoost * 0.9));
+    freshSmoke1.tick(dt * (0.6 + smokeBoost * 1.3));
+    freshSmoke2.tick(dt * (0.6 + smokeBoost * 1.3));
+    for (const extra of [freshSmoke1, freshSmoke2]) {
+      extra.visible = smokeBoost > 0.02;
+      for (const p of extra.puffs) {
+        p.sprite.material.opacity *= smokeBoost * 1.35;
+        p.sprite.scale.multiplyScalar(1 + smokeBoost * 0.35);
+      }
+    }
+
+    const fireMult = 1 + smokeBoost * 0.45;
+    light.intensity = (3.0 + 0.45 * Math.sin(time * 9.5) + 0.25 * Math.cos(time * 15.3)) * fireMult;
     for (const f of flames) {
-      const s = 0.85 + 0.26 * Math.sin(time * 10.5 + f.phase);
+      const s = (0.85 + 0.26 * Math.sin(time * 10.5 + f.phase)) * fireMult;
       f.cone.scale.set(1 + 0.14 * Math.cos(time * 8 + f.phase), s, 1 + 0.14 * Math.sin(time * 9 + f.phase));
       f.cone.position.y = f.baseH + (s - 1) * 0.11;
     }
   }
-  return { group, smoke, tick };
+  return { group, smoke: smokeGroup, tick };
 }
 
 export async function startWoodStand() {
@@ -471,9 +498,12 @@ export async function startWoodStand() {
     return pile;
   }
 
+  const burningItems = [];
+
   function resetPiles() {
     while (piles.length) scene.remove(piles.pop().frame);
     while (stackedObjects.length) scene.remove(stackedObjects.pop());
+    while (burningItems.length) scene.remove(burningItems.pop().object);
     flyingLogs.length = 0;
     addNewWoodpile();
   }
@@ -500,7 +530,48 @@ export async function startWoodStand() {
   }
   spawnSampleItems(false);
 
-  // Приёмка подходящего полена (50–100 см) из зоны приёмки в поленницу.
+  // Отправляет предмет (ветку, откушенные сучки или короткий чурбак < 50 см) в костёр, где он горит с дымом и сгорает.
+  function sendToCampfire(body, customNotice = null) {
+    const wIdx = world.bodies.indexOf(body);
+    if (wIdx !== -1) world.bodies.splice(wIdx, 1);
+    const iIdx = items.indexOf(body);
+    if (iIdx !== -1) items.splice(iIdx, 1);
+
+    const targetPos = new THREE.Vector3(
+      FIRE_POS.x + (rnd() - 0.5) * 0.85,
+      0.22 + rnd() * 0.12,
+      FIRE_POS.z + (rnd() - 0.5) * 0.85,
+    );
+    const targetQuat = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler((rnd() - 0.5) * 0.35, rnd() * Math.PI * 2, Math.PI / 2 + (rnd() - 0.5) * 0.35, 'YXZ'),
+    );
+
+    const charTargets = [];
+    body.object.traverse((node) => {
+      if (!node.isMesh || !node.material) return;
+      const mats = Array.isArray(node.material) ? node.material.map((m) => m.clone()) : [node.material.clone()];
+      node.material = Array.isArray(node.material) ? mats : mats[0];
+      for (const m of mats) charTargets.push(m);
+    });
+
+    burningItems.push({
+      object: body.object,
+      title: body.wood.title,
+      fromPos: body.position.clone(),
+      fromQuat: body.quaternion.clone(),
+      toPos: targetPos,
+      toQuat: targetQuat,
+      flyT: 0,
+      flyDuration: 0.48,
+      burnT: 0,
+      burnDuration: body.wood.kind === 'twig' ? 4.2 : 6.8,
+      charTargets,
+    });
+
+    sayNotice(customNotice || `В костёр: ${body.wood.title} — свежая древесина горит с густым дымом!`);
+  }
+
+  // Приёмка подходящего полена (50–100 см) из зоны приёмки в поленницу (работает с любым игровым телом Limb).
   function acceptLogIntoWoodpile(body) {
     const wIdx = world.bodies.indexOf(body);
     if (wIdx !== -1) world.bodies.splice(wIdx, 1);
@@ -508,19 +579,23 @@ export async function startWoodStand() {
     if (iIdx !== -1) items.splice(iIdx, 1);
 
     let snippedNote = '';
-    if (body.wood.twigs > 0 && body.wood.twigGroup) {
-      body.object.remove(body.wood.twigGroup);
-      const twigCount = Math.min(2, body.wood.twigs);
-      for (let i = 0; i < twigCount; i++) {
-        const dropPos = new THREE.Vector3(
-          ZONE_POS.x + (rnd() - 0.5) * 0.7,
-          0.18 + i * 0.08,
-          ZONE_POS.z + (rnd() - 0.5) * 0.5,
-        );
-        items.push(createSnippedTwigBody(world, scene, dropPos, rnd() * Math.PI));
-      }
-      body.wood.twigs = 0;
-      snippedNote = ' · мелкая ветка с листвой ушла в остаток для костра';
+    if (body.limb && body.limb.parts.length > 1) {
+      const sideParts = body.limb.parts.slice(1);
+      const sideCards = body.limb.cards;
+      const twigLimb = new Limb(sideParts, sideCards, {
+        skin: body.limb.skin,
+        cloud: body.limb.cloud,
+        zone: 0,
+      }).dress();
+      const twigBody = createLimbBody(world, scene, twigLimb, body.position.clone(), body.quaternion.clone());
+      sendToCampfire(twigBody);
+
+      body.limb.parts = [body.limb.parts[0]];
+      body.limb.cards = [];
+      body.limb.dress();
+      body.limb.group.position.copy(body.limb.weight.com).negate();
+      classifyLimbBody(body);
+      snippedNote = ' · мелкие веточки с листвой улетели в костёр';
     }
 
     let pile = piles[piles.length - 1];
@@ -530,10 +605,9 @@ export async function startWoodStand() {
     if (spawnedNext) addNewWoodpile();
 
     const targetPos = new THREE.Vector3(slot.x, slot.y, slot.zBack + body.wood.length / 2);
-    // Ось полена теперь идёт вдоль локальной оси Z (срезы смотрят в +Z и -Z) → полено лежит строго горизонтально
-    // вдоль оси Z, поворачиваясь только вокруг своей продольной оси Z на случайный угол roll!
-    const roll = (rnd() - 0.5) * Math.PI * 2;
-    const targetQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), roll);
+    const alignToZ = new THREE.Quaternion().setFromUnitVectors(body.wood.cutDir, new THREE.Vector3(0, 0, 1));
+    const rollQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (rnd() - 0.5) * Math.PI * 2);
+    const targetQuat = rollQuat.multiply(alignToZ);
 
     stackedObjects.push(body.object);
     flyingLogs.push({
@@ -555,18 +629,27 @@ export async function startWoodStand() {
     );
   }
 
+  const isInCampfire = (p) => Math.abs(p.x - FIRE_POS.x) <= FIRE_SIDE * 0.52 && Math.abs(p.z - FIRE_POS.z) <= FIRE_SIDE * 0.52;
+
   function processDropZone(droppedBody = null) {
-    if (droppedBody && isInDropZone(droppedBody.position)) {
-      if (droppedBody.wood.fitsPile) {
-        acceptLogIntoWoodpile(droppedBody);
-      } else {
-        sayNotice(`Осталось в зоне приёмки (для костра): ${droppedBody.wood.title}`);
+    if (droppedBody) {
+      if (isInDropZone(droppedBody.position)) {
+        if (droppedBody.wood.fitsPile) acceptLogIntoWoodpile(droppedBody);
+        else sendToCampfire(droppedBody);
+        return;
       }
-      return;
+      if (!droppedBody.wood.fitsPile && isInCampfire(droppedBody.position)) {
+        sendToCampfire(droppedBody);
+        return;
+      }
     }
     for (const b of [...items]) {
-      if (b !== held && b.wood.fitsPile && isInDropZone(b.position)) {
-        acceptLogIntoWoodpile(b);
+      if (b === held || b.wood.tooHeavy) continue;
+      if (isInDropZone(b.position)) {
+        if (b.wood.fitsPile) acceptLogIntoWoodpile(b);
+        else sendToCampfire(b);
+      } else if (!b.wood.fitsPile && isInCampfire(b.position)) {
+        sendToCampfire(b);
       }
     }
   }
@@ -771,9 +854,38 @@ export async function startWoodStand() {
       if (f.t >= 1) flyingLogs.splice(i, 1);
     }
 
+    // Перелёт веток/чурок в костёр и их сгорание с густым дымом (Шаг 3)
+    const charColor = new THREE.Color(0x1f140e);
+    const glowColor = new THREE.Color(0x6b2205);
+    for (let i = burningItems.length - 1; i >= 0; i--) {
+      const b = burningItems[i];
+      if (b.flyT < 1) {
+        b.flyT = Math.min(1, b.flyT + dt / b.flyDuration);
+        const ease = 1 - (1 - b.flyT) ** 3;
+        b.object.position.lerpVectors(b.fromPos, b.toPos, ease);
+        b.object.position.y += Math.sin(ease * Math.PI) * 0.45;
+        b.object.quaternion.slerpQuaternions(b.fromQuat, b.toQuat, ease);
+      } else {
+        b.burnT += dt / b.burnDuration;
+        const p = Math.min(1, b.burnT);
+        // Древесина и листва в огне темнеют (обугливаются), раскаляются и оседают в угли
+        for (const m of b.charTargets) {
+          if (m.color) m.color.lerp(charColor, dt * 1.4);
+          if (m.emissive) m.emissive.lerp(glowColor, dt * 1.8);
+        }
+        const shrink = p < 0.55 ? 1 - p * 0.18 : Math.max(0.02, 0.9 - ((p - 0.55) / 0.45) * 0.88);
+        b.object.scale.setScalar(shrink);
+        b.object.position.y = b.toPos.y * shrink;
+        if (b.burnT >= 1) {
+          scene.remove(b.object);
+          burningItems.splice(i, 1);
+        }
+      }
+    }
+
     world.step(dt);
     processDropZone();
-    campfire.tick(dt, elapsed);
+    campfire.tick(dt, elapsed, burningItems.length);
     updateHudText();
     renderer.render(scene, camera);
   }
