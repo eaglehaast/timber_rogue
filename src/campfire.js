@@ -1,15 +1,22 @@
 import * as THREE from 'three';
-import { buildEmberBed } from './ember-bed.js';
+import { buildEmberBed, coalAtlasUV, coalEmission } from './ember-bed.js';
 import { Smoke } from './smoke.js';
 import { tiles } from './surface.js';
 
-const [ash, char, bed, flames] = tiles([
+const [ash, flames] = tiles([
   'assets/textures/yard/timber_yard_ash_decal.png',
-  'assets/textures/yard/timber_yard_charred_bark.jpg',
-  'assets/textures/yard/timber_yard_ember_bed.webp',
   'assets/textures/yard/timber_yard_flames.png',
 ]);
 ash.wrapS = ash.wrapT = flames.wrapS = flames.wrapT = THREE.ClampToEdgeWrapping;
+
+const loader = new THREE.TextureLoader();
+const [paint, heat, ashCrust] = await Promise.all(['coals-paint.webp', 'coals-heat.png', 'coals-ash.webp'].map(async name => {
+  const map = await loader.loadAsync('assets/textures/yard/' + name);
+  map.anisotropy = 4;
+  return map;
+}));
+paint.colorSpace = ashCrust.colorSpace = THREE.SRGBColorSpace;
+heat.colorSpace = THREE.NoColorSpace;
 
 export function buildCampfire(origin, side, rnd) {
   const group = new THREE.Group();
@@ -20,7 +27,7 @@ export function buildCampfire(origin, side, rnd) {
   apron.rotation.x = -Math.PI / 2;
   apron.position.y = 0.009;
   apron.receiveShadow = true;
-  const coals = buildEmberBed({ bed, char, ash }, rnd);
+  const coals = buildEmberBed({ paint, heat, ash: ashCrust }, rnd);
   group.add(apron, coals.root);
 
   const vents = [[-0.52, 0.04], [0.21, -0.35], [0.47, 0.19], [-0.15, 0.33], [-0.29, -0.27], [0,0], [0,0], [0,0]];
@@ -106,37 +113,52 @@ export function buildCampfire(origin, side, rnd) {
 // Материалы на дереве и в поленнице общие. Обгорает только принятая ветка.
 export function scorchLimb(limb, reach) {
   const burn = { value: 0 }, owned = [];
-  function coating(original, leaf) {
-    const mat = original.clone();
-    mat.customProgramCacheKey = () => 'campfire-' + original.customProgramCacheKey() + (leaf ? '-leaf' : '-wood');
+  const variety = Math.floor(17 * limb.weight.mass + limb.parts[0].from * 29);
+  function coating(original, part) {
+    const mat = original.clone(), leaf = part === 'leaf', end = part === 'end';
+    mat.customProgramCacheKey = () => 'campfire-' + original.customProgramCacheKey() + '-' + part;
     mat.onBeforeCompile = (shader, renderer) => {
       original.onBeforeCompile(shader, renderer);
       shader.uniforms.woodBurn = burn;
       shader.uniforms.woodCenter = { value: limb.weight.com };
       shader.uniforms.woodRadius = { value: Math.max(0.01, reach) };
-      shader.vertexShader = 'uniform vec3 woodCenter; uniform float woodRadius; varying float woodEdge;\n' + shader.vertexShader;
+      shader.vertexShader = 'uniform vec3 woodCenter; uniform float woodRadius; varying float woodEdge; varying vec2 woodUV;\n' + shader.vertexShader;
       shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
-        woodEdge = min(1., length(position - woodCenter) / woodRadius);`);
-      shader.uniforms.coalBark = { value: char };
-      shader.fragmentShader = 'uniform float woodBurn; uniform sampler2D coalBark; varying float woodEdge;\n' + shader.fragmentShader;
+        woodEdge = min(1., length(position - woodCenter) / woodRadius);
+        woodUV = ${end ? '0.5 + 0.47 * (1. - uv.y) * vec2(cos(uv.x * 6.283185), sin(uv.x * 6.283185))' : 'uv'};`);
+      shader.fragmentShader = 'uniform float woodBurn; varying float woodEdge; varying vec2 woodUV;\n' + shader.fragmentShader;
+      if (leaf) {
+        shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', `
+          float grain = sqrt(dot(diffuseColor.rgb, vec3(0.28, 0.53, 0.19)));
+          if (woodBurn > 0.16 + grain * 0.75) discard;
+          outgoingLight = mix(outgoingLight, vec3(0.019, 0.012, 0.014), smoothstep(0.03, 0.41, woodBurn));
+          #include <opaque_fragment>`);
+        return;
+      }
+      shader.uniforms.coalPaint = { value: paint };
+      shader.uniforms.coalHeat = { value: heat };
+      shader.uniforms.coalTile = { value: end ? 6 + variety % 4 : variety % 6 };
+      shader.fragmentShader = 'uniform sampler2D coalPaint, coalHeat; uniform float coalTile;\n'
+        + coalAtlasUV + coalEmission + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', `
-        float grain = sqrt(texture2D(coalBark, vMapUv * vec2(0.74, 0.37)).r);
-        float scorch = smoothstep(0.02, 0.53, woodBurn + (0.24 - grain) * 0.85);
-        outgoingLight = mix(outgoingLight, vec3(0.011, 0.008, 0.012) + grain * grain * 0.28, scorch);
-        ${leaf ? 'if (woodBurn > 0.16 + grain * 0.75) discard;' : `
-          float remaining = 1.10 - 1.27 * smoothstep(0.52, 1., woodBurn);
-          if (woodEdge + (0.28 - grain) * 0.25 > remaining) discard;
-          float crack = (1. - smoothstep(0.12, 0.31, grain)) * smoothstep(0.27, 0.70, woodBurn);
-          outgoingLight = mix(outgoingLight, vec3(0.82, 0.075, 0.009), crack);
-        `}
+        vec2 st = ${end ? 'woodUV' : '1. - abs(mod(woodUV * vec2(1.25, 1.12), 2.) - 1.)'};
+        vec2 at = coalCell(coalTile, st, vec2(4., 3.));
+        vec3 chip = texture2D(coalPaint, at).rgb;
+        float mask = texture2D(coalHeat, at).r;
+        float grain = sqrt(dot(chip, vec3(0.28, 0.53, 0.19)));
+        float remaining = 1.12 - 1.32 * smoothstep(0.52, 1., woodBurn);
+        if (woodEdge + (0.28 - grain) * 0.25 > remaining) discard;
+        float scorch = smoothstep(0.03, 0.59, woodBurn + (0.27 - grain) * 0.60);
+        float opening = smoothstep(0.26, 0.77, woodBurn);
+        outgoingLight = mix(outgoingLight, chip * 0.78 + opening * incandescence(mask, 0.27 + opening * 0.79), scorch);
         #include <opaque_fragment>`);
     };
     owned.push(mat);
     return mat;
   }
   const [wood, leaves] = limb.meshes;
-  wood.material = wood.material.map(m => coating(m, false));
-  leaves.material = coating(leaves.material, true);
+  wood.material = wood.material.map((m, i) => coating(m, i === 1 ? 'end' : 'grain'));
+  leaves.material = coating(leaves.material, 'leaf');
   leaves.castShadow = false;
   return { burn, dispose() { for (const m of owned) m.dispose(); } };
 }
