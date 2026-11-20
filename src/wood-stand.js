@@ -61,7 +61,48 @@ function rodInertia(m, r, L) {
   return new THREE.Matrix3().set(ix, 0, 0, 0, iyz, 0, 0, 0, iyz);
 }
 
-// Собирает бревно-отпил ствола с настоящей корой, годовыми кольцами на торцах и побегами-веточками.
+// Собирает мелкую веточку с листвой (которая сидит на бревне и «откусывается» в зоне приёмки).
+function makeTwigMesh(tLen = 0.28) {
+  const g = new THREE.Group();
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.016, tLen, 7), limbSkin[0]);
+  stem.castShadow = true;
+  g.add(stem);
+  const leafMat = new THREE.MeshLambertMaterial({ color: 0x5c7d3e, side: THREE.DoubleSide });
+  for (let k = 0; k < 3; k++) {
+    const leaf = new THREE.Mesh(new THREE.PlaneGeometry(0.11, 0.07), leafMat);
+    const a = k * 2.1;
+    leaf.position.set(Math.cos(a) * 0.04, tLen * (0.15 + k * 0.14), Math.sin(a) * 0.04);
+    leaf.rotation.set(0.4, a, 0.3);
+    g.add(leaf);
+  }
+  return g;
+}
+
+// Создаёт отдельное физическое тело для «откушенной» от полена мелкой ветки с листвой, остающейся в зоне приёмки.
+function createSnippedTwigBody(world, scene, worldPos, yaw) {
+  const length = 0.32, radius = 0.025, mass = 0.6;
+  const group = new THREE.Group();
+  const mesh = makeTwigMesh(length);
+  mesh.rotation.z = -Math.PI / 2;
+  group.add(mesh);
+  scene.add(group);
+  const body = new Body(group, {
+    mass,
+    inertia: rodInertia(mass, radius, length),
+    position: worldPos.clone(),
+    quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
+    capsules: [{ a: new THREE.Vector3(-0.12, 0, 0), b: new THREE.Vector3(0.12, 0, 0), r: radius }],
+  });
+  body.wood = {
+    kind: 'twig', length, cm: 32, radius, mass, fitsPile: false, holdDist: 1.45,
+    title: 'Откушенная мелкая ветка с листвой (32 см)',
+    verdict: 'Мелкая ветка от полена → осталась в зоне приёмки для костра',
+  };
+  world.add(body);
+  return body;
+}
+
+// Собирает бревно-отпил ствола с настоящей корой, годовыми кольцами на торцах и мелкими веточками с листвой.
 function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }) {
   const group = new THREE.Group();
   const cylGeo = new THREE.CylinderGeometry(radius * 0.95, radius, length, 18, 1, false);
@@ -72,12 +113,11 @@ function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }
 
   const twigGroup = new THREE.Group();
   for (let i = 0; i < twigs; i++) {
-    const tLen = 0.22 + (i % 2) * 0.1;
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.018, tLen, 7), limbSkin[0]);
-    const x = (i / Math.max(1, twigs - 1) - 0.5) * (length * 0.65), a = i * 2.1 + 0.6;
-    mesh.position.set(x, Math.cos(a) * (radius + tLen * 0.38), Math.sin(a) * (radius + tLen * 0.38));
+    const tLen = 0.24 + (i % 2) * 0.08;
+    const mesh = makeTwigMesh(tLen);
+    const x = (i / Math.max(1, twigs - 1) - 0.5) * (length * 0.62), a = i * 2.1 + 0.6;
+    mesh.position.set(x, Math.cos(a) * (radius + tLen * 0.36), Math.sin(a) * (radius + tLen * 0.36));
     mesh.rotation.set(Math.sin(a) * 0.85, 0, (i % 2 ? 1 : -1) * 0.5);
-    mesh.castShadow = true;
     twigGroup.add(mesh);
   }
   if (twigs > 0) group.add(twigGroup);
@@ -98,8 +138,8 @@ function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }
     kind: 'log', length, cm, radius, mass, twigs, twigGroup, fitsPile, holdDist: 1.65,
     title: twigs > 0 ? `Бревно с веточками (${cm} см, ${Math.round(mass)} кг)` : `Бревно (${cm} см, ${Math.round(mass)} кг)`,
     verdict: fitsPile
-      ? (twigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки в костёр' : 'Подходит в поленницу (50–100 см)')
-      : cm < 50 ? `Чурбак короче 50 см (${cm} см) → в костёр` : `Длиннее 100 см (${cm} см) → не влезет в поленницу, в костёр`,
+      ? (twigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки с листвой откусятся для костра' : 'Подходит в поленницу (50–100 см)')
+      : cm < 50 ? `Чурбак короче 50 см (${cm} см) → останется для костра` : `Длиннее 100 см (${cm} см) → не влезет в поленницу, для костра`,
   };
   world.add(body);
   return body;
@@ -186,8 +226,8 @@ function makeBoardBox(sx, sy, sz) {
   return geo;
 }
 
-// Увеличенная вдвое поленница из досок цвета забора, открытая спереди (+Z).
-function buildWoodpileFrame() {
+// Увеличенная поленница из досок цвета забора, открытая спереди (+Z), в позиции pos.
+function buildWoodpileFrame(pos = PILE_POS) {
   const group = new THREE.Group();
   const { w: W, d: D, h: H } = PILE_SIZE, T = 0.045;
   const box = (w, h, d, x, y, z, rx = 0) => {
@@ -207,7 +247,7 @@ function buildWoodpileFrame() {
   box(0.09, H, 0.09, 0, H / 2, -D / 2 + 0.045);
   for (const h of [0.45, 0.95, 1.45]) box(W, 0.14, T, 0, h, -D / 2 + T / 2);
   for (let i = -2; i <= 2; i++) box(W + 0.2, T, 0.24, 0, H + 0.06 - i * 0.018, i * 0.23, 0.07);
-  group.position.copy(PILE_POS);
+  group.position.copy(pos);
   return group;
 }
 
@@ -342,36 +382,140 @@ export async function startWoodStand() {
   scene.add(makeGrassFloor(140));
 
   const rnd = generator(42);
-  const woodpile = buildWoodpileFrame(), dropZone = buildDropZone(), campfire = buildCampfire(rnd);
-  scene.add(woodpile, dropZone.group, campfire.group, campfire.smoke);
+  const dropZone = buildDropZone(), campfire = buildCampfire(rnd);
+  scene.add(dropZone.group, campfire.group, campfire.smoke);
 
   const worldRoot = new THREE.Group();
   scene.add(worldRoot);
   const world = new World(worldRoot, () => 0, (_x, _z, n) => n.set(0, 1, 0));
 
+  // Менеджер секций поленницы (Шаг 2): укладка сотами срезом к нам (+Z) на глубину длины полена.
+  const PILE_COLS = 10, PILE_ROWS = 8, SLOT_R = 0.105;
+  const piles = [], flyingLogs = [];
+  let stackedObjects = [], statusNotice = { text: '', until: 0 };
+  const sayNotice = (text, ms = 5000) => { statusNotice = { text, until: performance.now() + ms }; };
+
+  function addNewWoodpile() {
+    const idx = piles.length, pos = PILE_POS.clone();
+    pos.x -= idx * (PILE_SIZE.w + 0.22);
+    const frame = buildWoodpileFrame(pos);
+    scene.add(frame);
+    const slots = [], innerLeft = pos.x - PILE_SIZE.w / 2 + 0.15 + SLOT_R;
+    const baseY = 0.125 + SLOT_R, rowDy = SLOT_R * 1.74, zBack = pos.z - PILE_SIZE.d / 2 + 0.07;
+    for (let r = 0; r < PILE_ROWS; r++) {
+      const odd = r % 2 === 1, cols = odd ? PILE_COLS - 1 : PILE_COLS, xOff = odd ? SLOT_R : 0;
+      for (let c = 0; c < cols; c++) {
+        slots.push({ x: innerLeft + xOff + c * (SLOT_R * 2.02), y: baseY + r * rowDy, zBack });
+      }
+    }
+    const pile = { index: idx + 1, pos, frame, slots, count: 0 };
+    piles.push(pile);
+    return pile;
+  }
+
+  function resetPiles() {
+    while (piles.length) scene.remove(piles.pop().frame);
+    while (stackedObjects.length) scene.remove(stackedObjects.pop());
+    flyingLogs.length = 0;
+    addNewWoodpile();
+  }
+  resetPiles();
+
   const items = [];
   let branchSeed = 107;
-  function spawnSampleItems() {
+  function spawnSampleItems(resetStack = true) {
     while (items.length) scene.remove(items.pop().object);
     world.bodies.length = 0;
+    if (resetStack) resetPiles();
     const logSpecs = [
       { length: 0.60, radius: 0.095, twigs: 0, pos: new THREE.Vector3(-1.6, 0.14, 0.4), yaw: 0.15 },
       { length: 0.76, radius: 0.105, twigs: 4, pos: new THREE.Vector3(-0.5, 0.16, 0.55), yaw: -0.25 },
-      { length: 0.92, radius: 0.11,  twigs: 3, pos: new THREE.Vector3(0.65, 0.15, 0.45), yaw: 0.1 },
-      { length: 0.34, radius: 0.095, twigs: 0, pos: new THREE.Vector3(-1.25, 0.13, 1.35), yaw: 0.6 },
+      { length: 0.92, radius: 0.105, twigs: 3, pos: new THREE.Vector3(0.65, 0.15, 0.45), yaw: 0.1 },
+      { length: 0.54, radius: 0.095, twigs: 2, pos: new THREE.Vector3(-2.1, 0.14, 1.1), yaw: -0.15 },
+      { length: 0.85, radius: 0.10,  twigs: 0, pos: new THREE.Vector3(0.05, 0.14, 1.25), yaw: 0.35 },
+      { length: 0.34, radius: 0.095, twigs: 0, pos: new THREE.Vector3(-1.25, 0.13, 1.45), yaw: 0.6 },
       { length: 1.25, radius: 0.10,  twigs: 0, pos: new THREE.Vector3(1.55, 0.13, 1.15), yaw: -0.4 },
     ];
     for (const s of logSpecs) items.push(createLogItem(world, scene, s));
     items.push(...spawnRealMapleBranches(world, scene, branchSeed));
     branchSeed += 17;
   }
-  spawnSampleItems();
+  spawnSampleItems(false);
+
+  // Приёмка подходящего полена (50–100 см) из зоны приёмки в поленницу.
+  function acceptLogIntoWoodpile(body) {
+    const wIdx = world.bodies.indexOf(body);
+    if (wIdx !== -1) world.bodies.splice(wIdx, 1);
+    const iIdx = items.indexOf(body);
+    if (iIdx !== -1) items.splice(iIdx, 1);
+
+    let snippedNote = '';
+    if (body.wood.twigs > 0 && body.wood.twigGroup) {
+      body.object.remove(body.wood.twigGroup);
+      const twigCount = Math.min(2, body.wood.twigs);
+      for (let i = 0; i < twigCount; i++) {
+        const dropPos = new THREE.Vector3(
+          ZONE_POS.x + (rnd() - 0.5) * 0.7,
+          0.18 + i * 0.08,
+          ZONE_POS.z + (rnd() - 0.5) * 0.5,
+        );
+        items.push(createSnippedTwigBody(world, scene, dropPos, rnd() * Math.PI));
+      }
+      body.wood.twigs = 0;
+      snippedNote = ' · мелкая ветка с листвой ушла в остаток для костра';
+    }
+
+    let pile = piles[piles.length - 1];
+    if (pile.count >= pile.slots.length) pile = addNewWoodpile();
+    const slot = pile.slots[pile.count++];
+    const spawnedNext = pile.count >= pile.slots.length;
+    if (spawnedNext) addNewWoodpile();
+
+    const targetPos = new THREE.Vector3(slot.x, slot.y, slot.zBack + body.wood.length / 2);
+    const roll = (rnd() - 0.5) * Math.PI * 2;
+    const targetQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, roll, 'YXZ'));
+
+    stackedObjects.push(body.object);
+    flyingLogs.push({
+      object: body.object,
+      fromPos: body.position.clone(),
+      fromQuat: body.quaternion.clone(),
+      toPos: targetPos,
+      toQuat: targetQuat,
+      t: 0,
+      duration: 0.42,
+    });
+
+    const totalStacked = piles.reduce((sum, p) => sum + p.count, 0);
+    el('gap').textContent = `В поленнице: ${totalStacked} шт. (поленниц: ${piles.length}) · P — тест: +полено`;
+    sayNotice(
+      spawnedNext
+        ? `Поленница #${pile.index} заполнена! Рядом появилась новая поленница #${pile.index + 1}${snippedNote}`
+        : `Полено ${body.wood.cm} см уложено в поленницу #${pile.index} срезом к нам${snippedNote}`,
+    );
+  }
+
+  function processDropZone(droppedBody = null) {
+    if (droppedBody && isInDropZone(droppedBody.position)) {
+      if (droppedBody.wood.fitsPile) {
+        acceptLogIntoWoodpile(droppedBody);
+      } else {
+        sayNotice(`Осталось в зоне приёмки (для костра): ${droppedBody.wood.title}`);
+      }
+      return;
+    }
+    for (const b of [...items]) {
+      if (b !== held && b.wood.fitsPile && isInDropZone(b.position)) {
+        acceptLogIntoWoodpile(b);
+      }
+    }
+  }
 
   el('hud').classList.add('details');
   el('hud').hidden = false;
   el('held-saw').hidden = el('kit').hidden = el('side').hidden = el('depth').hidden = true;
   el('gap').hidden = false;
-  el('gap').textContent = 'Поленница · Зона приёмки · Костёр';
+  el('gap').textContent = 'В поленнице: 0 шт. (поленниц: 1) · P — тест: +полено';
   Object.assign(el('back'), { href: './#stands', textContent: '← Стенды' });
   el('regrow').textContent = 'Сбросить брёвна (R)';
 
@@ -417,6 +561,7 @@ export async function startWoodStand() {
       dropped.velocity.set(0, 0, 0);
       dropped.spin.set(0, 0, 0);
       dropped.wake();
+      processDropZone(dropped);
       updateHudText();
       return;
     }
@@ -430,28 +575,35 @@ export async function startWoodStand() {
   }
 
   function updateHudText() {
+    const activeNotice = performance.now() < statusNotice.until ? statusNotice.text : '';
     if (held) {
       const overZone = isInDropZone(held.position);
       dropZone.padMat.color.setHex(overZone ? (held.wood.fitsPile ? 0xa9e36b : 0xf0a656) : 0xd8c878);
       crosshair.style.background = overZone ? '#ffd15c' : '#9be89b';
-      el('hint').textContent = overZone ? `Над зоной приёмки: ${held.wood.title}` : `Несёшь: ${held.wood.title} (ЛКМ — положить)`;
-      el('log').textContent = overZone ? `Зона приёмки → ${held.wood.verdict}` : `${held.wood.verdict} · Неси в зону между поленницей и костром`;
+      el('hint').textContent = overZone
+        ? (held.wood.fitsPile ? `Отпусти ЛКМ → уложить в поленницу (${held.wood.cm} см)` : `Отпусти ЛКМ → оставить в зоне для костра`)
+        : `Несёшь: ${held.wood.title} (ЛКМ — положить)`;
+      el('log').textContent = activeNotice || (overZone ? `Зона приёмки → ${held.wood.verdict}` : `${held.wood.verdict} · Неси в зону между поленницей и костром`);
       return;
     }
     dropZone.padMat.color.setHex(0xd8c878);
     if (aimed) {
       crosshair.style.background = '#ffd15c';
       el('hint').textContent = `${aimed.wood.title} — ЛКМ: взять`;
-      el('log').textContent = aimed.wood.verdict;
+      el('log').textContent = activeNotice || aimed.wood.verdict;
     } else {
       crosshair.style.background = 'rgba(255, 255, 255, 0.85)';
       el('hint').textContent = '';
+      if (activeNotice) {
+        el('log').textContent = activeNotice;
+        return;
+      }
       const inZone = items.filter((b) => isInDropZone(b.position));
       if (inZone.length > 0) {
         const last = inZone[inZone.length - 1];
-        el('log').textContent = `В зоне приёмки (${inZone.length} шт.): ${last.wood.title} — ${last.wood.verdict}`;
+        el('log').textContent = `В зоне приёмки для костра (${inZone.length} шт.): ${last.wood.title}`;
       } else {
-        el('log').textContent = 'Наведи точку на бревно или ветку и нажми ЛКМ, чтобы понести перед собой';
+        el('log').textContent = 'Наведи точку на бревно или ветку и нажми ЛКМ · P — быстро добавить полено в поленницу';
       }
     }
   }
@@ -485,12 +637,28 @@ export async function startWoodStand() {
   actionBtn.addEventListener('click', toggleHold);
   el('regrow').addEventListener('click', () => { held = null; spawnSampleItems(); });
 
+  // Быстрое тестовое добавление полена (50–100 см) через зону приёмки по клавише P
+  function quickSpawnLogToPile() {
+    const length = 0.52 + rnd() * 0.46;
+    const twigs = rnd() < 0.35 ? 2 : 0;
+    const b = createLogItem(world, scene, {
+      length,
+      radius: 0.095 + rnd() * 0.012,
+      twigs,
+      pos: new THREE.Vector3(ZONE_POS.x, 0.35, ZONE_POS.z),
+      yaw: 0,
+    });
+    items.push(b);
+    acceptLogIntoWoodpile(b);
+  }
+
   addEventListener('keydown', (e) => {
     if (e.target.closest('input,textarea,select') || e.metaKey || e.ctrlKey || e.altKey) return;
     keys.add(e.code);
     if (e.code === 'KeyC' && !e.repeat) player.crouch = !player.crouch;
     if (e.code === 'KeyE' && !e.repeat) toggleHold();
-    if (e.code === 'KeyR' && !e.repeat) { held = null; spawnSampleItems(); }
+    if (e.code === 'KeyP' && !e.repeat) quickSpawnLogToPile();
+    if (e.code === 'KeyR' && !e.repeat) { held = null; spawnSampleItems(true); }
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
   addEventListener('blur', () => keys.clear());
@@ -504,7 +672,7 @@ export async function startWoodStand() {
     const input = walkInput(keys, stick), forward = forwardOf(player.yaw), right = new THREE.Vector3(-forward.z, 0, forward.x);
     const speed = walkSpeed(player, keys);
     player.pos.addScaledVector(forward, input.ahead * speed * dt).addScaledVector(right, input.side * speed * dt);
-    player.pos.clampScalar(-25, 25);
+    player.pos.clampScalar(-35, 35);
     stepEyes(player, right, Math.hypot(input.side, input.ahead) * speed, dt);
     eyeCamera(camera, player);
 
@@ -525,7 +693,19 @@ export async function startWoodStand() {
       aimed = findAimedBody();
     }
 
+    // Плавный перелёт принятых брёвен в соты поленницы
+    for (let i = flyingLogs.length - 1; i >= 0; i--) {
+      const f = flyingLogs[i];
+      f.t = Math.min(1, f.t + dt / f.duration);
+      const ease = 1 - (1 - f.t) ** 3;
+      f.object.position.lerpVectors(f.fromPos, f.toPos, ease);
+      f.object.position.y += Math.sin(ease * Math.PI) * 0.25;
+      f.object.quaternion.slerpQuaternions(f.fromQuat, f.toQuat, ease);
+      if (f.t >= 1) flyingLogs.splice(i, 1);
+    }
+
     world.step(dt);
+    processDropZone();
     campfire.tick(dt, elapsed);
     updateHudText();
     renderer.render(scene, camera);
