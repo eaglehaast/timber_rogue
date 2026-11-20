@@ -62,29 +62,31 @@ function rodInertia(m, r, L) {
   return new THREE.Matrix3().set(ixy, 0, 0, 0, ixy, 0, 0, 0, iz);
 }
 
-// Строит настоящую игровую ось бревна клёна для barkGeometry:
-// Строим вертикально вдоль оси Y (как растёт ствол в maple.js, чтобы текстура коры ложилась по высоте и по кругу без растяжения),
-// а готовую геометрию поворачиваем вдоль оси Z (срезом к нам).
+// Строит настоящую игровую ось бревна клёна для barkGeometry вдоль локальной оси Z (от 0 до length):
+// t = (0, 0, 1), n = (1, 0, 0), b = t × n = (0, 1, 0) — строгая правая тройка векторов (как в makeAxis в src/maple.js),
+// чтобы грани трубки и торцов не выворачивались наизнанку, а кора ложилась по (phi * a.mean) / BARK_TILE и q.s / BARK_TILE.
 function makeLogAxis(length, radius, seedPhase = 0) {
   const steps = Math.max(4, Math.ceil(length / 0.05));
   const points = [];
+  const t = new THREE.Vector3(0, 0, 1);
+  const n = new THREE.Vector3(1, 0, 0);
+  const b = new THREE.Vector3(0, 1, 0); // t × n
   for (let i = 0; i <= steps; i++) {
     const u = i / steps, s = u * length;
-    const taper = 1 - 0.05 * u;
+    const taper = 1 - 0.04 * u;
     points.push({
       s,
-      p: new THREE.Vector3(0, s, 0),
-      t: new THREE.Vector3(0, 1, 0),
-      n: new THREE.Vector3(1, 0, 0),
-      b: new THREE.Vector3(0, 0, 1),
+      p: new THREE.Vector3(0, 0, s),
+      t: t.clone(),
+      n: n.clone(),
+      b: b.clone(),
       r: radius * taper,
     });
   }
-  const profile = (az, s) => 1 + 0.04 * Math.cos(2 * az + seedPhase) + 0.02 * Math.sin(3 * az - seedPhase + s * 2);
+  const profile = (az, s) => 1 + 0.035 * Math.cos(2 * az + seedPhase) + 0.02 * Math.sin(3 * az - seedPhase + s * 2);
   return {
     id: 0, parent: null, attach: 0, joint: 'trunk', level: 0, dead: false,
-    included: 0, includedTo: 0, len: length, points, profile,
-    bark: { radius, s: length, y: length },
+    included: 0, includedTo: 0, len: length, points, profile, children: [],
   };
 }
 
@@ -170,7 +172,7 @@ function createLimbBody(world, scene, limb, position, quaternion) {
   return body;
 }
 
-// Создаёт настоящее игровое бревно как Limb (со стволовой осью и, при twigs > 0, живыми боковыми веточками и листьями из maple.js).
+// Создаёт настоящее игровое бревно как Limb (со стволовой осью вдоль Z и, при twigs > 0, живыми боковыми веточками и листьями).
 function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }) {
   const axis = makeLogAxis(length, radius, pos.x * 3.1 + pos.z * 1.7 + length * 5);
   const parts = [{ axis, from: 0, to: length, cutFrom: true, cutTo: true }];
@@ -180,25 +182,25 @@ function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }
     const tLen = 0.26 + (i % 2) * 0.08;
     const attachS = length * (0.22 + (i / Math.max(1, twigs - 1)) * 0.56);
     const az = i * 2.2 + 0.7;
-    const p0 = new THREE.Vector3(Math.cos(az) * (radius * 0.85), attachS, Math.sin(az) * (radius * 0.85));
-    const dir = new THREE.Vector3(Math.cos(az) * 0.85, 0.45, Math.sin(az) * 0.85).normalize();
+    const p0 = new THREE.Vector3(Math.cos(az) * (radius * 0.85), Math.sin(az) * (radius * 0.85), attachS);
+    const dir = new THREE.Vector3(Math.cos(az) * 0.85, Math.sin(az) * 0.85, 0.42).normalize();
+    const nVec = new THREE.Vector3(-dir.y, dir.x, 0).normalize();
+    const bVec = dir.clone().cross(nVec).normalize(); // строгая правая тройка b = t × n
     const tPoints = [0, 0.33, 0.66, 1].map((u) => ({
       s: u * tLen,
       p: p0.clone().addScaledVector(dir, u * tLen),
       t: dir.clone(),
-      n: new THREE.Vector3(-dir.y, dir.x, 0).normalize(),
-      b: new THREE.Vector3(0, 0, 1),
+      n: nVec.clone(),
+      b: bVec.clone(),
       r: Math.max(0.006, 0.016 * (1 - u * 0.65)),
     }));
     const twigAxis = {
       id: i + 1, parent: axis, attach: attachS, joint: 'twig', level: 2, dead: false,
       included: 0, includedTo: 0, len: tLen, points: tPoints, profile: null, children: [],
     };
-    axis.children = axis.children || [];
     axis.children.push(twigAxis);
     parts.push({ axis: twigAxis, from: 0, to: tLen, cutFrom: false, cutTo: false });
 
-    // Настоящие кленовые листья (cards для leafMesh из src/maple.js) на боковой веточке
     for (const u of [0.55, 0.85]) {
       const at = p0.clone().addScaledVector(dir, u * tLen);
       const up = dir.clone().add(new THREE.Vector3(0, 0.3, 0)).normalize();
@@ -211,10 +213,9 @@ function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }
     }
   }
 
-  const cloud = new THREE.Vector3(0, length / 2, 0);
+  const cloud = new THREE.Vector3(0, 0, length / 2);
   const limb = new Limb(parts, cards, { skin: limbSkin, cloud, zone: 0 }).dress();
-  // Поворачиваем бревно горизонтально на землю с курсом yaw
-  const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, yaw, 0, 'YXZ'));
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
   return createLimbBody(world, scene, limb, pos, q);
 }
 
@@ -546,14 +547,6 @@ export async function startWoodStand() {
       new THREE.Euler((rnd() - 0.5) * 0.35, rnd() * Math.PI * 2, Math.PI / 2 + (rnd() - 0.5) * 0.35, 'YXZ'),
     );
 
-    const charTargets = [];
-    body.object.traverse((node) => {
-      if (!node.isMesh || !node.material) return;
-      const mats = Array.isArray(node.material) ? node.material.map((m) => m.clone()) : [node.material.clone()];
-      node.material = Array.isArray(node.material) ? mats : mats[0];
-      for (const m of mats) charTargets.push(m);
-    });
-
     burningItems.push({
       object: body.object,
       title: body.wood.title,
@@ -565,7 +558,6 @@ export async function startWoodStand() {
       flyDuration: 0.48,
       burnT: 0,
       burnDuration: body.wood.kind === 'twig' ? 4.2 : 6.8,
-      charTargets,
     });
 
     sayNotice(customNotice || `В костёр: ${body.wood.title} — свежая древесина горит с густым дымом!`);
@@ -855,8 +847,6 @@ export async function startWoodStand() {
     }
 
     // Перелёт веток/чурок в костёр и их сгорание с густым дымом (Шаг 3)
-    const charColor = new THREE.Color(0x1f140e);
-    const glowColor = new THREE.Color(0x6b2205);
     for (let i = burningItems.length - 1; i >= 0; i--) {
       const b = burningItems[i];
       if (b.flyT < 1) {
@@ -868,11 +858,6 @@ export async function startWoodStand() {
       } else {
         b.burnT += dt / b.burnDuration;
         const p = Math.min(1, b.burnT);
-        // Древесина и листва в огне темнеют (обугливаются), раскаляются и оседают в угли
-        for (const m of b.charTargets) {
-          if (m.color) m.color.lerp(charColor, dt * 1.4);
-          if (m.emissive) m.emissive.lerp(glowColor, dt * 1.8);
-        }
         const shrink = p < 0.55 ? 1 - p * 0.18 : Math.max(0.02, 0.9 - ((p - 0.55) / 0.45) * 0.88);
         b.object.scale.setScalar(shrink);
         b.object.position.y = b.toPos.y * shrink;
