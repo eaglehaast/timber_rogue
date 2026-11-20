@@ -9,15 +9,14 @@ import { tiles, soften } from './surface.js';
 import { Smoke } from './smoke.js';
 import { generator, seed, random } from './random.js';
 
-// Стенд «Костёр и поленница» (Шаг 1 с правками):
-// - Игровая трава (grass-clover.jpg) и зона приёмки («трава чуть желтоватее»).
-// - Увеличенная вдвое поленница из досок цвета забора (fence-board-1.jpg с шейдером забора).
-// - Большой квадратный костёр для сжигания крупных веток (2.7 × 2.7 м, в 1.5 раза больше зоны приёмки, выложен камнями).
-// - Настоящие игровые крупные ветки клёна с листвой (growMaple + Limb, весом до 45 кг) и брёвна.
+// Стенд «Костёр и поленница» (Шаг 4: Акварельный хоздвор):
+// - Новая композиция: поленница прямо у забора (растёт влево), костёр справа, зона разгрузки перед поленницей.
+// - Сзади — деревенский штакетник. Под всей рабочей зоной — акварельный плитняк (timber_yard_paving_01).
+// - Акварельный костёр: зольное дно с углями (timber_yard_ash_decal.png), акварельные языки пламени (timber_yard_flames.png) и дым.
 const HOLD_DROP_LOW = -0.32, PICK_RANGE = 3.6;
-const ZONE_POS = new THREE.Vector3(0, 0, -2.5), ZONE_HALF = { x: 0.9, z: 0.8 };
-const PILE_POS = new THREE.Vector3(-2.75, 0, -2.5), PILE_SIZE = { w: 2.4, d: 1.15, h: 1.85 };
-const FIRE_POS = new THREE.Vector3(2.95, 0, -2.5), FIRE_SIDE = 2.7;
+const ZONE_POS = new THREE.Vector3(0, 0, -1.25), ZONE_HALF = { x: 0.95, z: 0.75 };
+const PILE_POS = new THREE.Vector3(0, 0, -3.2), PILE_SIZE = { w: 2.4, d: 1.15, h: 1.85 };
+const FIRE_POS = new THREE.Vector3(3.2, 0, -2.4), FIRE_SIDE = 2.7;
 const MAX_LIFT_KG = 45;
 
 const barkMat = dressBark();
@@ -43,7 +42,16 @@ function makeFenceBoardMaterial() {
 }
 const boardMat = makeFenceBoardMaterial();
 
-const [grassTex, mudTex] = tiles(['assets/textures/grass-clover.jpg', 'assets/textures/road-base.jpg']);
+// Акварельные ассеты хоздвора: трава, мощение плитняком, зола кострища и атлас пламени
+const [grassTex, pavingTex, ashDecalTex, flamesTex] = tiles([
+  'assets/textures/grass-clover.jpg',
+  'assets/textures/yard/timber_yard_paving_01.jpg',
+  'assets/textures/yard/timber_yard_ash_decal.png',
+  'assets/textures/yard/timber_yard_flames.png',
+]);
+ashDecalTex.wrapS = ashDecalTex.wrapT = THREE.ClampToEdgeWrapping;
+flamesTex.wrapS = flamesTex.wrapT = THREE.ClampToEdgeWrapping;
+
 function makeGrassFloor(size) {
   const map = grassTex.clone();
   map.repeat.set(size / 2, size / 2);
@@ -54,6 +62,41 @@ function makeGrassFloor(size) {
   mesh.rotation.x = -Math.PI / 2;
   mesh.receiveShadow = true;
   return mesh;
+}
+
+// Единая площадка плитняка под всей рабочей зоной хоздвора (поленница, костёр, зона разгрузки)
+function makeYardPaving() {
+  const W = 14.0, D = 4.8;
+  const map = pavingTex.clone();
+  map.repeat.set(W / 2.0, D / 2.0); // 1 плитка = 2 × 2 м
+  const mat = soften(new THREE.MeshLambertMaterial({ map }), {
+    contrast: 0.88, saturation: 0.75, scales: [0.15, 0.5], low: [0.92, 0.9, 0.86], high: [1.06, 1.05, 1.02], cells: [1, 1],
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, D), mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(-2.0, 0.003, -2.1);
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// Деревенский штакетник вдоль задней границы хоздвора
+function buildBackFence() {
+  const group = new THREE.Group();
+  const z = -4.25, startX = -9.2, endX = 5.2, step = 0.13;
+  for (const h of [0.45, 1.35]) {
+    const rail = new THREE.Mesh(makeBoardBox(endX - startX, 0.07, 0.04), boardMat);
+    rail.position.set((startX + endX) / 2, h, z - 0.035);
+    rail.castShadow = true;
+    group.add(rail);
+  }
+  for (let x = startX; x <= endX; x += step) {
+    const h = 1.75 + Math.sin(x * 3.7) * 0.04;
+    const picket = new THREE.Mesh(makeBoardBox(0.10, h, 0.025), boardMat);
+    picket.position.set(x, h / 2, z);
+    picket.castShadow = picket.receiveShadow = true;
+    group.add(picket);
+  }
+  return group;
 }
 
 // Цилиндрический тензор инерции тела массы m, радиуса r и длины L вдоль локальной оси Z тела.
@@ -315,23 +358,24 @@ function buildWoodpileFrame(pos = PILE_POS) {
   return group;
 }
 
-// Единая приёмная зона между поленницей и костром: «трава другого цвета — чуть желтоватее».
+// Единая приёмная зона между поленницей и костром: окантованная площадка на мощении хоздвора.
 function buildDropZone() {
   const group = new THREE.Group(), W = ZONE_HALF.x * 2, D = ZONE_HALF.z * 2;
-  const zoneMap = grassTex.clone();
-  zoneMap.repeat.set(W / 2, D / 2);
-  const padMat = soften(new THREE.MeshLambertMaterial({ map: zoneMap, color: 0xd8c878 }), {
-    contrast: 0.85, saturation: 0.75, scales: [0.2, 0.6], low: [0.92, 0.88, 0.68], high: [1.08, 1.04, 0.82], cells: [5, 4],
+  const padMat = new THREE.MeshLambertMaterial({
+    map: pavingTex,
+    color: 0xc8ba9a,
+    transparent: true,
+    opacity: 0.95,
   });
-  const pad = new THREE.Mesh(new THREE.PlaneGeometry(W, D), padMat);
+  const pad = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.06, D - 0.06), padMat);
   pad.rotation.x = -Math.PI / 2;
-  pad.position.y = 0.006;
+  pad.position.y = 0.007;
   pad.receiveShadow = true;
   group.add(pad);
 
   const bar = (w, d, x, z) => {
-    const m = new THREE.Mesh(makeBoardBox(w, 0.03, d), boardMat);
-    m.position.set(x, 0.015, z);
+    const m = new THREE.Mesh(makeBoardBox(w, 0.035, d), boardMat);
+    m.position.set(x, 0.016, z);
     m.receiveShadow = true;
     group.add(m);
   };
@@ -343,51 +387,36 @@ function buildDropZone() {
   return { group, padMat };
 }
 
-// Большой квадратный костёр для сжигания крупных веток (2.7 × 2.7 м — в 1.5 раза больше зоны приёмки),
-// выложенный по краям камнями, с грунтово-угольным дном, горящими поленьями, пламенем и дымом.
+// Акварельный костёр хоздвора:
+// - Зольное дно из timber_yard_ash_decal.png (акварель с пеплом, углями и мягкими краями).
+// - Обугленные брёвна и обгорелые камни по периметру.
+// - Акварельные языки пламени из атласа timber_yard_flames.png (8 уникальных акварельных мазков огня).
+// - Дым из smoke.js, усиливающийся при горении свежих веток.
 function buildCampfire(rnd) {
   const group = new THREE.Group();
-  const S = FIRE_SIDE, half = S / 2;
+  const S = FIRE_SIDE;
 
-  const pitMap = mudTex.clone();
-  pitMap.repeat.set(1.2, 1.2);
-  const pit = new THREE.Mesh(new THREE.BoxGeometry(S - 0.18, 0.03, S - 0.18), new THREE.MeshLambertMaterial({ map: pitMap, color: 0x3b281d }));
-  pit.position.y = 0.015;
-  pit.receiveShadow = true;
-  group.add(pit);
+  // Акварельное пятно пепелища с затуханием краев (timber_yard_ash_decal.png)
+  const ashMat = new THREE.MeshLambertMaterial({
+    map: ashDecalTex,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+  });
+  const ashDecal = new THREE.Mesh(new THREE.PlaneGeometry(S, S), ashMat);
+  ashDecal.rotation.x = -Math.PI / 2;
+  ashDecal.position.y = 0.008;
+  ashDecal.receiveShadow = true;
+  group.add(ashDecal);
 
-  const ember = new THREE.Mesh(new THREE.BoxGeometry(S * 0.62, 0.045, S * 0.62), new THREE.MeshBasicMaterial({ color: 0x521d07 }));
-  ember.position.y = 0.025;
-  group.add(ember);
-
-  const stoneMats = [
-    new THREE.MeshLambertMaterial({ color: 0x686c66 }),
-    new THREE.MeshLambertMaterial({ color: 0x555852 }),
-    new THREE.MeshLambertMaterial({ color: 0x77756d }),
-  ];
-  const perSide = 11;
-  for (let side = 0; side < 4; side++) {
-    for (let i = 0; i < perSide; i++) {
-      const t = (i / perSide - 0.5) * (S - 0.14), jitter = (rnd() - 0.5) * 0.04;
-      const x = side === 0 ? t : side === 1 ? half - 0.07 + jitter : side === 2 ? -t : -half + 0.07 + jitter;
-      const z = side === 0 ? -half + 0.07 + jitter : side === 1 ? t : side === 2 ? half - 0.07 + jitter : -t;
-      const r = 0.11 + rnd() * 0.045;
-      const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), stoneMats[(i + side) % 3]);
-      stone.position.set(x, r * 0.55, z);
-      stone.scale.set(1.25, 0.72, 1.05);
-      stone.rotation.set(rnd() * 0.4, rnd() * Math.PI, rnd() * 0.4);
-      stone.castShadow = stone.receiveShadow = true;
-      group.add(stone);
-    }
-  }
-
-  const charMat = new THREE.MeshLambertMaterial({ color: 0x2f2016, emissive: 0x5e1e06 });
+  // Обугленные старые брёвна в очаге
+  const charMat = new THREE.MeshLambertMaterial({ color: 0x221812, emissive: 0x3d1405 });
   const logSpecs = [
-    { len: 1.55, r: 0.09, x: -0.2, y: 0.12, z: -0.15, rx: 0.08, ry: 0.35, rz: 1.52 },
-    { len: 1.65, r: 0.085, x: 0.18, y: 0.14, z: 0.2, rx: -0.1, ry: -0.5, rz: 1.5 },
-    { len: 1.45, r: 0.08, x: 0.0, y: 0.22, z: -0.05, rx: 0.15, ry: 1.2, rz: 1.42 },
-    { len: 1.3, r: 0.07, x: -0.25, y: 0.25, z: 0.15, rx: -0.2, ry: -1.0, rz: 1.35 },
-    { len: 1.2, r: 0.065, x: 0.28, y: 0.24, z: -0.22, rx: 0.22, ry: 0.8, rz: 1.32 },
+    { len: 1.45, r: 0.085, x: -0.15, y: 0.10, z: -0.12, rx: 0.06, ry: 0.4, rz: 1.52 },
+    { len: 1.55, r: 0.08,  x: 0.12,  y: 0.12, z: 0.16,  rx: -0.08, ry: -0.6, rz: 1.5 },
+    { len: 1.35, r: 0.075, x: 0.0,   y: 0.18, z: -0.04, rx: 0.12, ry: 1.1, rz: 1.42 },
+    { len: 1.20, r: 0.065, x: -0.22, y: 0.21, z: 0.12,  rx: -0.18, ry: -0.9, rz: 1.35 },
   ];
   for (const l of logSpecs) {
     const log = new THREE.Mesh(new THREE.CylinderGeometry(l.r * 0.9, l.r, l.len, 10), charMat);
@@ -397,36 +426,66 @@ function buildCampfire(rnd) {
     group.add(log);
   }
 
-  const flames = [], flameColors = [0xff5e14, 0xff9a22, 0xffcf54];
-  for (let i = 0; i < 14; i++) {
-    const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(0.13 + (i % 3) * 0.05, 0.52 + (i % 3) * 0.18, 6),
-      new THREE.MeshBasicMaterial({ color: flameColors[i % flameColors.length] }),
-    );
-    const a = (i / 14) * Math.PI * 2, rad = i < 2 ? 0.08 : 0.25 + (i % 3) * 0.22;
-    cone.position.set(Math.cos(a) * rad, 0.28 + (i % 2) * 0.06, Math.sin(a) * rad);
-    group.add(cone);
-    flames.push({ cone, baseH: cone.position.y, phase: i * 1.1 });
+  // Обгорелые камни по краям пепелища (сдержанные, не ядовитые)
+  const stoneMat = new THREE.MeshLambertMaterial({ color: 0x4f4942 });
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2 + (rnd() - 0.5) * 0.2;
+    const r = (S / 2 - 0.22) * (0.85 + (rnd() * 0.2));
+    const stone = new THREE.Mesh(new THREE.DodecahedronGeometry(0.12 + rnd() * 0.06, 0), stoneMat);
+    stone.position.set(Math.cos(a) * r, 0.08, Math.sin(a) * r);
+    stone.scale.set(1.2, 0.65, 1.0);
+    stone.rotation.set(rnd() * 0.5, rnd() * Math.PI, rnd() * 0.5);
+    stone.castShadow = true;
+    group.add(stone);
   }
 
-  const light = new THREE.PointLight(0xff7b29, 3.2, 12);
+  // Акварельные языки пламени из атласа timber_yard_flames.png:
+  // 8 ячеек (4 столбца × 2 строки). Каждая карточка пламени — прозрачный мазок акварели.
+  const flameMeshes = [];
+  const flameCount = 8;
+  for (let i = 0; i < flameCount; i++) {
+    const col = i % 4, row = Math.floor(i / 4) % 2;
+    const map = flamesTex.clone();
+    map.repeat.set(0.25, 0.5);
+    map.offset.set(col * 0.25, row === 0 ? 0.5 : 0.0);
+    map.needsUpdate = true;
+
+    const w = 0.85 + (i % 3) * 0.18, h = 0.95 + (i % 2) * 0.25;
+    const geo = new THREE.PlaneGeometry(w, h);
+    geo.translate(0, h * 0.45, 0);
+    const mat = new THREE.MeshBasicMaterial({
+      map,
+      transparent: true,
+      depthWrite: false,
+      alphaTest: 0.04,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    const rad = i === 0 ? 0.05 : 0.15 + (i % 4) * 0.12;
+    const ang = (i / flameCount) * Math.PI * 2;
+    mesh.position.set(Math.cos(ang) * rad, 0.06, Math.sin(ang) * rad);
+    mesh.rotation.y = (i / flameCount) * Math.PI + (rnd() - 0.5) * 0.4;
+    group.add(mesh);
+    flameMeshes.push({ mesh, baseH: mesh.position.y, phase: i * 1.25, rotY: mesh.rotation.y });
+  }
+
+  const light = new THREE.PointLight(0xff8c38, 3.4, 12);
   light.position.set(0, 0.85, 0);
   group.add(light);
   group.position.copy(FIRE_POS);
 
-  // Базовый дым костра + два дополнительных генератора густого дыма, которые включаются, когда горит свежая ветка
+  // Дым из smoke.js над костром
   const smoke = new Smoke(new THREE.Vector3(FIRE_POS.x, 0.75, FIRE_POS.z), rnd);
-  const freshSmoke1 = new Smoke(new THREE.Vector3(FIRE_POS.x - 0.32, 0.65, FIRE_POS.z + 0.22), rnd);
-  const freshSmoke2 = new Smoke(new THREE.Vector3(FIRE_POS.x + 0.32, 0.68, FIRE_POS.z - 0.22), rnd);
+  const freshSmoke1 = new Smoke(new THREE.Vector3(FIRE_POS.x - 0.35, 0.65, FIRE_POS.z + 0.22), rnd);
+  const freshSmoke2 = new Smoke(new THREE.Vector3(FIRE_POS.x + 0.35, 0.68, FIRE_POS.z - 0.22), rnd);
   const smokeGroup = new THREE.Group();
   smokeGroup.add(smoke, freshSmoke1, freshSmoke2);
-  let smokeBoost = 0; // 0..1 — насколько густо дымит костёр от свежих веток
+  let smokeBoost = 0;
 
   function tick(dt, time, burningCount = 0) {
     const targetBoost = burningCount > 0 ? Math.min(1, 0.65 + burningCount * 0.25) : 0;
     smokeBoost += (targetBoost - smokeBoost) * (1 - Math.exp(-2.2 * dt));
 
-    // Когда горит свежая ветка, дым идёт быстрее и гуще
     smoke.tick(dt * (1 + smokeBoost * 0.9));
     freshSmoke1.tick(dt * (0.6 + smokeBoost * 1.3));
     freshSmoke2.tick(dt * (0.6 + smokeBoost * 1.3));
@@ -438,12 +497,16 @@ function buildCampfire(rnd) {
       }
     }
 
-    const fireMult = 1 + smokeBoost * 0.45;
-    light.intensity = (3.0 + 0.45 * Math.sin(time * 9.5) + 0.25 * Math.cos(time * 15.3)) * fireMult;
-    for (const f of flames) {
-      const s = (0.85 + 0.26 * Math.sin(time * 10.5 + f.phase)) * fireMult;
-      f.cone.scale.set(1 + 0.14 * Math.cos(time * 8 + f.phase), s, 1 + 0.14 * Math.sin(time * 9 + f.phase));
-      f.cone.position.y = f.baseH + (s - 1) * 0.11;
+    const fireMult = 1 + smokeBoost * 0.5;
+    light.intensity = (3.2 + 0.45 * Math.sin(time * 9.5) + 0.25 * Math.cos(time * 15.3)) * fireMult;
+
+    // Анимация акварельных языков пламени: мягкое колыхание и мерцание
+    for (const f of flameMeshes) {
+      const s = (0.92 + 0.24 * Math.sin(time * 8.5 + f.phase)) * fireMult;
+      const sway = 0.08 * Math.sin(time * 6.0 + f.phase);
+      f.mesh.scale.set(1 + 0.12 * Math.cos(time * 7 + f.phase), s, 1);
+      f.mesh.rotation.z = sway;
+      f.mesh.rotation.y = f.rotY + 0.05 * Math.sin(time * 5 + f.phase);
     }
   }
   return { group, smoke: smokeGroup, tick };
@@ -466,6 +529,8 @@ export async function startWoodStand() {
   scene.add(hemi, sun);
 
   scene.add(makeGrassFloor(140));
+  scene.add(makeYardPaving());
+  scene.add(buildBackFence());
 
   const rnd = generator(42);
   const dropZone = buildDropZone(), campfire = buildCampfire(rnd);
@@ -664,7 +729,7 @@ export async function startWoodStand() {
   el('hud').appendChild(crosshair);
 
   const player = makePlayer();
-  player.pos.set(0, 0, 4.8);
+  player.pos.set(0, 0, 2.2);
   const keys = new Set(), stick = bindStick(el('stick')), actionBtn = el('touch-saw');
   actionBtn.textContent = 'Взять / Бросить';
 
