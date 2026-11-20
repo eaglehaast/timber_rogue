@@ -3,7 +3,7 @@ import { MOUSE, fieldOfView, makePlayer, forwardOf, turnHead, walkInput, walkSpe
 import { Body, World } from './bodies.js';
 import { dressBark, dressLimbs } from './bark.js';
 import { trunkShape, dressWood } from './trunk.js';
-import { growMaple } from './maple.js';
+import { growMaple, barkGeometry } from './maple.js';
 import { Limb } from './limbs.js';
 import { tiles, soften } from './surface.js';
 import { Smoke } from './smoke.js';
@@ -56,9 +56,36 @@ function makeGrassFloor(size) {
   return mesh;
 }
 
+// Цилиндрический тензор инерции тела массы m, радиуса r и длины L вдоль локальной оси Z тела.
 function rodInertia(m, r, L) {
-  const ix = Math.max(0.05, 0.5 * m * r * r), iyz = Math.max(0.05, (m * (3 * r * r + L * L)) / 12);
-  return new THREE.Matrix3().set(ix, 0, 0, 0, iyz, 0, 0, 0, iyz);
+  const iz = Math.max(0.05, 0.5 * m * r * r), ixy = Math.max(0.05, (m * (3 * r * r + L * L)) / 12);
+  return new THREE.Matrix3().set(ixy, 0, 0, 0, ixy, 0, 0, 0, iz);
+}
+
+// Строит настоящую игровую ось бревна клёна вдоль локальной оси Z (от -length/2 до +length/2) для barkGeometry:
+// кора ложится в мировом масштабе, сечение чуть живое (эллипс с лёгкими наплывами), а оба торца — веер в полярных
+// координатах с настоящими годовыми кольцами спила (end-grain-1..5.jpg).
+function makeLogAxis(length, radius, seedPhase = 0) {
+  const steps = Math.max(4, Math.ceil(length / 0.05));
+  const points = [];
+  for (let i = 0; i <= steps; i++) {
+    const u = i / steps, s = u * length, z = -length / 2 + s;
+    const taper = 1 - 0.06 * u;
+    points.push({
+      s,
+      p: new THREE.Vector3(0, 0, z),
+      t: new THREE.Vector3(0, 0, 1),
+      n: new THREE.Vector3(1, 0, 0),
+      b: new THREE.Vector3(0, 1, 0),
+      r: radius * taper,
+    });
+  }
+  const profile = (az, s) => 1 + 0.045 * Math.cos(2 * az + seedPhase) + 0.025 * Math.sin(3 * az - seedPhase + s * 2);
+  return {
+    id: 0, parent: null, attach: 0, joint: 'trunk', level: 0, dead: false,
+    included: 0, includedTo: 0, len: length, points, profile,
+    bark: { radius, s: length, y: length },
+  };
 }
 
 // Собирает мелкую веточку с листвой (которая сидит на бревне и «откусывается» в зоне приёмки).
@@ -83,7 +110,7 @@ function createSnippedTwigBody(world, scene, worldPos, yaw) {
   const length = 0.32, radius = 0.025, mass = 0.6;
   const group = new THREE.Group();
   const mesh = makeTwigMesh(length);
-  mesh.rotation.z = -Math.PI / 2;
+  mesh.rotation.x = Math.PI / 2;
   group.add(mesh);
   scene.add(group);
   const body = new Body(group, {
@@ -91,7 +118,7 @@ function createSnippedTwigBody(world, scene, worldPos, yaw) {
     inertia: rodInertia(mass, radius, length),
     position: worldPos.clone(),
     quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
-    capsules: [{ a: new THREE.Vector3(-0.12, 0, 0), b: new THREE.Vector3(0.12, 0, 0), r: radius }],
+    capsules: [{ a: new THREE.Vector3(0, 0, -0.12), b: new THREE.Vector3(0, 0, 0.12), r: radius }],
   });
   body.wood = {
     kind: 'twig', length, cm: 32, radius, mass, fitsPile: false, holdDist: 1.45,
@@ -102,12 +129,12 @@ function createSnippedTwigBody(world, scene, worldPos, yaw) {
   return body;
 }
 
-// Собирает бревно-отпил ствола с настоящей корой, годовыми кольцами на торцах и мелкими веточками с листвой.
+// Собирает настоящее игровое бревно-отпил ствола вдоль локальной оси Z (срез смотрит вдоль +Z и -Z).
 function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }) {
   const group = new THREE.Group();
-  const cylGeo = new THREE.CylinderGeometry(radius * 0.95, radius, length, 18, 1, false);
-  cylGeo.rotateZ(-Math.PI / 2);
-  const trunkMesh = new THREE.Mesh(cylGeo, [barkMat, woodMat, woodMat]);
+  const axis = makeLogAxis(length, radius, pos.x * 3.1 + pos.z * 1.7 + length * 5);
+  const geo = barkGeometry([{ axis, from: 0, to: length, cutFrom: true, cutTo: true }]);
+  const trunkMesh = new THREE.Mesh(geo, limbSkin);
   trunkMesh.castShadow = trunkMesh.receiveShadow = true;
   group.add(trunkMesh);
 
@@ -115,9 +142,9 @@ function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }
   for (let i = 0; i < twigs; i++) {
     const tLen = 0.24 + (i % 2) * 0.08;
     const mesh = makeTwigMesh(tLen);
-    const x = (i / Math.max(1, twigs - 1) - 0.5) * (length * 0.62), a = i * 2.1 + 0.6;
-    mesh.position.set(x, Math.cos(a) * (radius + tLen * 0.36), Math.sin(a) * (radius + tLen * 0.36));
-    mesh.rotation.set(Math.sin(a) * 0.85, 0, (i % 2 ? 1 : -1) * 0.5);
+    const z = (i / Math.max(1, twigs - 1) - 0.5) * (length * 0.62), a = i * 2.1 + 0.6;
+    mesh.position.set(Math.cos(a) * (radius + tLen * 0.36), Math.sin(a) * (radius + tLen * 0.36), z);
+    mesh.rotation.set((i % 2 ? 1 : -1) * 0.45, 0, -Math.sin(a) * 0.85);
     twigGroup.add(mesh);
   }
   if (twigs > 0) group.add(twigGroup);
@@ -130,7 +157,7 @@ function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }
     inertia: rodInertia(mass, radius, length),
     position: pos.clone(),
     quaternion: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw),
-    capsules: [{ a: new THREE.Vector3(-half, 0, 0), b: new THREE.Vector3(half, 0, 0), r: radius }],
+    capsules: [{ a: new THREE.Vector3(0, 0, -half), b: new THREE.Vector3(0, 0, half), r: radius }],
   });
 
   const cm = Math.round(length * 100), fitsPile = cm >= 50 && cm <= 100;
@@ -227,9 +254,12 @@ function makeBoardBox(sx, sy, sz) {
 }
 
 // Увеличенная поленница из досок цвета забора, открытая спереди (+Z), в позиции pos.
+// Крыша наклонена вперёд на угол roofPitch, а задние столбики выше передних и точно подпирают крышу.
 function buildWoodpileFrame(pos = PILE_POS) {
   const group = new THREE.Group();
   const { w: W, d: D, h: H } = PILE_SIZE, T = 0.045;
+  const roofPitch = 0.08, roofMidY = H + 0.06;
+  const roofYAt = (z) => roofMidY - z * Math.tan(roofPitch);
   const box = (w, h, d, x, y, z, rx = 0) => {
     const m = new THREE.Mesh(makeBoardBox(w, h, d), boardMat);
     m.position.set(x, y, z);
@@ -237,16 +267,33 @@ function buildWoodpileFrame(pos = PILE_POS) {
     m.castShadow = m.receiveShadow = true;
     group.add(m);
   };
+  // Нижний настил
   box(W, 0.08, 0.1, 0, 0.04, -D * 0.38);
   box(W, 0.08, 0.1, 0, 0.04, D * 0.38);
   for (let i = -2; i <= 2; i++) box(W - 0.04, T, 0.19, 0, 0.08 + T / 2, i * 0.21);
+
+  // Боковые угловые столбы (задние столбы sz === -1 выше передних и доходят прямо до крыши!) и наклонные стропила
   for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) box(0.09, H, 0.09, sx * (W / 2 - 0.045), H / 2, sz * (D / 2 - 0.045));
+    for (const sz of [-1, 1]) {
+      const zPost = sz * (D / 2 - 0.045);
+      const hPost = roofYAt(zPost) - T * 0.5;
+      box(0.09, hPost, 0.09, sx * (W / 2 - 0.045), hPost / 2, zPost);
+    }
     for (let h = 0.26; h <= H - 0.12; h += 0.26) box(T, 0.16, D - 0.06, sx * (W / 2 - T / 2), h, 0);
+    // Верхняя наклонная балка-стропило под скат крыши
+    box(0.08, 0.07, D + 0.08, sx * (W / 2 - 0.045), roofMidY - 0.03, 0, roofPitch);
   }
-  box(0.09, H, 0.09, 0, H / 2, -D / 2 + 0.045);
-  for (const h of [0.45, 0.95, 1.45]) box(W, 0.14, T, 0, h, -D / 2 + T / 2);
-  for (let i = -2; i <= 2; i++) box(W + 0.2, T, 0.24, 0, H + 0.06 - i * 0.018, i * 0.23, 0.07);
+
+  // Задний центральный столб (высокий, до заднего края крыши) и задние поперечные доски
+  const zBackPost = -D / 2 + 0.045, hBackPost = roofYAt(zBackPost) - T * 0.5;
+  box(0.09, hBackPost, 0.09, 0, hBackPost / 2, zBackPost);
+  for (const h of [0.45, 0.95, 1.45, hBackPost - 0.08]) box(W, 0.14, T, 0, h, -D / 2 + T / 2);
+
+  // Доски крыши по наклонным стропилам
+  for (let i = -2; i <= 2; i++) {
+    const z = i * 0.23;
+    box(W + 0.2, T, 0.24, 0, roofYAt(z), z, roofPitch);
+  }
   group.position.copy(pos);
   return group;
 }
@@ -472,8 +519,10 @@ export async function startWoodStand() {
     if (spawnedNext) addNewWoodpile();
 
     const targetPos = new THREE.Vector3(slot.x, slot.y, slot.zBack + body.wood.length / 2);
+    // Ось полена теперь идёт вдоль локальной оси Z (срезы смотрят в +Z и -Z) → полено лежит строго горизонтально
+    // вдоль оси Z, поворачиваясь только вокруг своей продольной оси Z на случайный угол roll!
     const roll = (rnd() - 0.5) * Math.PI * 2;
-    const targetQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, roll, 'YXZ'));
+    const targetQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), roll);
 
     stackedObjects.push(body.object);
     flyingLogs.push({
