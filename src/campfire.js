@@ -1,22 +1,127 @@
 import * as THREE from 'three';
-import { buildEmberBed, coalAtlasUV, coalEmission } from './ember-bed.js';
+import { buildEmberBed, coalAtlasUV, coalEmission, isOnEmberBed } from './ember-bed.js';
 import { Smoke } from './smoke.js';
-import { decal, tiles } from './surface.js';
+import { decal, tiles, soften } from './surface.js';
+import { pointAt } from './maple.js';
+import { Limb } from './limbs.js';
+import { generator } from './random.js';
 
-const [ash, flames] = tiles([
+export const HOLD_DROP_LOW = -0.32, PICK_RANGE = 3.6;
+export const PAVING_POS = new THREE.Vector3(-1.6, 0, -2.1), PAVING_HALF = { x: 6.6, z: 2.15 };
+export const PILE_POS = new THREE.Vector3(0, 0, -3.2), PILE_SIZE = { w: 2.4, d: 1.15, h: 1.85 };
+export const FIRE_POS = new THREE.Vector3(3.2, 0, -2.3), FIRE_SIDE = 2.7;
+export const MAX_LIFT_KG = 45;
+
+// Координаты хоздвора (плитка + поленница + костёр) в игровом дворе (house-view.js / main.js):
+// стоит между клёнами и берегом, лицом к деревьям и дому (+Z), на выровненной площадке WOODYARD_PAD.
+export const WOODYARD_ORIGIN = new THREE.Vector3(-6.9, 0, -7.4);
+export const WOODYARD_PAD = {
+  x: WOODYARD_ORIGIN.x + PAVING_POS.x,
+  z: WOODYARD_ORIGIN.z + PAVING_POS.z,
+  w: PAVING_HALF.x * 2 + 0.6,
+  d: PAVING_HALF.z * 2 + 0.6,
+};
+
+const [ash, flames, paint, heat, ashCrust, pavingTex, fenceBoardMap] = tiles([
   'assets/textures/yard/campfire-ground-ash.webp',
   'assets/textures/yard/timber_yard_flames.png',
+  'assets/textures/yard/coals-paint.webp',
+  'assets/textures/yard/coals-heat.png',
+  'assets/textures/yard/coals-ash.webp',
+  'assets/textures/yard/timber_yard_paving_01.jpg',
+  'assets/textures/fence-board-1.jpg',
 ]);
 ash.wrapS = ash.wrapT = flames.wrapS = flames.wrapT = THREE.ClampToEdgeWrapping;
-
-const loader = new THREE.TextureLoader();
-const [paint, heat, ashCrust] = await Promise.all(['coals-paint.webp', 'coals-heat.png', 'coals-ash.webp'].map(async name => {
-  const map = await loader.loadAsync('assets/textures/yard/' + name);
-  map.anisotropy = 4;
-  return map;
-}));
-paint.colorSpace = ashCrust.colorSpace = THREE.SRGBColorSpace;
+paint.wrapS = paint.wrapT = heat.wrapS = heat.wrapT = ashCrust.wrapS = ashCrust.wrapT = THREE.ClampToEdgeWrapping;
 heat.colorSpace = THREE.NoColorSpace;
+
+const FENCE_COLOR = 'vec3(0.12, 0.11, 0.1)', FENCE_PAINT = 'vec3(0.067, 0.24, 0.63)';
+function makeFenceBoardMaterial() {
+  const mat = new THREE.MeshLambertMaterial({ map: fenceBoardMap });
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      float fenceLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+      diffuseColor.rgb = ${FENCE_COLOR} * fenceLuma / dot(${FENCE_PAINT}, vec3(0.299, 0.587, 0.114));`);
+  };
+  mat.customProgramCacheKey = () => 'woodpile-fence-board';
+  return mat;
+}
+export const boardMat = makeFenceBoardMaterial();
+
+export function makeBoardBox(sx, sy, sz) {
+  const geo = new THREE.BoxGeometry(sx, sy, sz);
+  const uv = geo.attributes.uv;
+  const span = Math.max(sx, sy, sz);
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i), uv.getY(i) * (span / 0.7));
+  return geo;
+}
+
+export function makeYardPaving() {
+  const W = PAVING_HALF.x * 2, D = PAVING_HALF.z * 2;
+  const map = pavingTex.clone();
+  map.repeat.set(W / 2.0, D / 2.0);
+  const mat = soften(new THREE.MeshLambertMaterial({ map, color: 0xffffff }), {
+    contrast: 0.88, saturation: 0.75, scales: [0.15, 0.5], low: [0.92, 0.9, 0.86], high: [1.06, 1.05, 1.02], cells: [1, 1],
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, D), mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(PAVING_POS.x, 0.004, PAVING_POS.z);
+  mesh.receiveShadow = true;
+  return { mesh, mat };
+}
+
+export function buildBackFence() {
+  const group = new THREE.Group();
+  const z = -4.25, startX = -9.2, endX = 5.2, step = 0.13;
+  for (const h of [0.45, 1.35]) {
+    const rail = new THREE.Mesh(makeBoardBox(endX - startX, 0.07, 0.04), boardMat);
+    rail.position.set((startX + endX) / 2, h, z - 0.035);
+    rail.castShadow = true;
+    group.add(rail);
+  }
+  for (let x = startX; x <= endX; x += step) {
+    const h = 1.75 + Math.sin(x * 3.7) * 0.04;
+    const picket = new THREE.Mesh(makeBoardBox(0.10, h, 0.025), boardMat);
+    picket.position.set(x, h / 2, z);
+    picket.castShadow = picket.receiveShadow = true;
+    group.add(picket);
+  }
+  return group;
+}
+
+export function buildWoodpileFrame(pos = PILE_POS) {
+  const group = new THREE.Group();
+  const { w: W, d: D, h: H } = PILE_SIZE, T = 0.045;
+  const roofPitch = 0.08, roofMidY = H + 0.06;
+  const roofYAt = (z) => roofMidY - z * Math.tan(roofPitch);
+  const box = (w, h, d, x, y, z, rx = 0) => {
+    const m = new THREE.Mesh(makeBoardBox(w, h, d), boardMat);
+    m.position.set(x, y, z);
+    m.rotation.x = rx;
+    m.castShadow = m.receiveShadow = true;
+    group.add(m);
+  };
+  box(W, 0.08, 0.1, 0, 0.04, -D * 0.38);
+  box(W, 0.08, 0.1, 0, 0.04, D * 0.38);
+  for (let i = -2; i <= 2; i++) box(W - 0.04, T, 0.19, 0, 0.08 + T / 2, i * 0.21);
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const zPost = sz * (D / 2 - 0.045), hPost = roofYAt(zPost) - T * 0.5;
+      box(0.09, hPost, 0.09, sx * (W / 2 - 0.045), hPost / 2, zPost);
+    }
+    for (let h = 0.26; h <= H - 0.12; h += 0.26) box(T, 0.16, D - 0.06, sx * (W / 2 - T / 2), h, 0);
+    box(0.08, 0.07, D + 0.08, sx * (W / 2 - 0.045), roofMidY - 0.03, 0, roofPitch);
+  }
+  const zBackPost = -D / 2 + 0.045, hBackPost = roofYAt(zBackPost) - T * 0.5;
+  box(0.09, hBackPost, 0.09, 0, hBackPost / 2, zBackPost);
+  for (const h of [0.45, 0.95, 1.45, hBackPost - 0.08]) box(W, 0.14, T, 0, h, -D / 2 + T / 2);
+  for (let i = -2; i <= 2; i++) {
+    const z = i * 0.23;
+    box(W + 0.2, T, 0.24, 0, roofYAt(z), z, roofPitch);
+  }
+  group.position.copy(pos);
+  return group;
+}
 
 export function buildCampfire(origin, side, rnd) {
   const group = new THREE.Group();
@@ -116,6 +221,7 @@ export function buildCampfire(origin, side, rnd) {
 
 // Материалы на дереве и в поленнице общие. Обгорает только принятая ветка.
 export function scorchLimb(limb, reach) {
+  if (!limb) return { burn: { value: 0 }, dispose() {} };
   const burn = { value: 0 }, owned = [];
   const variety = Math.floor(17 * limb.weight.mass + limb.parts[0].from * 29);
   function coating(original, part) {
@@ -165,4 +271,349 @@ export function scorchLimb(limb, reach) {
   leaves.material = coating(leaves.material, 'leaf');
   leaves.castShadow = false;
   return { burn, dispose() { for (const m of owned) m.dispose(); } };
+}
+
+// Анализирует любое игровое тело отпила (и ветки/верхушки с body.limb, и воксельные чурбаки/клинья из dropPiece в main.js).
+export function classifyLimbBody(body) {
+  if (body.limbs) {
+    const mass = Math.round((1 / body.invMass) * 10) / 10;
+    body.wood = {
+      kind: 'tree', length: 3, cm: 300, radius: 0.2, mass, cutDir: new THREE.Vector3(0, 0, 1),
+      twigs: 0, fitsPile: false, tooHeavy: true, holdDist: 1.8,
+      title: `Поваленное дерево (${mass} кг)`,
+      verdict: 'Бревно тяжёлое — распили на части!',
+    };
+    return body;
+  }
+  if (body.limb) {
+    const { limb } = body;
+    const mainPart = limb.parts[0];
+    const p0 = pointAt(mainPart.axis, mainPart.from), p1 = pointAt(mainPart.axis, mainPart.to);
+    const cutVec = p1.p.clone().sub(p0.p);
+    const length = mainPart.to - mainPart.from;
+    const cutDir = cutVec.lengthSq() > 1e-6 ? cutVec.normalize() : new THREE.Vector3(0, 0, 1);
+    const radius = (p0.r + p1.r) / 2;
+    const mass = Math.round(limb.weight.mass * 10) / 10;
+    const cm = Math.round(length * 100);
+
+    const sideParts = limb.parts.slice(1);
+    const hasMajorFork = sideParts.some((p) => (p.to - p.from) > 0.55 || pointAt(p.axis, p.from).r > 0.028);
+    const isLog = radius >= 0.055 && !hasMajorFork;
+    const minorTwigs = isLog ? sideParts.length : 0;
+
+    const tooHeavy = isLog ? cm > 100 || mass > MAX_LIFT_KG : mass > MAX_LIFT_KG;
+    const fitsPile = isLog && !tooHeavy && cm >= 50 && cm <= 100;
+    const kind = !isLog ? (cm <= 40 && mass < 2.5 ? 'twig' : 'branch') : 'log';
+
+    const title = tooHeavy
+      ? `Тяжёлое бревно (${cm} см, ${mass} кг)`
+      : kind === 'twig'
+        ? `Откушенная мелкая ветка с листвой (${cm} см)`
+        : kind === 'branch'
+          ? `Ветвь клёна с листвой (~${cm} см, ${mass} кг)`
+          : minorTwigs > 0
+            ? `Бревно с веточками (${cm} см, ${mass} кг)`
+            : `Бревно (${cm} см, ${mass} кг)`;
+
+    const verdict = tooHeavy
+      ? 'Бревно тяжёлое — распили на части!'
+      : fitsPile
+        ? (minorTwigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки с листвой откусятся для костра' : 'Подходит в поленницу (50–100 см)')
+        : kind === 'twig'
+          ? 'Мелкая ветка от полена → в костёр'
+          : kind === 'branch'
+            ? `Крупная ветка (${mass} кг) → в костёр (горит с дымом)`
+            : `Короткий чурбак (${cm} см < 50 см) → пойдёт в костёр`;
+
+    body.wood = {
+      kind, length, cm, radius, mass, cutDir,
+      twigs: minorTwigs, fitsPile, tooHeavy,
+      holdDist: kind === 'branch' ? THREE.MathUtils.clamp(1.6 + body.reach * 0.45, 1.7, 2.45) : 1.65,
+      title, verdict,
+    };
+    return body;
+  }
+
+  // Воксельный кусок низа ствола (клин из подпила или отпиленный чурбак комля из dropPiece в main.js)
+  const box = new THREE.Box3().setFromObject(body.object);
+  const size = box.getSize(new THREE.Vector3());
+  const length = Math.max(size.x, size.y, size.z);
+  const radius = Math.max(0.04, Math.min(size.x, size.z) / 2);
+  const cutDir = size.y >= size.x && size.y >= size.z
+    ? new THREE.Vector3(0, 1, 0)
+    : size.x >= size.z ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 0, 1);
+  const mass = Math.round((1 / body.invMass) * 10) / 10;
+  const cm = Math.round(length * 100);
+  const tooHeavy = cm > 100 || mass > MAX_LIFT_KG;
+  const fitsPile = !tooHeavy && cm >= 50 && cm <= 100 && radius >= 0.055;
+  const kind = fitsPile ? 'log' : 'chunk';
+  const title = tooHeavy
+    ? `Тяжёлый комель (${cm} см, ${mass} кг)`
+    : fitsPile
+      ? `Бревно комля (${cm} см, ${mass} кг)`
+      : `Обрезок ствола (${cm} см, ${mass} кг)`;
+  const verdict = tooHeavy
+    ? 'Бревно тяжёлое — распили на части!'
+    : fitsPile
+      ? 'Подходит в поленницу (50–100 см)'
+      : `Короткий кусок (${cm} см < 50 см) → пойдёт в костёр`;
+
+  body.wood = {
+    kind, length, cm, radius, mass, cutDir,
+    twigs: 0, fitsPile, tooHeavy, holdDist: 1.65,
+    title, verdict,
+  };
+  return body;
+}
+
+// Единый контроллер хоздвора (плитняк + поленница + костёр) — работает одинаково на стенде (wood-stand.js) и в игре (main.js).
+export function createWoodyard({ scene, origin = new THREE.Vector3(), withFence = true, rnd = generator(42), onNotice = () => {}, onPileCount = () => {} }) {
+  const root = new THREE.Group();
+  root.position.copy(origin);
+  scene.add(root);
+
+  const paving = makeYardPaving();
+  root.add(paving.mesh);
+  if (withFence) root.add(buildBackFence());
+
+  const campfire = buildCampfire(FIRE_POS, FIRE_SIDE, generator(394));
+  root.add(campfire.group);
+
+  const PILE_COLS = 10, PILE_ROWS = 8, SLOT_R = 0.105;
+  const piles = [], flyingLogs = [], burningItems = [], stackedObjects = [];
+
+  function updateCount() {
+    const count = piles.reduce((sum, pile) => sum + pile.count, 0);
+    onPileCount(count, piles.length);
+  }
+
+  function addNewWoodpile() {
+    const idx = piles.length, pos = PILE_POS.clone();
+    pos.x -= idx * (PILE_SIZE.w + 0.22);
+    const frame = buildWoodpileFrame(pos);
+    root.add(frame);
+    const slots = [], innerLeft = pos.x - PILE_SIZE.w / 2 + 0.15 + SLOT_R;
+    const baseY = 0.125 + SLOT_R, rowDy = SLOT_R * 1.74, zCenter = pos.z;
+    for (let r = 0; r < PILE_ROWS; r++) {
+      const odd = r % 2 === 1, cols = odd ? PILE_COLS - 1 : PILE_COLS, xOff = odd ? SLOT_R : 0;
+      for (let c = 0; c < cols; c++) {
+        slots.push({ x: innerLeft + xOff + c * (SLOT_R * 2.02), y: baseY + r * rowDy, zCenter });
+      }
+    }
+    const pile = { index: idx + 1, pos, frame, slots, count: 0 };
+    piles.push(pile);
+    return pile;
+  }
+
+  function removeWood(object) {
+    object.removeFromParent();
+    object.traverse((child) => child.geometry?.dispose());
+  }
+
+  function removeFuel(fuel) {
+    removeWood(fuel.object);
+    fuel.coating?.dispose();
+  }
+
+  function reset() {
+    while (piles.length) removeWood(piles.pop().frame);
+    while (stackedObjects.length) removeWood(stackedObjects.pop());
+    while (burningItems.length) removeFuel(burningItems.pop());
+    campfire.reset();
+    flyingLogs.length = 0;
+    addNewWoodpile();
+    updateCount();
+  }
+  reset();
+
+  function dropZoneAt(worldPos) {
+    const lx = worldPos.x - root.position.x, lz = worldPos.z - root.position.z;
+    if (isOnEmberBed(lx - FIRE_POS.x, lz - FIRE_POS.z)) return 'embers';
+    if (Math.abs(lx - PAVING_POS.x) <= PAVING_HALF.x && Math.abs(lz - PAVING_POS.z) <= PAVING_HALF.z) return 'paving';
+    return null;
+  }
+
+  function canWalk(wx, wz) {
+    const fireBlock = FIRE_SIDE * 0.46 + 0.35;
+    const fx = root.position.x + FIRE_POS.x, fz = root.position.z + FIRE_POS.z;
+    return !(Math.abs(wx - fx) < fireBlock && Math.abs(wz - fz) < fireBlock);
+  }
+
+  function clampPlayer(pos) {
+    const fireBlock = FIRE_SIDE * 0.46 + 0.35;
+    const fx = root.position.x + FIRE_POS.x, fz = root.position.z + FIRE_POS.z;
+    const fdx = pos.x - fx, fdz = pos.z - fz;
+    if (Math.abs(fdx) < fireBlock && Math.abs(fdz) < fireBlock) {
+      if (fireBlock - Math.abs(fdx) < fireBlock - Math.abs(fdz)) {
+        pos.x = fx + (fdx >= 0 ? fireBlock : -fireBlock);
+      } else {
+        pos.z = fz + (fdz >= 0 ? fireBlock : -fireBlock);
+      }
+    }
+  }
+
+  function sendToCampfire(body, customNotice = null) {
+    if (!body.wood) classifyLimbBody(body);
+    const worldPos = body.object.getWorldPosition(new THREE.Vector3());
+    const worldQuat = body.object.getWorldQuaternion(new THREE.Quaternion());
+    root.add(body.object);
+    const startLocalPos = worldPos.sub(root.position);
+    body.object.position.copy(startLocalPos);
+    body.object.quaternion.copy(worldQuat);
+
+    const local = new THREE.Vector2(startLocalPos.x - FIRE_POS.x, startLocalPos.z - FIRE_POS.z);
+    if (local.lengthSq() > 1.3 ** 2) local.set((rnd() - 0.5) * 0.87, (rnd() - 0.5) * 0.74);
+    local.clampLength(0, 0.68);
+    const support = campfire.heightAt(local.x, local.y);
+    const targetPos = new THREE.Vector3(FIRE_POS.x + local.x, support + body.wood.radius, FIRE_POS.z + local.y);
+    const yaw = rnd() * Math.PI * 2;
+    const targetQuat = new THREE.Quaternion().setFromUnitVectors(body.wood.cutDir, new THREE.Vector3(Math.cos(yaw), 0, Math.sin(yaw)));
+
+    burningItems.push({
+      object: body.object, limb: body.limb, mass: body.wood.mass, local,
+      length: body.wood.length, reach: body.reach ?? body.wood.length / 2, yaw,
+      fromPos: startLocalPos, fromQuat: worldQuat, toPos: targetPos, toQuat: targetQuat,
+      flyT: 0, flyDuration: 0.48, burnT: 0, burnDuration: body.wood.kind === 'twig' ? 4.2 : 6.8,
+      coating: null, deposited: false,
+    });
+    onNotice(customNotice || `В костёр: ${body.wood.title}`);
+  }
+
+  function acceptLogIntoWoodpile(body) {
+    if (!body.wood) classifyLimbBody(body);
+    const worldPos = body.object.getWorldPosition(new THREE.Vector3());
+    const worldQuat = body.object.getWorldQuaternion(new THREE.Quaternion());
+    root.add(body.object);
+    const startLocalPos = worldPos.sub(root.position);
+    body.object.position.copy(startLocalPos);
+    body.object.quaternion.copy(worldQuat);
+
+    let snippedNote = '';
+    if (body.limb && body.limb.parts.length > 1) {
+      const sideParts = body.limb.parts.slice(1);
+      const sideCards = body.limb.cards;
+      const twigLimb = new Limb(sideParts, sideCards, {
+        skin: body.limb.skin,
+        cloud: body.limb.cloud,
+        zone: 0,
+      }).dress();
+      const twigObj = new THREE.Group();
+      twigLimb.group.position.copy(twigLimb.weight.com).negate();
+      twigLimb.group.quaternion.identity();
+      twigObj.add(twigLimb.group);
+      twigObj.position.copy(startLocalPos).add(root.position);
+      twigObj.quaternion.copy(worldQuat);
+      scene.add(twigObj);
+      const twigFakeBody = { object: twigObj, limb: twigLimb, reach: 0.35, invMass: 1 / Math.max(0.5, twigLimb.weight.mass) };
+      classifyLimbBody(twigFakeBody);
+      sendToCampfire(twigFakeBody);
+
+      body.limb.parts = [body.limb.parts[0]];
+      body.limb.cards = [];
+      body.limb.dress();
+      body.limb.group.position.copy(body.limb.weight.com).negate();
+      classifyLimbBody(body);
+      snippedNote = ' · мелкие веточки с листвой улетели в костёр';
+    }
+
+    let pile = piles[piles.length - 1];
+    if (pile.count >= pile.slots.length) pile = addNewWoodpile();
+    const slot = pile.slots[pile.count++];
+    const spawnedNext = pile.count >= pile.slots.length;
+    if (spawnedNext) addNewWoodpile();
+
+    const targetPos = new THREE.Vector3(slot.x, slot.y, slot.zCenter);
+    const alignToZ = new THREE.Quaternion().setFromUnitVectors(body.wood.cutDir, new THREE.Vector3(0, 0, 1));
+    const rollQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), (rnd() - 0.5) * Math.PI * 2);
+    const targetQuat = rollQuat.multiply(alignToZ);
+
+    stackedObjects.push(body.object);
+    flyingLogs.push({
+      object: body.object,
+      fromPos: startLocalPos,
+      fromQuat: worldQuat,
+      toPos: targetPos,
+      toQuat: targetQuat,
+      t: 0,
+      duration: 0.42,
+    });
+
+    updateCount();
+    onNotice(
+      spawnedNext
+        ? `Поленница #${pile.index} заполнена! Рядом появилась новая поленница #${pile.index + 1}${snippedNote}`
+        : `Полено ${body.wood.cm} см уложено в поленницу #${pile.index} срезом к нам${snippedNote}`,
+    );
+  }
+
+  function acceptDroppedBody(body, zone) {
+    if (!body.wood) classifyLimbBody(body);
+    if (zone === 'paving' && body.wood.fitsPile) acceptLogIntoWoodpile(body);
+    else sendToCampfire(body);
+  }
+
+  let elapsed = 0;
+  function tick(dt) {
+    elapsed += dt;
+    for (let i = flyingLogs.length - 1; i >= 0; i--) {
+      const f = flyingLogs[i];
+      f.t = Math.min(1, f.t + dt / f.duration);
+      const ease = 1 - (1 - f.t) ** 3;
+      f.object.position.lerpVectors(f.fromPos, f.toPos, ease);
+      f.object.position.y += Math.sin(ease * Math.PI) * 0.25;
+      f.object.quaternion.slerpQuaternions(f.fromQuat, f.toQuat, ease);
+      if (f.t >= 1) flyingLogs.splice(i, 1);
+    }
+
+    let lit = false;
+    for (let i = burningItems.length - 1; i >= 0; i--) {
+      const b = burningItems[i];
+      if (b.flyT < 1) {
+        b.flyT = Math.min(1, b.flyT + dt / b.flyDuration);
+        const ease = 1 - (1 - b.flyT) ** 3;
+        b.object.position.lerpVectors(b.fromPos, b.toPos, ease);
+        b.object.position.y += Math.sin(ease * Math.PI) * 0.45;
+        b.object.quaternion.slerpQuaternions(b.fromQuat, b.toQuat, ease);
+      } else {
+        b.burnT += dt / b.burnDuration;
+        const p = Math.min(1, b.burnT);
+        if (!b.coating) {
+          b.coating = scorchLimb(b.limb, b.reach);
+          campfire.ignite(b.local.x, b.local.y);
+        }
+        lit = true;
+        b.coating.burn.value = p;
+        const collapse = THREE.MathUtils.smoothstep(p, 0.47, 1);
+        const scale = 1 - 0.22 * collapse;
+        b.object.scale.setScalar(scale);
+        b.object.position.y = b.toPos.y - collapse * 0.095;
+        if (!b.deposited && p >= 0.82) {
+          campfire.deposit(b.local.x, b.local.y, b.mass, b.yaw, b.length);
+          b.deposited = true;
+        }
+        if (p >= 1) {
+          removeFuel(b);
+          onNotice('Древесина прогорела. На месте излома осели свежие угли.', 2700);
+          burningItems.splice(i, 1);
+        }
+      }
+    }
+
+    campfire.tick(dt, elapsed, lit);
+  }
+
+  return {
+    root,
+    paving,
+    campfire,
+    piles,
+    dropZoneAt,
+    canWalk,
+    clampPlayer,
+    sendToCampfire,
+    acceptLogIntoWoodpile,
+    acceptDroppedBody,
+    tick,
+    reset,
+  };
 }

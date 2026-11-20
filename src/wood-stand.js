@@ -3,22 +3,15 @@ import { MOUSE, fieldOfView, makePlayer, forwardOf, turnHead, walkInput, walkSpe
 import { Body, World } from './bodies.js';
 import { dressBark, dressLimbs } from './bark.js';
 import { trunkShape, dressWood } from './trunk.js';
-import { growMaple, pointAt } from './maple.js';
+import { growMaple } from './maple.js';
 import { Limb } from './limbs.js';
 import { tiles, soften } from './surface.js';
-import { buildCampfire, scorchLimb } from './campfire.js';
+import {
+  HOLD_DROP_LOW, PICK_RANGE, PAVING_POS, PAVING_HALF, PILE_POS, PILE_SIZE, FIRE_POS, FIRE_SIDE, MAX_LIFT_KG,
+  makeYardPaving, buildBackFence, buildWoodpileFrame, buildCampfire, scorchLimb, classifyLimbBody,
+} from './campfire.js';
 import { isOnEmberBed } from './ember-bed.js';
 import { generator, seed, random } from './random.js';
-
-// Стенд «Костёр и поленница» (Шаг 4: Акварельный хоздвор):
-// - Новая композиция: поленница прямо у забора (растёт влево), костёр справа, зона разгрузки перед поленницей.
-// - Сзади — деревенский штакетник. Под всей рабочей зоной — акварельный плитняк (timber_yard_paving_01).
-// - Справа на зольном пятне тлеет куча углей. Прямо на неё можно бросить любую переносимую древесину.
-const HOLD_DROP_LOW = -0.32, PICK_RANGE = 3.6;
-const PAVING_POS = new THREE.Vector3(-1.6, 0, -2.1), PAVING_HALF = { x: 6.6, z: 2.15 };
-const PILE_POS = new THREE.Vector3(0, 0, -3.2), PILE_SIZE = { w: 2.4, d: 1.15, h: 1.85 };
-const FIRE_POS = new THREE.Vector3(3.2, 0, -2.3), FIRE_SIDE = 2.7;
-const MAX_LIFT_KG = 45;
 
 const barkMat = dressBark();
 const woodMat = dressWood();
@@ -28,25 +21,7 @@ const limbSkin = [
   new THREE.MeshLambertMaterial({ map: woodMat.userData.fibres }),
 ];
 
-// Материал досок цвета забора (как в src/fence.js).
-const FENCE_COLOR = 'vec3(0.12, 0.11, 0.1)', FENCE_PAINT = 'vec3(0.067, 0.24, 0.63)';
-function makeFenceBoardMaterial() {
-  const [map] = tiles(['assets/textures/fence-board-1.jpg']);
-  const mat = new THREE.MeshLambertMaterial({ map });
-  mat.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
-      float fenceLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
-      diffuseColor.rgb = ${FENCE_COLOR} * fenceLuma / dot(${FENCE_PAINT}, vec3(0.299, 0.587, 0.114));`);
-  };
-  mat.customProgramCacheKey = () => 'woodpile-fence-board';
-  return mat;
-}
-const boardMat = makeFenceBoardMaterial();
-
-const [grassTex, pavingTex] = tiles([
-  'assets/textures/grass-clover.jpg',
-  'assets/textures/yard/timber_yard_paving_01.jpg',
-]);
+const [grassTex] = tiles(['assets/textures/grass-clover.jpg']);
 
 function makeGrassFloor(size) {
   const map = grassTex.clone();
@@ -58,47 +33,6 @@ function makeGrassFloor(size) {
   mesh.rotation.x = -Math.PI / 2;
   mesh.receiveShadow = true;
   return mesh;
-}
-
-// Единая площадка плитняка под всей рабочей зоной хоздвора (она же — вся зона приёмки с мягкой подсветкой)
-function makeYardPaving() {
-  const W = PAVING_HALF.x * 2, D = PAVING_HALF.z * 2;
-  const map = pavingTex.clone();
-  map.repeat.set(W / 2.0, D / 2.0); // 1 плитка = 2 × 2 м
-  const mat = soften(new THREE.MeshLambertMaterial({ map, color: 0xffffff }), {
-    contrast: 0.88, saturation: 0.75, scales: [0.15, 0.5], low: [0.92, 0.9, 0.86], high: [1.06, 1.05, 1.02], cells: [1, 1],
-  });
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, D), mat);
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(PAVING_POS.x, 0.004, PAVING_POS.z);
-  mesh.receiveShadow = true;
-  return { mesh, mat };
-}
-
-// Деревенский штакетник вдоль задней границы хоздвора
-function buildBackFence() {
-  const group = new THREE.Group();
-  const z = -4.25, startX = -9.2, endX = 5.2, step = 0.13;
-  for (const h of [0.45, 1.35]) {
-    const rail = new THREE.Mesh(makeBoardBox(endX - startX, 0.07, 0.04), boardMat);
-    rail.position.set((startX + endX) / 2, h, z - 0.035);
-    rail.castShadow = true;
-    group.add(rail);
-  }
-  for (let x = startX; x <= endX; x += step) {
-    const h = 1.75 + Math.sin(x * 3.7) * 0.04;
-    const picket = new THREE.Mesh(makeBoardBox(0.10, h, 0.025), boardMat);
-    picket.position.set(x, h / 2, z);
-    picket.castShadow = picket.receiveShadow = true;
-    group.add(picket);
-  }
-  return group;
-}
-
-// Цилиндрический тензор инерции тела массы m, радиуса r и длины L вдоль локальной оси Z тела.
-function rodInertia(m, r, L) {
-  const iz = Math.max(0.05, 0.5 * m * r * r), ixy = Math.max(0.05, (m * (3 * r * r + L * L)) / 12);
-  return new THREE.Matrix3().set(ixy, 0, 0, 0, ixy, 0, 0, 0, iz);
 }
 
 // Строит настоящую игровую ось бревна клёна для barkGeometry вдоль локальной оси Z (от 0 до length):
@@ -127,59 +61,6 @@ function makeLogAxis(length, radius, seedPhase = 0) {
     id: 0, stem: 0, parent: null, attach: 0, joint: 'trunk', level: 0, dead: false,
     included: 0, includedTo: 0, len: length, points, profile, children: [],
   };
-}
-
-// Анализирует любое настоящее игровое тело отпила (body с body.limb из src/main.js):
-// находит главную ось (mainPart), вектор направления между спилами (cutDir), длину, вес и наличие боковых веточек.
-function classifyLimbBody(body) {
-  const { limb } = body;
-  const mainPart = limb.parts[0];
-  const p0 = pointAt(mainPart.axis, mainPart.from), p1 = pointAt(mainPart.axis, mainPart.to);
-  const cutVec = p1.p.clone().sub(p0.p);
-  const length = mainPart.to - mainPart.from;
-  const cutDir = cutVec.lengthSq() > 1e-6 ? cutVec.normalize() : new THREE.Vector3(0, 0, 1);
-  const radius = (p0.r + p1.r) / 2;
-  const mass = Math.round(limb.weight.mass * 10) / 10;
-  const cm = Math.round(length * 100);
-
-  // Боковые оси на этом куске: мелкие веточки (до 55 см и тоньше 2.5 см) откусываются при укладке в поленницу,
-  // а крупные развилки делают кусок веткой для костра.
-  const sideParts = limb.parts.slice(1);
-  const hasMajorFork = sideParts.some((p) => (p.to - p.from) > 0.55 || pointAt(p.axis, p.from).r > 0.028);
-  const isLog = radius >= 0.055 && !hasMajorFork;
-  const minorTwigs = isLog ? sideParts.length : 0;
-
-  const tooHeavy = isLog ? cm > 100 || mass > MAX_LIFT_KG : mass > MAX_LIFT_KG;
-  const fitsPile = isLog && !tooHeavy && cm >= 50 && cm <= 100;
-  const kind = !isLog ? (cm <= 40 && mass < 2.5 ? 'twig' : 'branch') : 'log';
-
-  const title = tooHeavy
-    ? `Тяжёлое бревно (${cm} см, ${mass} кг)`
-    : kind === 'twig'
-      ? `Откушенная мелкая ветка с листвой (${cm} см)`
-      : kind === 'branch'
-        ? `Ветвь клёна с листвой (~${cm} см, ${mass} кг)`
-        : minorTwigs > 0
-          ? `Бревно с веточками (${cm} см, ${mass} кг)`
-          : `Бревно (${cm} см, ${mass} кг)`;
-
-  const verdict = tooHeavy
-    ? 'Бревно тяжёлое — распили на части!'
-    : fitsPile
-      ? (minorTwigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки с листвой откусятся для костра' : 'Подходит в поленницу (50–100 см)')
-      : kind === 'twig'
-        ? 'Мелкая ветка от полена → осталась в зоне приёмки для костра'
-        : kind === 'branch'
-          ? `Крупная ветка (${mass} кг) → в костёр (горит с дымом)`
-          : `Короткий чурбак (${cm} см < 50 см) → пойдёт в костёр`;
-
-  body.wood = {
-    kind, length, cm, radius, mass, cutDir,
-    twigs: minorTwigs, fitsPile, tooHeavy,
-    holdDist: kind === 'branch' ? THREE.MathUtils.clamp(1.6 + body.reach * 0.45, 1.7, 2.45) : 1.65,
-    title, verdict,
-  };
-  return body;
 }
 
 // Игровая функция создания физического тела Body из любого отпиленного куска Limb (один-в-один с limbBody в src/main.js).
@@ -299,61 +180,6 @@ function spawnRealMapleBranches(world, scene, treeSeed = 107) {
     return createLimbBody(world, scene, limb, spot.pos, q);
   });
 }
-
-// Брусок доски с правильной развёрткой UV (как block в src/fence.js), чтобы текстура забора не тянулась.
-function makeBoardBox(sx, sy, sz) {
-  const geo = new THREE.BoxGeometry(sx, sy, sz);
-  const uv = geo.attributes.uv;
-  const span = Math.max(sx, sy, sz);
-  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i), uv.getY(i) * (span / 0.7));
-  return geo;
-}
-
-// Увеличенная поленница из досок цвета забора, открытая спереди (+Z), в позиции pos.
-// Крыша наклонена вперёд на угол roofPitch, а задние столбики выше передних и точно подпирают крышу.
-function buildWoodpileFrame(pos = PILE_POS) {
-  const group = new THREE.Group();
-  const { w: W, d: D, h: H } = PILE_SIZE, T = 0.045;
-  const roofPitch = 0.08, roofMidY = H + 0.06;
-  const roofYAt = (z) => roofMidY - z * Math.tan(roofPitch);
-  const box = (w, h, d, x, y, z, rx = 0) => {
-    const m = new THREE.Mesh(makeBoardBox(w, h, d), boardMat);
-    m.position.set(x, y, z);
-    m.rotation.x = rx;
-    m.castShadow = m.receiveShadow = true;
-    group.add(m);
-  };
-  // Нижний настил
-  box(W, 0.08, 0.1, 0, 0.04, -D * 0.38);
-  box(W, 0.08, 0.1, 0, 0.04, D * 0.38);
-  for (let i = -2; i <= 2; i++) box(W - 0.04, T, 0.19, 0, 0.08 + T / 2, i * 0.21);
-
-  // Боковые угловые столбы (задние столбы sz === -1 выше передних и доходят прямо до крыши!) и наклонные стропила
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      const zPost = sz * (D / 2 - 0.045);
-      const hPost = roofYAt(zPost) - T * 0.5;
-      box(0.09, hPost, 0.09, sx * (W / 2 - 0.045), hPost / 2, zPost);
-    }
-    for (let h = 0.26; h <= H - 0.12; h += 0.26) box(T, 0.16, D - 0.06, sx * (W / 2 - T / 2), h, 0);
-    // Верхняя наклонная балка-стропило под скат крыши
-    box(0.08, 0.07, D + 0.08, sx * (W / 2 - 0.045), roofMidY - 0.03, 0, roofPitch);
-  }
-
-  // Задний центральный столб (высокий, до заднего края крыши) и задние поперечные доски
-  const zBackPost = -D / 2 + 0.045, hBackPost = roofYAt(zBackPost) - T * 0.5;
-  box(0.09, hBackPost, 0.09, 0, hBackPost / 2, zBackPost);
-  for (const h of [0.45, 0.95, 1.45, hBackPost - 0.08]) box(W, 0.14, T, 0, h, -D / 2 + T / 2);
-
-  // Доски крыши по наклонным стропилам
-  for (let i = -2; i <= 2; i++) {
-    const z = i * 0.23;
-    box(W + 0.2, T, 0.24, 0, roofYAt(z), z, roofPitch);
-  }
-  group.position.copy(pos);
-  return group;
-}
-
 
 export async function startWoodStand() {
   const el = (id) => document.getElementById(id);

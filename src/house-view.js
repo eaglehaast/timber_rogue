@@ -16,6 +16,7 @@ import { blow, stepWind } from './wind.js';
 import { EYE } from './player.js';
 import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
+import { WOODYARD_ORIGIN, WOODYARD_PAD } from './campfire.js';
 
 // Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
 const canvas = document.getElementById('scene');
@@ -53,18 +54,19 @@ function rebuild(seed) {
   const box = new THREE.Box3().setFromObject(house), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
   const pad = { x: at.x + mid.x, z: at.z + mid.z, w: size.x, d: size.z };
   const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed, road.verge), river = planRiver({ seed, back: -fence }), field = planField(seed, river);
-  shapeGround(seed, [pad, ...MAPLES], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
+  shapeGround(seed, [pad, WOODYARD_PAD, ...MAPLES], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
   at.y = height(at.x, at.z);
+  WOODYARD_ORIGIN.y = height(WOODYARD_PAD.x, WOODYARD_PAD.z);
   const pier = planPier(river, seed);
   house.position.set(at.x, at.y, at.z);
   // Трава: во дворе густая, за забором — луг пореже, в лесополосе — сплошная и сочная, к краю квадрата MEADOW
-  // сходит на нет; под домом и мостками её нет, на улице — как скажет колея, на поле за рекой — пшеница.
+  // сходит на нет; под домом, хоздвором и мостками её нет, на улице — как скажет колея, на поле за рекой — пшеница.
   // Двор — между боковыми заборами, от улицы до реки.
   const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
   const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.shore(x) ? 1
     : THREE.MathUtils.lerp(OUTSIDE, 1, land.lush(x, z)) * (1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), MEADOW / 2 - 3, MEADOW / 2)));
   const grass = (x, z) => {
-    if (inside(x, z, pad, pad.w, pad.d) || pier.deck(x, z) > -Infinity || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
+    if (inside(x, z, pad, pad.w, pad.d) || inside(x, z, WOODYARD_PAD, WOODYARD_PAD.w, WOODYARD_PAD.d) || pier.deck(x, z) > -Infinity || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
     return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * (1 - field.cover(x, z));
   };
   const gas = planGas(plan, at, { fence, gate: GATES.at });

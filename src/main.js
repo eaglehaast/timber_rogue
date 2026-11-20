@@ -16,6 +16,9 @@ import { dressBark, dressLimbs } from './bark.js';
 import { watch, note, beat, pauseWatch, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, gust } from './wind.js';
+import { createWoodyard, classifyLimbBody, WOODYARD_ORIGIN, HOLD_DROP_LOW, PICK_RANGE } from './campfire.js';
+
+let woodyard = null;
 
 // Три клёна за домом. r — радиус ствола выше корневых наплывов.
 export const MAPLES = [{ r: 0.1, x: -15, z: -3 }, { r: 0.3, x: 0, z: -3 }, { r: 0.2, x: 15, z: -3 }];
@@ -228,6 +231,10 @@ function regrow(rnd = Math.random) {
   noted.until = 0;
   aimPlane.visible = false;
   chips.clear();
+  if (woodyard) {
+    woodyard.root.position.copy(WOODYARD_ORIGIN);
+    woodyard.reset();
+  }
   MAPLES.forEach((_, slot) => newRound(slot, (rnd() * 2 ** 32) >>> 0));
   round = nearest();
   arm(0);
@@ -657,54 +664,48 @@ function showKit() {
   });
 }
 
-// Руками берёшь то, во что упирается взгляд, если оно не дальше GRAB от ног: отпил, кусок пня, лежащее дерево.
-// Пилы не в счёт: их берут цифрой. Рука держит точку на оси куска, как держат ветку в кулаке.
+// Руками берёшь то, во что упирается взгляд (до PICK_RANGE от глаз): отпил, кусок пня, ветку.
+// Взятый кусок плавно парит в воздухе перед игроком (как на стенде хоздвора), а на плитке или углях распределяется в поленницу или костёр.
 function reachable(eye, look) {
   let best = null;
   for (const tree of trees) {
     const from = eye.clone().sub(tree.root.position);
     for (const body of tree.world.bodies) {
       if (kit.some((item) => item.body === body)) continue;
-      const hit = rayHit(body, from, look, best?.t ?? LOOK);
+      const hit = rayHit(body, from, look, best?.t ?? PICK_RANGE);
       if (hit) best = { tree, body, ...hit };
     }
   }
   if (!best) return null;
-  const at = best.at.clone().add(best.tree.root.position);
-  return Math.hypot(at.x - player.pos.x, at.z - player.pos.z) <= GRAB ? best : null;
+  if (!best.body.wood) classifyLimbBody(best.body);
+  return best;
 }
 
 function grab() {
   const got = reachable(eyeOf(), lookOf());
   if (!got) return;
-  grasp = { tree: got.tree, load: 0, near: Infinity, stuck: 0, low: Infinity, stretch: 0, lifted: false };
-  seize(got.body, got.at, got.capsule);
-}
-
-// Рука берётся за тело body в точке at (в осях дерева), за капсулу capsule; кусок держит повёрнутым, как он сейчас.
-function seize(body, at, capsule) {
-  const yaw = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw);
-  const anchor = at.clone().sub(body.position).applyQuaternion(body.quaternion.clone().invert());
-  grasp.grip = grasp.tree.world.hold(new Grip(body, anchor, capsule, { force: HAND, torque: TWIST }));
-  grasp.turn = yaw.invert().multiply(body.quaternion);
-  grasp.mass = 1 / body.invMass;
-}
-
-// Кусок в руке разделился (sever): рука держит ту часть, за которую взялась, — с капсулой ближе всех к хвату at.
-function regrip(at, bodies) {
-  const seg = new THREE.Line3(), on = new THREE.Vector3();
-  let best = null;
-  for (const body of bodies) {
-    for (const c of body.capsules) {
-      const d = seg.set(c.A, c.B).closestPointToPoint(at, true, on).distanceTo(at) - c.r;
-      if (!best || d < best.d) best = { body, c, d };
-    }
+  const { tree, body } = got;
+  if (!body.wood) classifyLimbBody(body);
+  if (body.wood.tooHeavy) {
+    notice('Бревно тяжёлое — распили на части!');
+    return;
   }
-  seize(best.body, at, best.c);
+  const idx = tree.world.bodies.indexOf(body);
+  if (idx !== -1) tree.world.bodies.splice(idx, 1);
+  const yawOffset = new THREE.Euler().setFromQuaternion(body.quaternion, 'YXZ').y - player.yaw;
+  grasp = {
+    tree,
+    body,
+    yawOffset,
+    mass: body.wood.mass,
+    worldPos: body.position.clone().add(tree.root.position),
+  };
 }
 
-// Концы куска body по оси капсулы c, за которую держишь: докуда тянутся капсулы, лежащие на этой оси, — ствол
-// собран из цепочки капсул, а сучья, что торчат вбок, не в счёт.
+function regrip() {
+  if (grasp) letGo();
+}
+
 function endsOf(body, c) {
   const u = c.B.clone().sub(c.A).normalize(), along = (p) => p.clone().sub(c.A).dot(u);
   let low = 0, high = along(c.B);
@@ -717,30 +718,41 @@ function endsOf(body, c) {
   return [c.A.clone().addScaledVector(u, low), c.A.clone().addScaledVector(u, high)];
 }
 
-// Отпустить: кусок падает, куда несло. why — почему (выскользнуло, не поднять).
+// Отпустить: над плитняком или углями хоздвора кусок уходит в поленницу или в костёр, иначе падает обратно на землю.
 function letGo(why) {
-  grasp.tree.world.letGo(grasp.grip);
+  if (!grasp) return;
+  const { tree, body } = grasp;
+  const worldPos = body.position.clone().add(tree.root.position);
   grasp = null;
+  if (woodyard) woodyard.paving.mat.color.setHex(0xffffff);
+  const zone = !why && woodyard ? woodyard.dropZoneAt(worldPos) : null;
+  if (zone) {
+    woodyard.acceptDroppedBody(body, zone);
+  } else {
+    tree.world.add(body);
+    body.velocity.set(0, 0, 0);
+    body.spin.set(0, 0, 0);
+    body.wake();
+  }
   if (why) notice(why);
 }
 
-// Рука там, куда смотришь, на HOLD от глаз (не ниже земли), а кусок повёрнут к взгляду, как его взял.
-// Оторвал — подтянул к руке или поднял место хвата на 10 см от самого низкого, и оно ближе SLIP: несёшь или волочишь.
-// Не оторвал, и кусок за LIFT не подошёл к руке ближе — не поднять. Оторвал, а потом отстал дальше SLIP — выскользнул.
+// Кусок плавно парит в воздухе перед взглядом игрока (не проваливаясь ниже земли), поворачиваясь вместе с игроком.
 function carry(dt) {
-  const { tree, grip } = grasp;
-  const hand = eyeOf().addScaledVector(lookOf(), HOLD);
-  hand.y = Math.max(hand.y, ground(hand.x, hand.z) + 0.05);
-  grip.target.copy(hand).sub(tree.root.position);
-  grip.goal.setFromAxisAngle(UP, player.yaw).multiply(grasp.turn);
-  grasp.load += (grip.pull - grasp.load) * (1 - Math.exp(-4 * dt));
-  const at = grip.point(new THREE.Vector3()), stretch = (grasp.stretch = at.distanceTo(grip.target));
-  grasp.low = Math.min(grasp.low, at.y);
-  if (stretch < 0.25 || (at.y > grasp.low + 0.1 && stretch < SLIP)) grasp.lifted = true;
-  if (stretch < grasp.near - 0.02) { grasp.near = stretch; grasp.stuck = 0; } else grasp.stuck += dt;
-  const heavy = 'Тяжело — надо бы ещё раскромсать';
-  if (!grasp.lifted && grasp.stuck > LIFT) letGo(heavy);
-  else if (grasp.lifted && stretch > SLIP) letGo(grip.pull > 0.9 * HAND ? heavy : 'Выскользнуло');
+  const { tree, body, yawOffset } = grasp;
+  const holdDist = body.wood?.holdDist ?? 1.7;
+  const targetWorld = eyeOf().addScaledVector(lookOf(), holdDist);
+  targetWorld.y += HOLD_DROP_LOW;
+  const minHeight = ground(targetWorld.x, targetWorld.z) + Math.max(0.18, (body.wood?.radius ?? 0.08) + 0.08);
+  if (targetWorld.y < minHeight) targetWorld.y = minHeight;
+
+  const targetLocal = targetWorld.clone().sub(tree.root.position);
+  const lerpFactor = 1 - Math.exp(-18 * dt);
+  body.position.lerp(targetLocal, lerpFactor);
+  const targetQuat = new THREE.Quaternion().setFromAxisAngle(UP, player.yaw + yawOffset);
+  body.quaternion.slerp(targetQuat, lerpFactor);
+  body.place();
+  grasp.worldPos.copy(body.position).add(tree.root.position);
 }
 
 // Пила выпала из разошедшегося пропила ветки: она — твёрдое тело, как отпил, падает и ложится на землю.
@@ -1286,7 +1298,7 @@ function sever(limb, axis, s, chair) {
   const piece = limb.split(axis, s, chair).dress();
   limb.dress();
   const body = bodyOf(limb);
-  const held = body && grasp?.grip.body === body ? grasp.grip.point(new THREE.Vector3()) : null;
+  const isHeld = Boolean(body && grasp?.body === body);
   let kept = null;
   if (body?.limbs) kept = relay(body);
   else if (body) {
@@ -1300,7 +1312,7 @@ function sever(limb, axis, s, chair) {
     if (!round.top) weigh();
   }
   const fell = limbBody(piece, frame);
-  if (held) regrip(held, [kept, fell]);
+  if (isHeld) regrip();
 }
 
 // Отпиленная ветка — твёрдое тело: вес и инерция — по её древесине и листьям, форма — её капсулы.
@@ -1510,9 +1522,10 @@ function nearest() {
   return trees.reduce((a, b) => (away(a) <= away(b) ? a : b));
 }
 
-// Земля под игроком задаёт высоту, на которой его тело может встретить стоящий ствол или пень.
+// Земля под игроком задаёт высоту, на которой его тело может встретить стоящий ствол, пень или костёр.
 function canStand(x, z) {
   if (!walkable(x, z)) return false;
+  if (woodyard && !woodyard.canWalk(x, z)) return false;
   const floor = ground(x, z);
   for (const { base, voxels, stumps } of trees) {
     const { mid, reach, stems } = voxels.shape;
@@ -1559,17 +1572,9 @@ function update(dt) {
   const move = new THREE.Vector3();
   if (mode === 'free' && !fly) move.addScaledVector(forward, input.ahead).addScaledVector(right, input.side);
   const moving = move.lengthSq() > 0;
-  // С грузом идёшь медленнее: чем сильнее тянет рука, тем медленнее, при полной силе — вдвое.
-  const speed = moving ? move.length() * walkSpeed(player, keys) * (grasp ? 1 - Math.min(1, grasp.load / HAND) / 2 : 1) : 0;
+  const speed = moving ? move.length() * walkSpeed(player, keys) : 0;
   if (moving) {
     const step = move.normalize().multiplyScalar(speed * dt);
-    if (grasp) {
-      // Тяжёлое держит, как верёвка: чем сильнее рука растянута (к SLIP), тем меньше шагаешь прочь от куска —
-      // идёшь не быстрее, чем он волочится за тобой.
-      const away = player.pos.clone().sub(grasp.grip.point(new THREE.Vector3()).add(grasp.tree.root.position)).setY(0).normalize();
-      const out = step.dot(away);
-      if (out > 0) step.addScaledVector(away, -out * (1 - THREE.MathUtils.clamp((SLIP - grasp.stretch) / (SLIP - 0.25), 0, 1)));
-    }
     movePlayer(step.x, step.z);
   }
   stepEyes(player, right, speed, dt);
@@ -1663,14 +1668,16 @@ function update(dt) {
   else frame(dt);
 
   updateSawVisibility();
-  arms.group.visible = !fly && !SHOTS[shot].back && !kit[held].bar;
-  if (!arms.group.visible) return;
-  const eye = eyeOf().add(player.step);
-  if (grasp) {
-    const { grip, tree } = grasp, o = tree.root.position, [a, b] = endsOf(grip.body, grip.capsule);
-    arms.holdPiece(grip.point(new THREE.Vector3()).add(o), a.add(o), b.add(o), grip.capsule.r, eye, player.yaw);
-  } else arms.rest(eye, new THREE.Quaternion().setFromEuler(new THREE.Euler(player.pitch, player.yaw, 0, 'YXZ')));
-  arms.update(eye, player.yaw, dt);
+  // При переноске предметов в режиме рук предмет парит перед игроком (без прыгающих 3D-рук в кадре)
+  arms.group.visible = false;
+  if (woodyard) {
+    if (grasp) {
+      const zone = woodyard.dropZoneAt(grasp.worldPos);
+      woodyard.paving.mat.color.setHex(zone === 'paving' ? 0xc2d8b8 : 0xe8e2d4);
+    } else {
+      woodyard.paving.mat.color.setHex(0xffffff);
+    }
+  }
 }
 
 // Рисунок виден при ходьбе. Как только пила приставлена, её показывает сцена.
@@ -1682,6 +1689,7 @@ function updateSawVisibility() {
 // Все деревья продолжают падать, а куски — двигаться, когда игрок переключается в облёт.
 function updateTrees(dt) {
   chips.step(dt, ground);
+  woodyard?.tick(dt);
   const here = round;
   for (const tree of trees) {
     round = tree;
@@ -1831,9 +1839,17 @@ function hint() {
   const near = kit.findIndex((item) => item.left && !item.stuck && item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()) <= TAKE);
   if (near >= 0) return `${kit[near].name} рядом · ${near + 1} — взять`;
   if (kit[held].bar) return '';
-  if (grasp) return 'ЛКМ — бросить';
+  if (grasp) {
+    const zone = woodyard?.dropZoneAt(grasp.worldPos);
+    if (zone === 'embers') return 'ЛКМ — бросить в угли (сгорит целиком)';
+    if (zone === 'paving') return grasp.body.wood?.fitsPile ? 'ЛКМ — уложить в поленницу' : 'ЛКМ — отправить в костёр';
+    return `Несёшь: ${grasp.body.wood?.title ?? `${Math.round(grasp.mass)} кг`} · ЛКМ — положить`;
+  }
   const got = reachable(eyeOf(), lookOf());
-  return got ? `${Math.round(1 / got.body.invMass)} кг · ЛКМ — взять` : '';
+  if (!got) return '';
+  return got.body.wood?.tooHeavy
+    ? `${got.body.wood.title} — Бревно тяжёлое, распили на части!`
+    : `${got.body.wood?.title ?? `${Math.round(1 / got.body.invMass)} кг`} · ЛКМ — взять`;
 }
 
 // Захват мыши может не дать браузер (например, без жеста пользователя); игра от этого не ломается.
@@ -2116,7 +2132,7 @@ function renderInset(renderer, now) {
   renderer.shadowMap.autoUpdate = shadows;
 }
 
-// Стенд владеет сценой, камерой и кадром. Игра добавляет в его двор клёны, пилу и управление.
+// Стенд владеет сценой, камерой и кадром. Игра добавляет в его двор клёны, пилу, хоздвор (поленницу и костёр) и управление.
 export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNormal: normal, walkable: free }) {
   scene = yard;
   camera = eyes;
@@ -2125,5 +2141,17 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
   walkable = free;
   camera.rotation.order = 'YXZ';
   scene.add(aimPlane, sawModel, chips, arms.group);
+  woodyard = createWoodyard({
+    scene,
+    origin: WOODYARD_ORIGIN,
+    withFence: true,
+    onNotice: (msg) => {
+      notice(msg);
+      if (round) {
+        unsay('woodyard');
+        say('woodyard', msg);
+      }
+    },
+  });
   return { get active() { return playing; }, regrow, canStand, enter, leave, tick, renderInset, look, touchWalk };
 }
