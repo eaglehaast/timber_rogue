@@ -206,7 +206,7 @@ export async function startWoodStand() {
 
   const worldRoot = new THREE.Group();
   scene.add(worldRoot);
-  const world = new World(worldRoot, () => 0, (_, n) => n.set(0, 1, 0));
+  const world = new World(worldRoot, () => 0, (_x, _z, n) => n.set(0, 1, 0));
 
   const items = [];
   function spawnSampleItems() {
@@ -225,6 +225,7 @@ export async function startWoodStand() {
   }
   spawnSampleItems();
 
+  el('hud').classList.add('details');
   el('hud').hidden = false;
   el('held-saw').hidden = el('kit').hidden = el('side').hidden = el('depth').hidden = true;
   el('gap').hidden = false;
@@ -390,12 +391,14 @@ export async function startWoodStand() {
     renderer.render(scene, camera);
   }
 
-  new ResizeObserver(() => {
+  function resize() {
     if (!canvas.clientWidth || !canvas.clientHeight) return;
     renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
     camera.aspect = canvas.clientWidth / canvas.clientHeight;
     camera.updateProjectionMatrix();
-  }).observe(canvas);
+  }
+  resize();
+  new ResizeObserver(resize).observe(canvas);
 
   renderer.setAnimationLoop(frame);
 }
