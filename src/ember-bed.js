@@ -3,6 +3,12 @@ import { generator } from './random.js';
 
 const DEPTH = 0.88, MAX_RISE = 0.09, RESIDUE_LIMIT = 32;
 const radiusAt = (x, z) => Math.hypot(x, z / DEPTH);
+function rimRadius(angle) {
+  return 1 + 0.047 * Math.sin(3 * angle + 1) + 0.037 * Math.sin(7 * angle) + 0.025 * Math.cos(13 * angle);
+}
+export function isOnEmberBed(x, z) {
+  return radiusAt(x, z) <= rimRadius(Math.atan2(z / DEPTH, x));
+}
 const crown = (r) => Math.max(0, 1 - r * r);
 function surface(x, z) {
   const c = crown(radiusAt(x, z));
@@ -21,8 +27,7 @@ function groundGeometry() {
   for (let ring = 1; ring <= rings; ring++) {
     for (let i = 0; i < sectors; i++) {
       const a = i * Math.PI * 2 / sectors;
-      const rim = 1 + 0.047 * Math.sin(3 * a + 1) + 0.037 * Math.sin(7 * a) + 0.025 * Math.cos(13 * a);
-      const r = ring / rings * rim;
+      const r = ring / rings * rimRadius(a);
       add(r * Math.cos(a), r * Math.sin(a) * DEPTH);
       const j = 1 + (ring - 1) * sectors + i, next = j - i + (i + 1) % sectors;
       if (ring === 1) indices.push(0, next, j);

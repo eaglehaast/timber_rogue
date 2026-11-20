@@ -7,12 +7,13 @@ import { growMaple, pointAt } from './maple.js';
 import { Limb } from './limbs.js';
 import { tiles, soften } from './surface.js';
 import { buildCampfire, scorchLimb } from './campfire.js';
+import { isOnEmberBed } from './ember-bed.js';
 import { generator, seed, random } from './random.js';
 
 // Стенд «Костёр и поленница» (Шаг 4: Акварельный хоздвор):
 // - Новая композиция: поленница прямо у забора (растёт влево), костёр справа, зона разгрузки перед поленницей.
 // - Сзади — деревенский штакетник. Под всей рабочей зоной — акварельный плитняк (timber_yard_paving_01).
-// - Справа на зольном пятне тлеет куча углей, принимающая ветки и короткие отпилы.
+// - Справа на зольном пятне тлеет куча углей. Прямо на неё можно бросить любую переносимую древесину.
 const HOLD_DROP_LOW = -0.32, PICK_RANGE = 3.6;
 const PAVING_POS = new THREE.Vector3(-1.6, 0, -2.1), PAVING_HALF = { x: 6.6, z: 2.15 };
 const PILE_POS = new THREE.Vector3(0, 0, -3.2), PILE_SIZE = { w: 2.4, d: 1.15, h: 1.85 };
@@ -541,15 +542,19 @@ export async function startWoodStand() {
     );
   }
 
-  const isInCampfire = (p) => Math.abs(p.x - FIRE_POS.x) <= FIRE_SIDE * 0.52 && Math.abs(p.z - FIRE_POS.z) <= FIRE_SIDE * 0.52;
+  function dropZoneAt({ x, z }) {
+    if (isOnEmberBed(x - FIRE_POS.x, z - FIRE_POS.z)) return 'embers';
+    if (Math.abs(x - PAVING_POS.x) <= PAVING_HALF.x && Math.abs(z - PAVING_POS.z) <= PAVING_HALF.z) return 'paving';
+    return null;
+  }
 
   // Сортировке подлежит то, что отпустил игрок. Исходные образцы могут спокойно улечься на землю.
   function processDropZone() {
     for (const body of droppedItems) {
-      const inYard = isInDropZone(body.position);
-      if (!inYard && (body.wood.fitsPile || !isInCampfire(body.position))) continue;
+      const zone = dropZoneAt(body.position);
+      if (!zone) continue;
       droppedItems.delete(body);
-      if (body.wood.fitsPile) acceptLogIntoWoodpile(body);
+      if (zone === 'paving' && body.wood.fitsPile) acceptLogIntoWoodpile(body);
       else sendToCampfire(body);
     }
   }
@@ -562,7 +567,7 @@ export async function startWoodStand() {
   el('regrow').textContent = 'Сбросить стенд (R)';
   const help = el('help-body');
   const instructions = help.querySelectorAll('.desktop-only');
-  instructions[0].textContent = 'WASD — ходить, мышь — осмотреться, C — присесть. Щелчок или E — поднять и бросить. Неси ветку к углям или положи на плитняк.';
+  instructions[0].textContent = 'WASD — ходить, мышь — осмотреться, C — присесть. Щелчок или E — поднять и бросить. На плитняке дрова сортируются. Прямо на углях сгорит любое полено.';
   instructions[1].textContent = 'B — подбросить ветку в костёр, P — добавить полено в поленницу. Esc — отпустить мышь.';
   const feed = document.createElement('button');
   feed.type = 'button';
@@ -590,8 +595,6 @@ export async function startWoodStand() {
   let held = null, heldYawOffset = 0, aimed = null;
   const raycaster = new THREE.Raycaster(), centerNdc = new THREE.Vector2(0, 0);
   const holdTargetPos = new THREE.Vector3(), holdTargetQuat = new THREE.Quaternion(), viewDir = new THREE.Vector3();
-
-  const isInDropZone = (p) => Math.abs(p.x - PAVING_POS.x) <= PAVING_HALF.x && Math.abs(p.z - PAVING_POS.z) <= PAVING_HALF.z;
 
   function findAimedBody() {
     eyeCamera(camera, player);
@@ -638,14 +641,21 @@ export async function startWoodStand() {
   function updateHudText() {
     const activeNotice = performance.now() < statusNotice.until ? statusNotice.text : '';
     if (held) {
-      const overZone = isInDropZone(held.position);
-      // Мягкая подсветка всей плиточной зоны при взятии предмета и мягкий зеленоватый тон над плиткой
-      paving.mat.color.setHex(overZone ? 0xc2d8b8 : 0xe8e2d4);
-      crosshair.style.background = overZone ? '#b8e8a8' : '#9be89b';
-      el('hint').textContent = overZone
-        ? (held.wood.fitsPile ? `Отпусти ЛКМ → уложить в поленницу (${held.wood.cm} см)` : `Отпусти ЛКМ → отправить в костёр`)
-        : `Несёшь: ${held.wood.title} (неси на плитку хоздвора)`;
-      el('log').textContent = activeNotice || (overZone ? `Плитка хоздвора → ${held.wood.verdict}` : `${held.wood.verdict} · Занеси на плиточную площадку`);
+      const zone = dropZoneAt(held.position);
+      paving.mat.color.setHex(zone === 'paving' ? 0xc2d8b8 : 0xe8e2d4);
+      if (zone === 'embers') {
+        crosshair.style.background = '#ffac70';
+        el('hint').textContent = 'Щелчок или E — бросить в угли';
+        el('log').textContent = `${held.wood.title} сгорит целиком`;
+      } else if (zone === 'paving') {
+        crosshair.style.background = '#b8e8a8';
+        el('hint').textContent = held.wood.fitsPile ? 'Щелчок или E — уложить в поленницу' : 'Щелчок или E — отправить в костёр';
+        el('log').textContent = activeNotice || held.wood.verdict;
+      } else {
+        crosshair.style.background = '#9be89b';
+        el('hint').textContent = `Несёшь: ${held.wood.title}`;
+        el('log').textContent = activeNotice || 'На плитняке дрова сортируются. Прямо на углях сгорит любое полено.';
+      }
       return;
     }
     paving.mat.color.setHex(0xffffff);

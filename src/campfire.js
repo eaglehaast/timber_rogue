@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { buildEmberBed, coalAtlasUV, coalEmission } from './ember-bed.js';
 import { Smoke } from './smoke.js';
-import { tiles } from './surface.js';
+import { decal, tiles } from './surface.js';
 
 const [ash, flames] = tiles([
-  'assets/textures/yard/timber_yard_ash_decal.png',
+  'assets/textures/yard/campfire-ground-ash.webp',
   'assets/textures/yard/timber_yard_flames.png',
 ]);
 ash.wrapS = ash.wrapT = flames.wrapS = flames.wrapT = THREE.ClampToEdgeWrapping;
@@ -21,9 +21,13 @@ heat.colorSpace = THREE.NoColorSpace;
 export function buildCampfire(origin, side, rnd) {
   const group = new THREE.Group();
   group.position.copy(origin);
-  const apron = new THREE.Mesh(new THREE.PlaneGeometry(side, side), new THREE.MeshLambertMaterial({
-    map: ash, color: 0xbdb4b7, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1,
-  }));
+  const ashMaterial = decal(ash);
+  ashMaterial.onBeforeCompile = shader => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      float ashEdge = smoothstep(0.52, 1.02, length(vMapUv * 2. - 1.));
+      diffuseColor.a *= 1. - 0.72 * ashEdge;`);
+  };
+  const apron = new THREE.Mesh(new THREE.PlaneGeometry(side * 1.42, side * 1.31), ashMaterial);
   apron.rotation.x = -Math.PI / 2;
   apron.position.y = 0.009;
   apron.receiveShadow = true;
