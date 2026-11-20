@@ -42,15 +42,16 @@ function makeFenceBoardMaterial() {
 }
 const boardMat = makeFenceBoardMaterial();
 
-// Акварельные ассеты хоздвора: трава, мощение плитняком, зола кострища и атлас пламени
-const [grassTex, pavingTex, ashDecalTex, flamesTex] = tiles([
+// Акварельные ассеты хоздвора: трава, мощение плитняком, зола кострища, обугленная кора головней и клубы пламени
+const [grassTex, pavingTex, ashDecalTex, charredBarkTex, firePuffsTex] = tiles([
   'assets/textures/grass-clover.jpg',
   'assets/textures/yard/timber_yard_paving_01.jpg',
   'assets/textures/yard/timber_yard_ash_decal.png',
-  'assets/textures/yard/timber_yard_flames.png',
+  'assets/textures/yard/timber_yard_charred_bark.jpg',
+  'assets/textures/yard/timber_yard_fire_puffs.png',
 ]);
 ashDecalTex.wrapS = ashDecalTex.wrapT = THREE.ClampToEdgeWrapping;
-flamesTex.wrapS = flamesTex.wrapT = THREE.ClampToEdgeWrapping;
+firePuffsTex.wrapS = firePuffsTex.wrapT = THREE.ClampToEdgeWrapping;
 
 function makeGrassFloor(size) {
   const map = grassTex.clone();
@@ -374,16 +375,16 @@ function buildCampfire(rnd) {
   ashDecal.receiveShadow = true;
   group.add(ashDecal);
 
-  // Обугленные почерневшие брёвна в костре (barkGeometry с матовой угольно-пепельной корой)
-  const charBarkMat = barkMat.clone();
-  charBarkMat.color.setHex(0x282523);
-  const charEndMat = new THREE.MeshLambertMaterial({ map: woodMat.map, color: 0x24201d });
+  // Обугленные головни в костре (barkGeometry с акварельной текстурой угля timber_yard_charred_bark.jpg и белым множителем цвета)
+  const charBarkMat = new THREE.MeshLambertMaterial({ map: charredBarkTex, color: 0xffffff });
+  const charEndMat = new THREE.MeshLambertMaterial({ map: charredBarkTex, color: 0xd8d2cc });
   const charSkin = [charBarkMat, charEndMat, charEndMat];
   const logSpecs = [
-    { len: 1.35, r: 0.085, x: -0.14, y: 0.09, z: -0.10, rx: 0.05, ry: 0.4,  rz: 0.04 },
-    { len: 1.45, r: 0.08,  x: 0.12,  y: 0.11, z: 0.14,  rx: -0.06, ry: -0.6, rz: -0.05 },
-    { len: 1.25, r: 0.075, x: 0.0,   y: 0.16, z: -0.04, rx: 0.08, ry: 1.15, rz: 0.06 },
-    { len: 1.15, r: 0.065, x: -0.18, y: 0.18, z: 0.10,  rx: -0.1, ry: -0.95, rz: -0.08 },
+    { len: 1.35, r: 0.09,  x: -0.16, y: 0.09, z: -0.12, rx: 0.05,  ry: 0.4,   rz: 0.04 },
+    { len: 1.45, r: 0.085, x: 0.14,  y: 0.11, z: 0.15,  rx: -0.06, ry: -0.58, rz: -0.05 },
+    { len: 1.28, r: 0.08,  x: 0.0,   y: 0.16, z: -0.04, rx: 0.08,  ry: 1.15,  rz: 0.06 },
+    { len: 1.18, r: 0.072, x: -0.20, y: 0.18, z: 0.12,  rx: -0.1,  ry: -0.95, rz: -0.08 },
+    { len: 1.10, r: 0.068, x: 0.22,  y: 0.17, z: -0.18, rx: 0.09,  ry: 0.82,  rz: 0.05 },
   ];
   for (const l of logSpecs) {
     const axis = makeLogAxis(l.len, l.r, l.x * 5 + l.z * 3);
@@ -396,9 +397,9 @@ function buildCampfire(rnd) {
     group.add(log);
   }
 
-  // Нарезаем 8 карточек из атласа timber_yard_flames.png для 3D-клубов огня (как облака в src/smoke.js)
+  // Нарезаем 8 объёмных клубов пламени из атласа timber_yard_fire_puffs.png (4 столбца × 2 строки, 512 × 512)
   const flameMaps = Array.from({ length: 8 }, (_, i) => {
-    const col = i % 4, row = Math.floor(i / 4) % 2, m = flamesTex.clone();
+    const col = i % 4, row = Math.floor(i / 4) % 2, m = firePuffsTex.clone();
     m.repeat.set(0.25, 0.5);
     m.offset.set(col * 0.25, row === 0 ? 0.5 : 0.0);
     m.needsUpdate = true;
@@ -406,23 +407,25 @@ function buildCampfire(rnd) {
   });
 
   // 3D-система частиц огня по механизму src/smoke.js (THREE.Sprite):
-  const FIRE_PUFF = { count: 26, life: 1.25, rise: [0.95, 0.35], wind: [0.14, 0, 0.05], size: [0.42, 0.82] };
+  // Свободно парящие акварельные клубы огня рождаются над головнями, поднимаются вверх, поворачиваются, растут и тают в дым.
+  const FIRE_PUFF = { count: 28, life: 1.35, rise: [0.85, 0.32], wind: [0.15, 0, 0.06], size: [0.46, 0.92] };
   const firePuffs = Array.from({ length: FIRE_PUFF.count }, (_, i) => {
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
       map: flameMaps[i % 8], transparent: true, depthWrite: false, toneMapped: false,
     }));
     group.add(sprite);
-    return { sprite, age: 0, base: new THREE.Vector3(), sway: 0, flip: 1 };
+    return { sprite, age: 0, base: new THREE.Vector3(), sway: 0, flip: 1, spin: 0 };
   });
 
   function renewFirePuff(p, age) {
-    const k = Math.floor(rnd() * flameMaps.length), angle = rnd() * Math.PI * 2, rad = Math.sqrt(rnd()) * 0.42;
+    const k = Math.floor(rnd() * flameMaps.length), angle = rnd() * Math.PI * 2, rad = Math.sqrt(rnd()) * 0.45;
     p.age = age;
-    p.base.set(Math.cos(angle) * rad, 0.14 + rnd() * 0.08, Math.sin(angle) * rad);
+    p.base.set(Math.cos(angle) * rad, 0.16 + rnd() * 0.10, Math.sin(angle) * rad);
     p.sway = rnd() * 6.28;
     p.flip = rnd() < 0.5 ? -1 : 1;
+    p.spin = (rnd() - 0.5) * 0.9;
     p.sprite.material.map = flameMaps[k];
-    p.sprite.material.rotation = (rnd() - 0.5) * 0.45;
+    p.sprite.material.rotation = (rnd() - 0.5) * 1.1;
   }
   firePuffs.forEach((p, i) => renewFirePuff(p, (i / FIRE_PUFF.count) * FIRE_PUFF.life));
 
@@ -431,16 +434,16 @@ function buildCampfire(rnd) {
   group.add(light);
   group.position.copy(FIRE_POS);
 
-  const smoke = new Smoke(new THREE.Vector3(FIRE_POS.x, 0.78, FIRE_POS.z), rnd);
-  const freshSmoke1 = new Smoke(new THREE.Vector3(FIRE_POS.x - 0.35, 0.68, FIRE_POS.z + 0.22), rnd);
-  const freshSmoke2 = new Smoke(new THREE.Vector3(FIRE_POS.x + 0.35, 0.70, FIRE_POS.z - 0.22), rnd);
+  const smoke = new Smoke(new THREE.Vector3(FIRE_POS.x, 0.82, FIRE_POS.z), rnd);
+  const freshSmoke1 = new Smoke(new THREE.Vector3(FIRE_POS.x - 0.35, 0.70, FIRE_POS.z + 0.22), rnd);
+  const freshSmoke2 = new Smoke(new THREE.Vector3(FIRE_POS.x + 0.35, 0.72, FIRE_POS.z - 0.22), rnd);
   const smokeGroup = new THREE.Group();
   smokeGroup.add(smoke, freshSmoke1, freshSmoke2);
   let smokeBoost = 0;
 
-  const colLow = new THREE.Color(1.0, 0.82, 0.38);
-  const colMid = new THREE.Color(0.95, 0.48, 0.16);
-  const colHigh = new THREE.Color(0.45, 0.28, 0.22);
+  const colPure = new THREE.Color(1.0, 1.0, 1.0);
+  const colWarm = new THREE.Color(0.96, 0.78, 0.58);
+  const colFade = new THREE.Color(0.55, 0.45, 0.40);
 
   function tick(dt, time, burningCount = 0) {
     const targetBoost = burningCount > 0 ? Math.min(1, 0.65 + burningCount * 0.25) : 0;
@@ -466,17 +469,18 @@ function buildCampfire(rnd) {
       if (p.age >= life) renewFirePuff(p, p.age - life);
       const a = p.age, t = a / life;
       const up = (r0 * a + ((r1 - r0) * a * a) / (2 * life)) * fireMult;
-      const wobble = 0.07 * t * Math.sin(time * 3.8 + p.sway);
-      const s = (s0 + (s1 - s0) * Math.sin(t * Math.PI * 0.85)) * fireMult;
+      const wobble = 0.08 * t * Math.sin(time * 3.2 + p.sway);
+      const s = (s0 + (s1 - s0) * Math.sqrt(t)) * fireMult;
       p.sprite.position.set(
-        p.base.x * (1 - 0.35 * t) + wind[0] * a + wobble,
+        p.base.x * (1 - 0.28 * t) + wind[0] * a + wobble,
         p.base.y + up,
-        p.base.z * (1 - 0.35 * t) + wind[2] * a,
+        p.base.z * (1 - 0.28 * t) + wind[2] * a,
       );
-      p.sprite.scale.set(p.flip * s, s * 1.15, 1);
-      p.sprite.material.opacity = 0.78 * Math.min(1, a / 0.18) * (1 - t) ** 1.35;
-      if (t < 0.45) p.sprite.material.color.copy(colLow).lerp(colMid, t / 0.45);
-      else p.sprite.material.color.copy(colMid).lerp(colHigh, (t - 0.45) / 0.55);
+      p.sprite.scale.set(p.flip * s, s, 1);
+      p.sprite.material.rotation += p.spin * dt;
+      p.sprite.material.opacity = 0.85 * Math.min(1, a / 0.22) * (1 - t) ** 1.4;
+      if (t < 0.6) p.sprite.material.color.copy(colPure).lerp(colWarm, t / 0.6);
+      else p.sprite.material.color.copy(colWarm).lerp(colFade, (t - 0.6) / 0.4);
     }
   }
   return { group, smoke: smokeGroup, tick };
