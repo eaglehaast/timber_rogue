@@ -62,25 +62,25 @@ function rodInertia(m, r, L) {
   return new THREE.Matrix3().set(ixy, 0, 0, 0, ixy, 0, 0, 0, iz);
 }
 
-// Строит настоящую игровую ось бревна клёна вдоль локальной оси Z (от -length/2 до +length/2) для barkGeometry:
-// кора ложится в мировом масштабе, сечение чуть живое (эллипс с лёгкими наплывами), а оба торца — веер в полярных
-// координатах с настоящими годовыми кольцами спила (end-grain-1..5.jpg).
+// Строит настоящую игровую ось бревна клёна для barkGeometry:
+// Строим вертикально вдоль оси Y (как растёт ствол в maple.js, чтобы текстура коры ложилась по высоте и по кругу без растяжения),
+// а готовую геометрию поворачиваем вдоль оси Z (срезом к нам).
 function makeLogAxis(length, radius, seedPhase = 0) {
   const steps = Math.max(4, Math.ceil(length / 0.05));
   const points = [];
   for (let i = 0; i <= steps; i++) {
-    const u = i / steps, s = u * length, z = -length / 2 + s;
-    const taper = 1 - 0.06 * u;
+    const u = i / steps, s = u * length;
+    const taper = 1 - 0.05 * u;
     points.push({
       s,
-      p: new THREE.Vector3(0, 0, z),
-      t: new THREE.Vector3(0, 0, 1),
+      p: new THREE.Vector3(0, s, 0),
+      t: new THREE.Vector3(0, 1, 0),
       n: new THREE.Vector3(1, 0, 0),
-      b: new THREE.Vector3(0, 1, 0),
+      b: new THREE.Vector3(0, 0, 1),
       r: radius * taper,
     });
   }
-  const profile = (az, s) => 1 + 0.045 * Math.cos(2 * az + seedPhase) + 0.025 * Math.sin(3 * az - seedPhase + s * 2);
+  const profile = (az, s) => 1 + 0.04 * Math.cos(2 * az + seedPhase) + 0.02 * Math.sin(3 * az - seedPhase + s * 2);
   return {
     id: 0, parent: null, attach: 0, joint: 'trunk', level: 0, dead: false,
     included: 0, includedTo: 0, len: length, points, profile,
@@ -134,6 +134,9 @@ function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }
   const group = new THREE.Group();
   const axis = makeLogAxis(length, radius, pos.x * 3.1 + pos.z * 1.7 + length * 5);
   const geo = barkGeometry([{ axis, from: 0, to: length, cutFrom: true, cutTo: true }]);
+  // Центрируем вертикальный ствол (0..length по Y) и кладём горизонтально вдоль оси Z:
+  geo.translate(0, -length / 2, 0);
+  geo.rotateX(Math.PI / 2);
   const trunkMesh = new THREE.Mesh(geo, limbSkin);
   trunkMesh.castShadow = trunkMesh.receiveShadow = true;
   group.add(trunkMesh);
@@ -160,13 +163,21 @@ function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }
     capsules: [{ a: new THREE.Vector3(0, 0, -half), b: new THREE.Vector3(0, 0, half), r: radius }],
   });
 
-  const cm = Math.round(length * 100), fitsPile = cm >= 50 && cm <= 100;
+  const cm = Math.round(length * 100);
+  const tooHeavy = cm > 100;
+  const fitsPile = cm >= 50 && cm <= 100;
   body.wood = {
-    kind: 'log', length, cm, radius, mass, twigs, twigGroup, fitsPile, holdDist: 1.65,
-    title: twigs > 0 ? `Бревно с веточками (${cm} см, ${Math.round(mass)} кг)` : `Бревно (${cm} см, ${Math.round(mass)} кг)`,
-    verdict: fitsPile
-      ? (twigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки с листвой откусятся для костра' : 'Подходит в поленницу (50–100 см)')
-      : cm < 50 ? `Чурбак короче 50 см (${cm} см) → останется для костра` : `Длиннее 100 см (${cm} см) → не влезет в поленницу, для костра`,
+    kind: 'log', length, cm, radius, mass, twigs, twigGroup, fitsPile, tooHeavy, holdDist: 1.65,
+    title: tooHeavy
+      ? `Тяжёлое бревно (${cm} см, ${Math.round(mass)} кг)`
+      : twigs > 0
+        ? `Бревно с веточками (${cm} см, ${Math.round(mass)} кг)`
+        : `Бревно (${cm} см, ${Math.round(mass)} кг)`,
+    verdict: tooHeavy
+      ? 'Бревно тяжёлое — распили на части!'
+      : fitsPile
+        ? (twigs > 0 ? 'В поленницу (50–100 см) · мелкие веточки с листвой откусятся для костра' : 'Подходит в поленницу (50–100 см)')
+        : `Короткий чурбак (${cm} см < 50 см) → пойдёт в костёр`,
   };
   world.add(body);
   return body;
@@ -616,6 +627,11 @@ export async function startWoodStand() {
     }
     const target = findAimedBody();
     if (!target) return;
+    if (target.wood.tooHeavy) {
+      sayNotice('Бревно тяжёлое — распили на части!', 3500);
+      updateHudText();
+      return;
+    }
     const idx = world.bodies.indexOf(target);
     if (idx !== -1) world.bodies.splice(idx, 1);
     held = target;
@@ -637,8 +653,10 @@ export async function startWoodStand() {
     }
     dropZone.padMat.color.setHex(0xd8c878);
     if (aimed) {
-      crosshair.style.background = '#ffd15c';
-      el('hint').textContent = `${aimed.wood.title} — ЛКМ: взять`;
+      crosshair.style.background = aimed.wood.tooHeavy ? '#ff6b6b' : '#ffd15c';
+      el('hint').textContent = aimed.wood.tooHeavy
+        ? `${aimed.wood.title} — Бревно тяжёлое, распили на части!`
+        : `${aimed.wood.title} — ЛКМ: взять`;
       el('log').textContent = activeNotice || aimed.wood.verdict;
     } else {
       crosshair.style.background = 'rgba(255, 255, 255, 0.85)';
