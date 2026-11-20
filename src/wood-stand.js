@@ -3,16 +3,16 @@ import { MOUSE, fieldOfView, makePlayer, forwardOf, turnHead, walkInput, walkSpe
 import { Body, World } from './bodies.js';
 import { dressBark, dressLimbs } from './bark.js';
 import { trunkShape, dressWood } from './trunk.js';
-import { growMaple, barkGeometry, pointAt } from './maple.js';
+import { growMaple, pointAt } from './maple.js';
 import { Limb } from './limbs.js';
 import { tiles, soften } from './surface.js';
-import { Smoke } from './smoke.js';
+import { buildCampfire, scorchLimb } from './campfire.js';
 import { generator, seed, random } from './random.js';
 
 // Стенд «Костёр и поленница» (Шаг 4: Акварельный хоздвор):
 // - Новая композиция: поленница прямо у забора (растёт влево), костёр справа, зона разгрузки перед поленницей.
 // - Сзади — деревенский штакетник. Под всей рабочей зоной — акварельный плитняк (timber_yard_paving_01).
-// - Акварельный костёр: зольное дно с углями (timber_yard_ash_decal.png), акварельные языки пламени (timber_yard_flames.png) и дым.
+// - Справа на зольном пятне тлеет куча углей, принимающая ветки и короткие отпилы.
 const HOLD_DROP_LOW = -0.32, PICK_RANGE = 3.6;
 const PAVING_POS = new THREE.Vector3(-1.6, 0, -2.1), PAVING_HALF = { x: 6.6, z: 2.15 };
 const PILE_POS = new THREE.Vector3(0, 0, -3.2), PILE_SIZE = { w: 2.4, d: 1.15, h: 1.85 };
@@ -42,16 +42,10 @@ function makeFenceBoardMaterial() {
 }
 const boardMat = makeFenceBoardMaterial();
 
-// Акварельные ассеты хоздвора: трава, мощение плитняком, зола кострища, обугленная кора головней и клубы пламени
-const [grassTex, pavingTex, ashDecalTex, charredBarkTex, firePuffsTex] = tiles([
+const [grassTex, pavingTex] = tiles([
   'assets/textures/grass-clover.jpg',
   'assets/textures/yard/timber_yard_paving_01.jpg',
-  'assets/textures/yard/timber_yard_ash_decal.png',
-  'assets/textures/yard/timber_yard_charred_bark.jpg',
-  'assets/textures/yard/timber_yard_fire_puffs.png',
 ]);
-ashDecalTex.wrapS = ashDecalTex.wrapT = THREE.ClampToEdgeWrapping;
-firePuffsTex.wrapS = firePuffsTex.wrapT = THREE.ClampToEdgeWrapping;
 
 function makeGrassFloor(size) {
   const map = grassTex.clone();
@@ -360,132 +354,6 @@ function buildWoodpileFrame(pos = PILE_POS) {
 }
 
 
-// Акварельный костёр хоздвора:
-// - Зольное дно из timber_yard_ash_decal.png.
-// - Обугленные тёмно-пепельные брёвна (barkGeometry, без ядовито-красного свечения).
-// - Объёмный 3D-огонь по принципу дыма в src/smoke.js: клубы пламени (THREE.Sprite) поднимаются вверх, растут и тают в дым.
-function buildCampfire(rnd) {
-  const group = new THREE.Group(), S = FIRE_SIDE;
-  const ashMat = new THREE.MeshLambertMaterial({
-    map: ashDecalTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1,
-  });
-  const ashDecal = new THREE.Mesh(new THREE.PlaneGeometry(S, S), ashMat);
-  ashDecal.rotation.x = -Math.PI / 2;
-  ashDecal.position.y = 0.008;
-  ashDecal.receiveShadow = true;
-  group.add(ashDecal);
-
-  // Обугленные головни в костре (barkGeometry с акварельной текстурой угля timber_yard_charred_bark.jpg и белым множителем цвета)
-  const charBarkMat = new THREE.MeshLambertMaterial({ map: charredBarkTex, color: 0xffffff });
-  const charEndMat = new THREE.MeshLambertMaterial({ map: charredBarkTex, color: 0xd8d2cc });
-  const charSkin = [charBarkMat, charEndMat, charEndMat];
-  const logSpecs = [
-    { len: 1.35, r: 0.09,  x: -0.16, y: 0.09, z: -0.12, rx: 0.05,  ry: 0.4,   rz: 0.04 },
-    { len: 1.45, r: 0.085, x: 0.14,  y: 0.11, z: 0.15,  rx: -0.06, ry: -0.58, rz: -0.05 },
-    { len: 1.28, r: 0.08,  x: 0.0,   y: 0.16, z: -0.04, rx: 0.08,  ry: 1.15,  rz: 0.06 },
-    { len: 1.18, r: 0.072, x: -0.20, y: 0.18, z: 0.12,  rx: -0.1,  ry: -0.95, rz: -0.08 },
-    { len: 1.10, r: 0.068, x: 0.22,  y: 0.17, z: -0.18, rx: 0.09,  ry: 0.82,  rz: 0.05 },
-  ];
-  for (const l of logSpecs) {
-    const axis = makeLogAxis(l.len, l.r, l.x * 5 + l.z * 3);
-    const geo = barkGeometry([{ axis, from: 0, to: l.len, cutFrom: true, cutTo: true }]);
-    geo.translate(0, 0, -l.len / 2);
-    const log = new THREE.Mesh(geo, charSkin);
-    log.position.set(l.x, l.y, l.z);
-    log.rotation.set(l.rx, l.ry, l.rz);
-    log.castShadow = log.receiveShadow = true;
-    group.add(log);
-  }
-
-  // Нарезаем 8 объёмных клубов пламени из атласа timber_yard_fire_puffs.png (4 столбца × 2 строки, 512 × 512)
-  const flameMaps = Array.from({ length: 8 }, (_, i) => {
-    const col = i % 4, row = Math.floor(i / 4) % 2, m = firePuffsTex.clone();
-    m.repeat.set(0.25, 0.5);
-    m.offset.set(col * 0.25, row === 0 ? 0.5 : 0.0);
-    m.needsUpdate = true;
-    return m;
-  });
-
-  // 3D-система частиц огня по механизму src/smoke.js (THREE.Sprite):
-  // Свободно парящие акварельные клубы огня рождаются над головнями, поднимаются вверх, поворачиваются, растут и тают в дым.
-  const FIRE_PUFF = { count: 28, life: 1.35, rise: [0.85, 0.32], wind: [0.15, 0, 0.06], size: [0.46, 0.92] };
-  const firePuffs = Array.from({ length: FIRE_PUFF.count }, (_, i) => {
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: flameMaps[i % 8], transparent: true, depthWrite: false, toneMapped: false,
-    }));
-    group.add(sprite);
-    return { sprite, age: 0, base: new THREE.Vector3(), sway: 0, flip: 1, spin: 0 };
-  });
-
-  function renewFirePuff(p, age) {
-    const k = Math.floor(rnd() * flameMaps.length), angle = rnd() * Math.PI * 2, rad = Math.sqrt(rnd()) * 0.45;
-    p.age = age;
-    p.base.set(Math.cos(angle) * rad, 0.16 + rnd() * 0.10, Math.sin(angle) * rad);
-    p.sway = rnd() * 6.28;
-    p.flip = rnd() < 0.5 ? -1 : 1;
-    p.spin = (rnd() - 0.5) * 0.9;
-    p.sprite.material.map = flameMaps[k];
-    p.sprite.material.rotation = (rnd() - 0.5) * 1.1;
-  }
-  firePuffs.forEach((p, i) => renewFirePuff(p, (i / FIRE_PUFF.count) * FIRE_PUFF.life));
-
-  const light = new THREE.PointLight(0xff8c38, 3.2, 12);
-  light.position.set(0, 0.85, 0);
-  group.add(light);
-  group.position.copy(FIRE_POS);
-
-  const smoke = new Smoke(new THREE.Vector3(FIRE_POS.x, 0.82, FIRE_POS.z), rnd);
-  const freshSmoke1 = new Smoke(new THREE.Vector3(FIRE_POS.x - 0.35, 0.70, FIRE_POS.z + 0.22), rnd);
-  const freshSmoke2 = new Smoke(new THREE.Vector3(FIRE_POS.x + 0.35, 0.72, FIRE_POS.z - 0.22), rnd);
-  const smokeGroup = new THREE.Group();
-  smokeGroup.add(smoke, freshSmoke1, freshSmoke2);
-  let smokeBoost = 0;
-
-  const colPure = new THREE.Color(1.0, 1.0, 1.0);
-  const colWarm = new THREE.Color(0.96, 0.78, 0.58);
-  const colFade = new THREE.Color(0.55, 0.45, 0.40);
-
-  function tick(dt, time, burningCount = 0) {
-    const targetBoost = burningCount > 0 ? Math.min(1, 0.65 + burningCount * 0.25) : 0;
-    smokeBoost += (targetBoost - smokeBoost) * (1 - Math.exp(-2.2 * dt));
-
-    smoke.tick(dt * (1 + smokeBoost * 0.9));
-    freshSmoke1.tick(dt * (0.6 + smokeBoost * 1.3));
-    freshSmoke2.tick(dt * (0.6 + smokeBoost * 1.3));
-    for (const extra of [freshSmoke1, freshSmoke2]) {
-      extra.visible = smokeBoost > 0.02;
-      for (const p of extra.puffs) {
-        p.sprite.material.opacity *= smokeBoost * 1.35;
-        p.sprite.scale.multiplyScalar(1 + smokeBoost * 0.35);
-      }
-    }
-
-    const fireMult = 1 + smokeBoost * 0.38;
-    light.intensity = (3.0 + 0.35 * Math.sin(time * 7.5) + 0.2 * Math.cos(time * 12.3)) * fireMult;
-
-    const { life, rise: [r0, r1], wind, size: [s0, s1] } = FIRE_PUFF;
-    for (const p of firePuffs) {
-      p.age += dt;
-      if (p.age >= life) renewFirePuff(p, p.age - life);
-      const a = p.age, t = a / life;
-      const up = (r0 * a + ((r1 - r0) * a * a) / (2 * life)) * fireMult;
-      const wobble = 0.08 * t * Math.sin(time * 3.2 + p.sway);
-      const s = (s0 + (s1 - s0) * Math.sqrt(t)) * fireMult;
-      p.sprite.position.set(
-        p.base.x * (1 - 0.28 * t) + wind[0] * a + wobble,
-        p.base.y + up,
-        p.base.z * (1 - 0.28 * t) + wind[2] * a,
-      );
-      p.sprite.scale.set(p.flip * s, s, 1);
-      p.sprite.material.rotation += p.spin * dt;
-      p.sprite.material.opacity = 0.85 * Math.min(1, a / 0.22) * (1 - t) ** 1.4;
-      if (t < 0.6) p.sprite.material.color.copy(colPure).lerp(colWarm, t / 0.6);
-      else p.sprite.material.color.copy(colWarm).lerp(colFade, (t - 0.6) / 0.4);
-    }
-  }
-  return { group, smoke: smokeGroup, tick };
-}
-
 export async function startWoodStand() {
   const el = (id) => document.getElementById(id);
   const canvas = el('scene'), renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -508,8 +376,8 @@ export async function startWoodStand() {
   scene.add(buildBackFence());
 
   const rnd = generator(42);
-  const campfire = buildCampfire(rnd);
-  scene.add(campfire.group, campfire.smoke);
+  const campfire = buildCampfire(FIRE_POS, FIRE_SIDE, generator(394));
+  scene.add(campfire.group);
 
   const worldRoot = new THREE.Group();
   scene.add(worldRoot);
@@ -541,20 +409,39 @@ export async function startWoodStand() {
 
   const burningItems = [];
 
+  function updatePileCount() {
+    const count = piles.reduce((sum, pile) => sum + pile.count, 0);
+    el('gap').textContent = `В поленнице · ${count}` + (piles.length > 1 ? ` / секций · ${piles.length}` : '');
+  }
+
+  function removeWood(object) {
+    object.removeFromParent();
+    object.traverse(child => child.geometry?.dispose());
+  }
+
+  function removeFuel(fuel) {
+    removeWood(fuel.object);
+    fuel.coating?.dispose();
+  }
+
   function resetPiles() {
-    while (piles.length) scene.remove(piles.pop().frame);
-    while (stackedObjects.length) scene.remove(stackedObjects.pop());
-    while (burningItems.length) scene.remove(burningItems.pop().object);
+    while (piles.length) removeWood(piles.pop().frame);
+    while (stackedObjects.length) removeWood(stackedObjects.pop());
+    while (burningItems.length) removeFuel(burningItems.pop());
+    campfire.reset();
+    statusNotice.until = 0;
     flyingLogs.length = 0;
     addNewWoodpile();
+    updatePileCount();
   }
   resetPiles();
 
-  const items = [];
+  const items = [], droppedItems = new Set();
   let branchSeed = 107;
   function spawnSampleItems(resetStack = true) {
-    while (items.length) scene.remove(items.pop().object);
+    while (items.length) removeWood(items.pop().object);
     world.bodies.length = 0;
+    droppedItems.clear();
     if (resetStack) resetPiles();
     const logSpecs = [
       { length: 0.60, radius: 0.095, twigs: 0, pos: new THREE.Vector3(-1.6, 0.14, 0.85), yaw: 0.15 },
@@ -571,36 +458,29 @@ export async function startWoodStand() {
   }
   spawnSampleItems(false);
 
-  // Отправляет предмет (ветку, откушенные сучки или короткий чурбак < 50 см) в костёр, где он горит с дымом и сгорает.
+  // При броске над кучей сохраняем точку попадания, при сортировке на плитке выбираем место в костре.
   function sendToCampfire(body, customNotice = null) {
     const wIdx = world.bodies.indexOf(body);
     if (wIdx !== -1) world.bodies.splice(wIdx, 1);
     const iIdx = items.indexOf(body);
     if (iIdx !== -1) items.splice(iIdx, 1);
 
-    const targetPos = new THREE.Vector3(
-      FIRE_POS.x + (rnd() - 0.5) * 0.85,
-      0.22 + rnd() * 0.12,
-      FIRE_POS.z + (rnd() - 0.5) * 0.85,
-    );
-    const targetQuat = new THREE.Quaternion().setFromEuler(
-      new THREE.Euler((rnd() - 0.5) * 0.35, rnd() * Math.PI * 2, Math.PI / 2 + (rnd() - 0.5) * 0.35, 'YXZ'),
-    );
+    const local = new THREE.Vector2(body.position.x - FIRE_POS.x, body.position.z - FIRE_POS.z);
+    if (local.lengthSq() > 1.3 ** 2) local.set((rnd() - 0.5) * 0.87, (rnd() - 0.5) * 0.74);
+    local.clampLength(0, 0.68);
+    const support = campfire.heightAt(local.x, local.y);
+    const targetPos = new THREE.Vector3(FIRE_POS.x + local.x, support + body.wood.radius, FIRE_POS.z + local.y);
+    const yaw = rnd() * Math.PI * 2;
+    const targetQuat = new THREE.Quaternion().setFromUnitVectors(body.wood.cutDir, new THREE.Vector3(Math.cos(yaw), 0, Math.sin(yaw)));
 
     burningItems.push({
-      object: body.object,
-      title: body.wood.title,
-      fromPos: body.position.clone(),
-      fromQuat: body.quaternion.clone(),
-      toPos: targetPos,
-      toQuat: targetQuat,
-      flyT: 0,
-      flyDuration: 0.48,
-      burnT: 0,
-      burnDuration: body.wood.kind === 'twig' ? 4.2 : 6.8,
+      object: body.object, limb: body.limb, mass: body.limb.weight.mass, local,
+      length: body.wood.length, reach: body.reach, yaw,
+      fromPos: body.position.clone(), fromQuat: body.quaternion.clone(), toPos: targetPos, toQuat: targetQuat,
+      flyT: 0, flyDuration: 0.48, burnT: 0, burnDuration: body.wood.kind === 'twig' ? 4.2 : 6.8,
+      coating: null, deposited: false,
     });
-
-    sayNotice(customNotice || `В костёр: ${body.wood.title} — свежая древесина горит с густым дымом!`);
+    sayNotice(customNotice || `В костёр: ${body.wood.title}`);
   }
 
   // Приёмка подходящего полена (50–100 см) из зоны приёмки в поленницу (работает с любым игровым телом Limb).
@@ -653,8 +533,7 @@ export async function startWoodStand() {
       duration: 0.42,
     });
 
-    const totalStacked = piles.reduce((sum, p) => sum + p.count, 0);
-    el('gap').textContent = `В поленнице: ${totalStacked} шт. (поленниц: ${piles.length}) · P — тест: +полено`;
+    updatePileCount();
     sayNotice(
       spawnedNext
         ? `Поленница #${pile.index} заполнена! Рядом появилась новая поленница #${pile.index + 1}${snippedNote}`
@@ -664,26 +543,14 @@ export async function startWoodStand() {
 
   const isInCampfire = (p) => Math.abs(p.x - FIRE_POS.x) <= FIRE_SIDE * 0.52 && Math.abs(p.z - FIRE_POS.z) <= FIRE_SIDE * 0.52;
 
-  function processDropZone(droppedBody = null) {
-    if (droppedBody) {
-      if (isInDropZone(droppedBody.position)) {
-        if (droppedBody.wood.fitsPile) acceptLogIntoWoodpile(droppedBody);
-        else sendToCampfire(droppedBody);
-        return;
-      }
-      if (!droppedBody.wood.fitsPile && isInCampfire(droppedBody.position)) {
-        sendToCampfire(droppedBody);
-        return;
-      }
-    }
-    for (const b of [...items]) {
-      if (b === held || b.wood.tooHeavy) continue;
-      if (isInDropZone(b.position)) {
-        if (b.wood.fitsPile) acceptLogIntoWoodpile(b);
-        else sendToCampfire(b);
-      } else if (!b.wood.fitsPile && isInCampfire(b.position)) {
-        sendToCampfire(b);
-      }
+  // Сортировке подлежит то, что отпустил игрок. Исходные образцы могут спокойно улечься на землю.
+  function processDropZone() {
+    for (const body of droppedItems) {
+      const inYard = isInDropZone(body.position);
+      if (!inYard && (body.wood.fitsPile || !isInCampfire(body.position))) continue;
+      droppedItems.delete(body);
+      if (body.wood.fitsPile) acceptLogIntoWoodpile(body);
+      else sendToCampfire(body);
     }
   }
 
@@ -691,9 +558,18 @@ export async function startWoodStand() {
   el('hud').hidden = false;
   el('held-saw').hidden = el('kit').hidden = el('side').hidden = el('depth').hidden = true;
   el('gap').hidden = false;
-  el('gap').textContent = 'В поленнице: 0 шт. (поленниц: 1) · P — тест: +полено';
   Object.assign(el('back'), { href: './#stands', textContent: '← Стенды' });
-  el('regrow').textContent = 'Сбросить брёвна (R)';
+  el('regrow').textContent = 'Сбросить стенд (R)';
+  const help = el('help-body');
+  const instructions = help.querySelectorAll('.desktop-only');
+  instructions[0].textContent = 'WASD — ходить, мышь — осмотреться, C — присесть. Щелчок или E — поднять и бросить. Неси ветку к углям или положи на плитняк.';
+  instructions[1].textContent = 'B — подбросить ветку в костёр, P — добавить полено в поленницу. Esc — отпустить мышь.';
+  const feed = document.createElement('button');
+  feed.type = 'button';
+  feed.id = 'wood-feed';
+  feed.textContent = 'Подбросить ветку · B';
+  el('utility').appendChild(feed);
+  feed.addEventListener('click', quickFeedFire);
 
   const crosshair = document.createElement('div');
   Object.assign(crosshair.style, {
@@ -705,7 +581,9 @@ export async function startWoodStand() {
   el('hud').appendChild(crosshair);
 
   const player = makePlayer();
-  player.pos.set(0, 0, 2.2);
+  player.pos.set(2.7, 0, 1.1);
+  player.yaw = 0.19;
+  player.pitch = -0.32;
   const keys = new Set(), stick = bindStick(el('stick')), actionBtn = el('touch-saw');
   actionBtn.textContent = 'Взять / Бросить';
 
@@ -737,7 +615,8 @@ export async function startWoodStand() {
       dropped.velocity.set(0, 0, 0);
       dropped.spin.set(0, 0, 0);
       dropped.wake();
-      processDropZone(dropped);
+      droppedItems.add(dropped);
+      processDropZone();
       updateHudText();
       return;
     }
@@ -750,6 +629,7 @@ export async function startWoodStand() {
     }
     const idx = world.bodies.indexOf(target);
     if (idx !== -1) world.bodies.splice(idx, 1);
+    droppedItems.delete(target);
     held = target;
     heldYawOffset = new THREE.Euler().setFromQuaternion(held.quaternion, 'YXZ').y - player.yaw;
     updateHudText();
@@ -778,17 +658,7 @@ export async function startWoodStand() {
     } else {
       crosshair.style.background = 'rgba(255, 255, 255, 0.85)';
       el('hint').textContent = '';
-      if (activeNotice) {
-        el('log').textContent = activeNotice;
-        return;
-      }
-      const inZone = items.filter((b) => isInDropZone(b.position));
-      if (inZone.length > 0) {
-        const last = inZone[inZone.length - 1];
-        el('log').textContent = `В зоне приёмки для костра (${inZone.length} шт.): ${last.wood.title}`;
-      } else {
-        el('log').textContent = 'Наведи точку на бревно или ветку и нажми ЛКМ · P — быстро добавить полено в поленницу';
-      }
+      el('log').textContent = activeNotice || 'Щелчок — поднять или бросить · C — присесть у углей';
     }
   }
 
@@ -836,12 +706,22 @@ export async function startWoodStand() {
     acceptLogIntoWoodpile(b);
   }
 
+  // Проба с места наблюдателя проходит тот же путь, что ветка, брошенная рукой.
+  function quickFeedFire() {
+    const start = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(0.8).add(camera.position);
+    start.y = Math.max(0.45, start.y - 0.2);
+    const body = createLogItem(world, scene, {
+      length: 0.56 + rnd() * 0.21, radius: 0.028, twigs: 3, pos: start, yaw: player.yaw + 0.5,
+    });
+    sendToCampfire(body);
+  }
   addEventListener('keydown', (e) => {
     if (e.target.closest('input,textarea,select') || e.metaKey || e.ctrlKey || e.altKey) return;
     keys.add(e.code);
     if (e.code === 'KeyC' && !e.repeat) player.crouch = !player.crouch;
     if (e.code === 'KeyE' && !e.repeat) toggleHold();
     if (e.code === 'KeyP' && !e.repeat) quickSpawnLogToPile();
+    if (e.code === 'KeyB' && !e.repeat) quickFeedFire();
     if (e.code === 'KeyR' && !e.repeat) { held = null; spawnSampleItems(true); }
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
@@ -900,7 +780,8 @@ export async function startWoodStand() {
       if (f.t >= 1) flyingLogs.splice(i, 1);
     }
 
-    // Перелёт веток/чурок в костёр и их сгорание с густым дымом (Шаг 3)
+    // Древесина сначала обугливается, затем оседает и раскалывается на свежие угли.
+    let lit = false;
     for (let i = burningItems.length - 1; i >= 0; i--) {
       const b = burningItems[i];
       if (b.flyT < 1) {
@@ -912,11 +793,23 @@ export async function startWoodStand() {
       } else {
         b.burnT += dt / b.burnDuration;
         const p = Math.min(1, b.burnT);
-        const shrink = p < 0.55 ? 1 - p * 0.18 : Math.max(0.02, 0.9 - ((p - 0.55) / 0.45) * 0.88);
-        b.object.scale.setScalar(shrink);
-        b.object.position.y = b.toPos.y * shrink;
-        if (b.burnT >= 1) {
-          scene.remove(b.object);
+        if (!b.coating) {
+          b.coating = scorchLimb(b.limb, b.reach);
+          campfire.ignite(b.local.x, b.local.y);
+        }
+        lit = true;
+        b.coating.burn.value = p;
+        const collapse = THREE.MathUtils.smoothstep(p, 0.47, 1);
+        const scale = 1 - 0.22 * collapse;
+        b.object.scale.setScalar(scale);
+        b.object.position.y = b.toPos.y - collapse * 0.095;
+        if (!b.deposited && p >= 0.82) {
+          campfire.deposit(b.local.x, b.local.y, b.mass, b.yaw, b.length);
+          b.deposited = true;
+        }
+        if (p >= 1) {
+          removeFuel(b);
+          sayNotice('Древесина прогорела. На месте излома осели свежие угли.', 2700);
           burningItems.splice(i, 1);
         }
       }
@@ -924,7 +817,7 @@ export async function startWoodStand() {
 
     world.step(dt);
     processDropZone();
-    campfire.tick(dt, elapsed, burningItems.length);
+    campfire.tick(dt, elapsed, lit);
     updateHudText();
     renderer.render(scene, camera);
   }

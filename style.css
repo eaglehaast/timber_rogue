@@ -58,6 +58,21 @@ body.touch .desktop-only, body:not(.touch) .touch-only { display: none; }
 #orientation { display: none; }
 @media (orientation: portrait) { #orientation:not([hidden]) { position: fixed; bottom: max(6svh, env(safe-area-inset-bottom)); width: 100%; text-align: center; padding: 0 24px; display: block; color: #d2d9cd; } }
 
+/* У костра свободны центр кадра и сама куча. Рисунки и расстановка интерфейса пилы нужны в других режимах. */
+body[data-mode="wood"] #back { white-space: nowrap; font-size: 13px; }
+body[data-mode="wood"] :is(#gap, #log, #hint) { position: absolute; margin: 0; }
+body[data-mode="wood"] #gap { top: 20px; right: 195px; padding: 2px 8px; border-radius: 3px; background: #1a2922c9; font-size: 12px; }
+#wood-feed { position: absolute; top: 13px; right: 18px; height: 36px; pointer-events: auto; font-size: 14px; background: #243229ec; }
+body[data-mode="wood"] :is(#log, #hint) { left: 18px; max-width: 75%; text-align: left; font-size: 13px; }
+body[data-mode="wood"] #log { bottom: 13px; }
+body[data-mode="wood"] #hint { bottom: 48px; font-weight: 600; }
+@media (any-pointer: fine) {
+  body[data-mode="wood"] :is(#stick, #touch-saw) { display: none; }
+}
+@media (any-pointer: coarse) {
+  body[data-mode="wood"] :is(#log, #hint) { left: 142px; max-width: 465px; }
+}
+
 /* На стенде поле имеет те же координаты, что в игре. Панель живёт за его краем. */
 body[data-mode="hud"] #desk { --gutter: clamp(12px, 2.4vw, 36px); grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr) 304px; background: #1b2721; }
 #editor-bar { grid-column: 1/-1; padding: 12px var(--gutter); display: flex; gap: 18px; align-items: center; border-bottom: 1px solid var(--line); }
