@@ -252,19 +252,26 @@ export function buildCampfire(pos, rnd = Math.random) {
   return { group, tick, burning };
 }
 
-// Зона приёмки: площадка плитняка между костром и поленницей.
-export function buildDropZone(pos, half = DROP_HALF) {
+// Зона приёмки: площадка плитняка между костром и поленницей. Поворот yaw — тот же, что у каркаса:
+// площадки стоят вдоль одной оси, и без поворота прямоугольник зоны задевал бы соседние объекты.
+export function buildDropZone(pos, half = DROP_HALF, yaw = 0) {
   const map = pavingTex.clone();
   map.repeat.set((half.x * 2) / 2, (half.z * 2) / 2);
   map.needsUpdate = true;
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(half.x * 2, half.z * 2), new THREE.MeshLambertMaterial({ map }));
   mesh.rotation.x = -Math.PI / 2;
+  mesh.rotation.z = yaw; // до поворота вокруг Y плоскость лежит плашмя — так задаётся её азимут
   mesh.position.set(pos.x, 0.004, pos.z);
   mesh.receiveShadow = true;
   return { mesh, pos, half };
 }
 
-export const isInDropZone = (p, zone) => Math.abs(p.x - zone.pos.x) <= zone.half.x && Math.abs(p.z - zone.pos.z) <= zone.half.z;
+// В зоне ли точка: проверка в осях площадки (её local x — half.x, local z — half.z).
+export const isInDropZone = (p, zone) => {
+  const dx = p.x - zone.pos.x, dz = p.z - zone.pos.z;
+  const c = Math.cos(zone.mesh.rotation.z), s = Math.sin(zone.mesh.rotation.z);
+  return Math.abs(dx * c - dz * s) <= zone.half.x && Math.abs(dx * s + dz * c) <= zone.half.z;
+};
 
 // Участок переработки целиком: кострище, зона приёмки, поленница. Ставится вдоль забора
 // или реки, но не рядом с домом; ничего из построек не пересекает.
