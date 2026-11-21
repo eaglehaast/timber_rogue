@@ -3,4 +3,5 @@ export const PHONE = Boolean(navigator.userAgentData?.mobile) || /iPhone|iPod|An
   || (navigator.maxTouchPoints > 0 && !matchMedia('(any-pointer: fine)').matches);
 const stand = new URLSearchParams(location.search).get('stand');
 export const mode = stand === 'fly' || stand === 'hud' || stand === 'wood' || stand === 'fall' ? stand : 'game';
+export const NO_GRASS = new URLSearchParams(location.search).get('grass') === 'none';
 export const texture = (file) => (mode === 'game' || mode === 'fall') ? file.replace('assets/textures/', 'assets/textures/half/') : file;

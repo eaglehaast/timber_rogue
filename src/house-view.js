@@ -9,12 +9,12 @@ import { planLand, buildLand } from './land.js';
 import { planRiver, buildRiver } from './river.js';
 import { planPier, buildPier } from './pier.js';
 import { planField, buildField } from './field.js';
-import { shapeGround, height, normal } from './terrain.js';
+import { shapeGround, groundGeometry, height, normal } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
 import { EYE, forwardOf } from './player.js';
-import { PHONE, mode } from './device.js';
+import { PHONE, mode, NO_GRASS } from './device.js';
 import { attachGame, MAPLES } from './main.js';
 import { createWoodyard, PAVING_POS, PAVING_HALF, DROP_PAD, PAD_AT } from './campfire.js';
 import { planPaths } from './paths.js';
@@ -62,6 +62,7 @@ function rebuild(seed) {
     w: PAVING_HALF.x * 2 + 0.8, d: PAVING_HALF.z * 2 + 0.8,
   };
   shapeGround(seed, [pad, woodPad, ...MAPLES], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
+  if (NO_GRASS) groundGeometry(GROUND);
   at.y = height(at.x, at.z);
   const woodOrigin = new THREE.Vector3(woodPad.x + PAVING_POS.x * door, height(woodPad.x, woodPad.z), woodPad.z + PAVING_POS.z);
   game.placeWoodyard(woodOrigin, door);
@@ -98,7 +99,9 @@ function rebuild(seed) {
   };
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { bounds: { w: YARD.w, d: YARD.d }, trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field), paths.build());
+  yard = NO_GRASS
+    ? new THREE.Group().add(makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), paths.build())
+    : new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { bounds: { w: YARD.w, d: YARD.d }, trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field), paths.build());
   layout = { at, gas, power, road, pier, pad, river, paths };
   scene.add(house, yard);
   animated.length = 0;
@@ -263,11 +266,12 @@ function frame(now) {
   renderer.render(scene, camera);
   world.rays.render(camera, light, dt);
 }
-rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
+if (!NO_GRASS) rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
 export async function startYard() {
+  if (NO_GRASS) rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
   if (mode === 'game') game.enter(spawn(), spawnPoint?.yaw ?? 0, PHONE, false);
   document.querySelector('#help').hidden = !game.active;
-  await renderer.compileAsync(scene, camera);
+  if (!NO_GRASS) await renderer.compileAsync(scene, camera);
   frame(performance.now());
   walkButton.disabled = false;
   renderer.setAnimationLoop(frame);
