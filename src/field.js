@@ -4,6 +4,7 @@ import { tiles, soften } from './surface.js';
 import { groundPatch, height } from './terrain.js';
 import { atlas, makeTufts, noise } from './grass.js';
 import { windUniforms, GUST_GLSL } from './wind.js';
+import { NO_GRASS } from './device.js';
 
 // Пшеничное поле за рекой (Никита, 2026-11-14: холм убрать, за рекой поле; с другой стороны двора берёзовая
 // лесополоса, по бокам соседи). Река широкая, и пшеница растёт с самой бровки дальнего берега, до голой глины откоса.
@@ -83,6 +84,7 @@ export function planField(seed, river) {
 
 // Строить после makeMeadow: земля поля — кусок её сетки, масса и пучки встают по рельефу.
 export function buildField(field) {
+  if (NO_GRASS) return new THREE.Group().add(floor(field), mass(field));
   const s = THREE.MathUtils.smoothstep, size = 2 * REACH;
   const free = (x) => field.tracks.every((c) => Math.abs(x - c) > TRAM.half);
   const far = (x, z, near) => Math.min(1, (near / Math.hypot(x, z)) ** 2);

@@ -4,6 +4,7 @@ import { tiles, soften } from './surface.js';
 import { groundPatch, height } from './terrain.js';
 import { windUniforms } from './wind.js';
 import { atlas, makeTufts } from './grass.js';
+import { NO_GRASS } from './device.js';
 
 // Речка за двором (каталог ChatGPT «Мелкая речка», 2026-11-10; ориентир — Атца). По воде 11–14 м, 35–70 см
 // глубиной (Никита 2026-11-17: шире — вода закрывает пустую пойму, поле за рекой отодвигается; было 4–5,5 м),
@@ -193,7 +194,8 @@ export function buildRiver(river, size) {
   const floor = new THREE.Mesh(patch, bed);
   floor.receiveShadow = true;
   floor.renderOrder = 1;
-  group.add(floor, water(river), stones(river), makeTufts(SEDGE, Math.round((SEDGE_PER * size * size) / 1000), size, river.sedge, { trodden: river.trodden }));
+  if (!NO_GRASS) group.add(makeTufts(SEDGE, Math.round((SEDGE_PER * size * size) / 1000), size, river.sedge, { trodden: river.trodden }));
+  group.add(floor, water(river), stones(river));
   return group;
 }
 
