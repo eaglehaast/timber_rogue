@@ -398,7 +398,7 @@ export async function startWoodStand() {
 
   el('hud').classList.add('details');
   el('hud').hidden = false;
-  el('held-saw').hidden = el('kit').hidden = el('side').hidden = el('depth').hidden = true;
+  el('held-saw').hidden = el('kit').hidden = el('depth').hidden = true;
   el('gap').hidden = false;
   Object.assign(el('back'), { href: './#stands', textContent: '← Стенды' });
   el('regrow').textContent = 'Сбросить стенд (R)';
@@ -427,7 +427,9 @@ export async function startWoodStand() {
   player.yaw = 0.19;
   player.pitch = -0.32;
   const keys = new Set(), stick = bindStick(el('stick')), actionBtn = el('touch-saw');
-  actionBtn.textContent = 'Взять / Бросить';
+  actionBtn.classList.remove('saw-trigger');
+  actionBtn.setAttribute('aria-label', 'Взять / бросить');
+  actionBtn.querySelector('.action-label').textContent = 'Взять / бросить';
 
   let held = null, heldYawOffset = 0, heldRollAngle = 0, aimed = null;
   const prevHeldPos = new THREE.Vector3();
