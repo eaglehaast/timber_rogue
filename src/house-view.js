@@ -31,12 +31,12 @@ const FOV = 45, camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 400);
 // Ближнего кольца панорамы (луг со стогами в 45 м) на стенде нет: вокруг двора будет своя местность объёмом
 // по плану Никиты (2026-11-08). Земля тянется до кольца гор.
 const world = await makeWorld(renderer, scene, [RINGS.far]);
-const GROUND = 2 * RINGS.far[1];
 
 // Дом стоит фасадом к улице у забора, за палисадником в 1,5–2,5 м (Никита, 2026-11-08: фасад прямо в линию забора
 // не нравится). Боком с крыльцом — к воротам, в ASIDE от их середины. Земля под домом выровнена (terrain.js).
 const PALISADE = [1.5, 2.5], ASIDE = 5;
-const MEADOW = 106, OUTSIDE = 0.7; // м: сторона квадрата с травой (до поля за лесополосой); сколько травы за забором
+const MEADOW = 72, OUTSIDE = 0.7; // м: квадрат травы до края двора и ближнего поля; сколько травы за забором
+const GROUND = MEADOW;
 let house = null, yard = null, layout = null;
 const animated = [];
 const label = document.getElementById('seed');
