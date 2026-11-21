@@ -8,6 +8,10 @@ import { makeSaw, BAR_L, BAR_W } from './saw.js';
 import { growMaple, DENSITY } from './maple.js';
 import { dressBark } from './bark.js';
 import { watch, note, beat } from './watch.js';
+import {
+  buildCampfire, buildWoodpileFrame, buildDropZone, placeProcessingSite, isInDropZone,
+  classifyPiece, addLogToPile, burnLogInFire,
+} from './campfire.js';
 
 const TRUNK_R = 0.3;      // радиус ствола выше корневых наплывов
 const TREE_H = 12;
@@ -157,10 +161,11 @@ const player = { pos: new THREE.Vector3(0, 0, 4), yaw: 0, pitch: 0, bob: 0, eye:
 // Осмотр с летающей камерой: игрок и пила замирают, камера летает сама по себе.
 let fly = null;
 const keys = new Set();
-// free — ходим и смотрим; aim — пила приставлена, мышь крутит полотно; cut — пилим.
+// free — ходим и смотрим; aim — пила приставлена, мышь крутит полотно; cut — пилим; carry — несём кусок.
 let mode = 'free';
 let saw = null;
 let round = null;
+let carried = null; // { body, piece } — поднятый кусок: лежит в руке, у зоны приёмки уходит в переработку
 
 // Выше зоны пиления — клён (maple.js): кривой ствол, ветви по всей высоте, иногда два ствола.
 // Он продолжает низ ствола с той же точки, в том же направлении и с тем же сечением
@@ -186,6 +191,82 @@ function growTree(voxels) {
   };
 }
 
+// Участок переработки — один на все раунды (campfire.js): тот же модуль, что и на стенде,
+// поэтому ассеты и правки со стенда приходят в игру сами. Ставится вдоль забора или реки,
+// но с отступом от дома и самого дерева; yard — постройки участка, если их вернут yard.js.
+const site = { root: new THREE.Group(), fire: null, pile: null, zone: null };
+scene.add(site.root);
+
+function buildSite(yard = []) {
+  const place = placeProcessingSite(yard, round ? round.voxels.shape.reach : 2);
+  if (!place) return;
+  site.fire = buildCampfire(place.firePos);
+  site.pile = { group: buildWoodpileFrame(place.pilePos), row: 0, col: 0 };
+  site.zone = buildDropZone(place.pos);
+  site.root.clear();
+  site.root.add(site.fire.group, site.pile.group, site.zone.mesh);
+}
+
+// Поднять ближайший лежащий кусок дерева (G).
+function pickPiece() {
+  if (carried || !round) return;
+  let best = null, bestDist = 1.6;
+  const eye = player.pos.clone().setY(player.eye);
+  for (const piece of round.debris) {
+    if (!piece.landed) continue;
+    // Смотрим на лежачий ствол сверху вниз: центр куска считаем по габариту, а не по точке крепления.
+    const center = new THREE.Box3().setFromObject(piece.body).getCenter(new THREE.Vector3());
+    const d = center.distanceTo(eye);
+    if (d < bestDist) { bestDist = d; best = piece; }
+  }
+  if (!best) return;
+  carried = { body: best.body, piece: classifyPiece(best) };
+  round.debris.splice(round.debris.indexOf(best), 1);
+  mode = 'carry';
+  sawModel.visible = false; // в руках теперь кусок, пила убрана
+  say('pick', `${carried.piece.title}: ${carried.piece.verdict}`);
+}
+
+// Сбросить кусок: в зоне приёмки он уходит в переработку, мимо — снова под ноги.
+function dropCarried() {
+  if (!carried) return;
+  const at = player.pos;
+  if (site.zone && isInDropZone(at, site.zone)) {
+    if (carried.piece.fitsPile && addLogToPile(site.pile, carried.piece)) {
+      say('pile', `${carried.piece.title} — в поленницу (${site.pile.row + 1}-й ряд)`);
+    } else {
+      burnLogInFire(site.fire, carried.piece);
+      say('fire', `${carried.piece.title} — в костёр`);
+    }
+    scene.remove(carried.body);
+  } else {
+    carried.body.position.set(at.x, 0.08, at.z);
+    round.debris.push({ body: carried.body, velocity: new THREE.Vector3(), spin: new THREE.Vector3(), rest: 0.08, landed: true });
+  }
+  carried = null;
+  mode = 'free';
+  sawModel.visible = round.saws > 0; // руки снова свободны — пила на виду, если цела
+}
+
+// Кладём кусок плашмя: длинная ось вдоль взгляда, торцы горизонтальны. Поворот снимаем —
+// кувыркаться в руках он не должен.
+function carryPose() {
+  const box = new THREE.Box3().setFromObject(carried.body);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  // Длинная ось считаем в мировых координатах габарита (без учёта текущего поворота куска).
+  const e = new THREE.Euler().setFromQuaternion(carried.body.quaternion.clone().invert());
+  const d = size.clone().applyEuler(e);
+  const axis = Math.abs(d.x) >= Math.abs(d.y) && Math.abs(d.x) >= Math.abs(d.z) ? 'x' : Math.abs(d.y) >= Math.abs(d.z) ? 'y' : 'z';
+  const along = forwardOf(player.yaw);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(axis === 'x', axis === 'y', axis === 'z'), along);
+  const target = player.pos.clone().addScaledVector(along, 0.55).setY(player.eye - 0.45);
+  carried.body.quaternion.copy(q);
+  carried.body.updateMatrixWorld(true);
+  // Точка крепления смещена из центра куска (см. dropPiece) — доводим так, чтобы центр встал куда надо.
+  carried.body.position.copy(target.sub(center.applyQuaternion(q)));
+}
+
 // Ветер налетает порывами: сумма несоизмеримых волн, обрезанная снизу, — от 0 до 1.
 function gust(t, phase) {
   const g = Math.sin(0.31 * t + phase) + 0.5 * Math.sin(0.87 * t + 2 * phase) + 0.3 * Math.sin(2.3 * t);
@@ -207,8 +288,10 @@ function newRound() {
   upper.add(voxels.lift);
   root.add(voxels.group, upper);
   scene.add(root);
-  const yard = []; // постройки (yard.js) пока убраны: отвлекают от дерева
+  // Постройки (yard.js) по-прежнему убраны, но участок переработки стоит: его ставит campfire.js.
+  const yard = [];
   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+  buildSite(yard);
 
   round = {
     root, voxels, upper, yard, ...tree,
@@ -226,6 +309,7 @@ function newRound() {
   };
   mode = 'free';
   saw = null;
+  carried = null; // поднятый кусок остался в удалённом раунде — отпускаем руки
   sawModel.visible = true;
   resultEl.hidden = true;
   logEl.replaceChildren();
@@ -777,9 +861,9 @@ function update(dt) {
   const right = new THREE.Vector3(-forward.z, 0, forward.x);
 
   const shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
-  // Ходить можно, только пока пила не приставлена к стволу и камера не летает.
+  // Ходить можно, только пока пила не приставлена к стволу и камера не летает. Кусок в руках не мешает шагу.
   const move = new THREE.Vector3();
-  if (mode === 'free' && !fly) {
+  if ((mode === 'free' || mode === 'carry') && !fly) {
     if (keys.has('KeyW')) move.add(forward);
     if (keys.has('KeyS')) move.sub(forward);
     if (keys.has('KeyD')) move.add(right);
@@ -826,7 +910,7 @@ function update(dt) {
   if (!round.top) stand(dt);
   else if (round.slide) slideTop(dt);
 
-  const shown = saw ?? candidate;
+  const shown = mode === 'carry' ? null : (saw ?? candidate);
   aimPlane.visible = Boolean(shown) && mode !== 'cut';
   if (shown) {
     const plane = pose(shown, TRUNK_R);
@@ -866,7 +950,13 @@ function update(dt) {
     shake.copy(right).multiplyScalar(Math.sin(player.bob) * 0.015).setY(-Math.abs(Math.cos(player.bob)) * 0.02);
   }
   const held = player.pos.clone().addScaledVector(forward, HOLD_AHEAD).addScaledVector(right, -HOLD_LEFT).setY(player.eye - HOLD_LOW);
-  moveSaw(shown ?? { edge: held, q: facing(player.yaw) }, shake, dt);
+  if (mode === 'carry') {
+    carryPose(); // в руках кусок — он идёт за взглядом, пила отдыхает
+  } else {
+    moveSaw(shown ?? { edge: held, q: facing(player.yaw) }, shake, dt);
+  }
+
+  site.fire?.tick(dt, round.time); // костёр живёт сам: пламя, дым, горящие чурки
 
   if (fly) {
     flyCamera(dt, shift);
@@ -965,8 +1055,14 @@ function fitsKerf(q) {
 function hint() {
   if (round.slide) return 'Съезжает! Отойди!';
   if (round.fall) return round.done ? '' : 'Падает! Беги!';
+  if (mode === 'carry') {
+    return site.zone && isInDropZone(player.pos, site.zone)
+      ? 'Зона приёмки · ЛКМ или G — отправить в переработку'
+      : `${carried.piece.title} · неси в зону приёмки у костра · G — бросить`;
+  }
   if (fly) return 'Осмотр · F — вернуться';
   if (!round.saws) return 'Пил не осталось · R — новое дерево';
+  if (round.done && round.debris.some((p) => p.landed)) return 'G — поднять кусок и отнести к костру';
   return '';
 }
 
@@ -996,8 +1092,15 @@ addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyF') setFlying(!fly);
   if (fly) return;
+  // С куском в руках за ствол не держимся и пилу не приставляем.
+  if (mode === 'carry') keys.delete('KeyS');
   if (e.code === 'KeyC') player.crouch = !player.crouch;
   if (e.code === 'KeyL') hudEl.classList.toggle('details');
+  // G — поднять ближайший лежащий кусок; в зоне приёмки G или ЛКМ отправляют его в поленницу или в костёр.
+  if (e.code === 'KeyG') {
+    if (mode === 'carry') dropCarried();
+    else if (mode === 'free' && !fly) pickPiece();
+  }
   // Стрелки и Q/E — пила поворачивается на полградуса за нажатие.
   const keySteer = {
     ArrowLeft: [TURN, STEP], ArrowRight: [TURN, -STEP], ArrowUp: [TILT, STEP], ArrowDown: [TILT, -STEP],
@@ -1021,6 +1124,8 @@ canvas.addEventListener('mousedown', (e) => {
     // Входим в древесину по середине слоя кубиков: тогда щель лежит вокруг полотна поровну.
     if (saw.depth === 0) saw.edge.y = saw.origin.y = (Math.floor(saw.origin.y / VOXEL) + 0.5) * VOXEL;
     mode = 'cut';
+  } else if (mode === 'carry') {
+    dropCarried();
   } else if (mode === 'free' && !round.top && round.saws) {
     saw = sawCandidate(forwardOf(player.yaw));
     if (saw) mode = 'aim';
