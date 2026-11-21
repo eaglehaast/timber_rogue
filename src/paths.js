@@ -10,7 +10,7 @@ import { axisRoute } from './route.js';
 // остаётся трава. Стиль — акварельный, как остальной двор: земля просвечивает в колее шагов вдоль оси.
 // Концы троп привязаны к фактическому положению крыльца и площадки в каждом варианте двора (их считает
 // house-view.js по плану дома и origin хоздвора). Ворота и калитка — разные объекты: тропы идут от калитки.
-const PATH = { half: 0.45, edge: 0.18, tread: 0.7, rows: 1, lift: 0.008 }; // м: полуширина, полоса края, сторона плитки, рядов поперёк
+const PATH = { half: 0.45, edge: 0.18, tread: 0.7, rows: 1, lift: 0.008 }; // м: полуширина, полоса края, квадратная плитка, рядов поперёк
 const CELL = 0.05;                                       // м: клетка растра протоптанного
 const EDGE_TILE = 16, SLAB_TILE = 1.6;                   // м: длина маски края; сторона плитки под камень
 const LIFT = 0.004;                                      // м над настилом тропы, чтобы камни не мерцали с ним
@@ -35,13 +35,13 @@ const noise = (rnd, h = 1.3) => {
   return (s) => w(s / h, 7.3);
 };
 
-// Смысловой маршрут от A к B: один поворот, прямые участки вдоль осей двора. Конец остаётся точным —
-// тропа стыкуется со ступенью крыльца или с ближним краем площадки хозблока.
-function walk(from, to, first = 'z') {
-  return axisRoute(from, to, first);
+// Путь от a до b через равные промежутки, с лёгким вилянием поперёк; последние keep точек прижаты к цели,
+// чтобы конец тропы читался там, где стоит крыльцо или лежит край площадок.
+function walk(from, to, rnd, keep = 4) {
+  return axisRoute(from, to, keep === 'pad' ? 'x' : 'z');
 }
 
-// Лента по земле вдоль пути: полуширина дышит (рваный край), mask(t) — насколько тропа видна (у конца — в ноль).
+// Лента по земле вдоль пути: полуширина дышит (рваный край), mask(i) — насколько тропа видна (у конца — в ноль).
 // Тот же приём, что у колеи улицы (road.js): альфа-маска road-edge рвано тает в траву по полосе edge.
 function ribbon(points, surface, mask = () => 1) {
   const pos = [], uv = [], uv1 = [], color = [], index = [];
@@ -53,7 +53,7 @@ function ribbon(points, surface, mask = () => 1) {
     const t = new THREE.Vector2(b.x - a.x, b.z - a.z).normalize(), m = new THREE.Vector2(-t.y, t.x);
     if (i) s += Math.hypot(p.x - points[i - 1].x, p.z - points[i - 1].z);
     const h = PATH.half * (1 + 0.14 * (breath(s) - 0.5));
-    const inner = h - PATH.edge / 2, outer = h + PATH.edge / 2, w = mask(points.length > 1 ? i / (points.length - 1) : 1);
+    const inner = h - PATH.edge / 2, outer = h + PATH.edge / 2, w = mask(i);
     Array.from({ length: n }, (_, k) => outer * ((2 * k) / (n - 1) - 1)).forEach((d) => {
       const x = p.x + m.x * d, z = p.z + m.y * d;
       pos.push(x, surface(x, z), z);
@@ -87,11 +87,13 @@ function slabs(points, surface, rnd, mask = () => 1) {
     while (i < points.length - 1 && d + Math.hypot(points[i + 1].x - points[i].x, points[i + 1].z - points[i].z) < along) {
       d += Math.hypot(points[i + 1].x - points[i].x, points[i + 1].z - points[i].z), i++;
     }
-    const u = Math.min(1, (along - d) / Math.max(1e-6, Math.hypot(points[i + 1]?.x - points[i].x, points[i + 1]?.z - points[i].z)));
+    if (i >= points.length - 1) i = points.length - 2;
+    const segmentLength = Math.hypot(points[i + 1].x - points[i].x, points[i + 1].z - points[i].z);
+    const u = segmentLength > 1e-6 ? Math.min(1, (along - d) / segmentLength) : 1;
     const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)];
     const t = new THREE.Vector2(b.x - a.x, b.z - a.z).normalize(), m = new THREE.Vector2(-t.y, t.x);
     const cx = THREE.MathUtils.lerp(points[i].x, points[i + 1].x, u), cz = THREE.MathUtils.lerp(points[i].z, points[i + 1].z, u);
-    const seen = mask((i + u) / (points.length - 1));
+    const seen = mask(Math.min(i, points.length - 1));
     const rows = PATH.rows;
     for (let r = 0; r < rows; r++) {
       const across = rows === 1 ? 0 : (r / (rows - 1) - 0.5) * 2 * (PATH.half - 0.28);
@@ -144,10 +146,10 @@ export function planPaths({ seed, from, porch, pad, gate }) {
   const surface = (x, z) => groundAt(x, z) + PATH.lift;
   const avoid = (p) => Math.min(1, Math.hypot(p.x - gate.x, p.z - gate.z) / 1.4);
   const near = (x, z, p, r) => Math.hypot(x - p.x, z - p.z) < r;
-  const paths = [walk(from, porch, 'z'), walk(from, { x: pad.x, z: pad.z }, 'x')].map((points) => ({
+  const paths = [walk(from, porch, rnd), walk(from, { x: pad.x, z: pad.z }, rnd, 'pad')].map((points) => ({
     points,
     // У самой цели лента сходит на нет: дорожка стыкуется со ступенью и с краем площадок без обрыва.
-    mask: (t) => avoid(points[Math.min(points.length - 1, Math.round(t * (points.length - 1)))]) * (1 - THREE.MathUtils.smoothstep(t, 0.9, 1)),
+    mask: (i) => avoid(points[i]) * (1 - THREE.MathUtils.smoothstep(i / (points.length - 1), 0.9, 1)),
   }));
   // Растр протоптанного вокруг троп: в колее шагов (у оси) трава не растёт вовсе, у края — низкая.
   const all = paths.flatMap((p) => p.points);
@@ -159,7 +161,7 @@ export function planPaths({ seed, from, porch, pad, gate }) {
   const layer = new Float32Array(nx * nz);
   for (const { points, mask } of paths) {
     for (let i = 0; i < points.length; i++) {
-      const p = points[i], w = mask(points.length > 1 ? i / (points.length - 1) : 1), reach = PATH.half + PATH.edge + 0.35;
+      const p = points[i], w = mask(i), reach = PATH.half + PATH.edge + 0.35;
       const i0 = Math.max(0, Math.floor((p.x - reach - box.x0) / CELL)), i1 = Math.min(nx - 1, Math.ceil((p.x + reach - box.x0) / CELL));
       const j0 = Math.max(0, Math.floor((p.z - reach - box.z0) / CELL)), j1 = Math.min(nz - 1, Math.ceil((p.z + reach - box.z0) / CELL));
       for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
