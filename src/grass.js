@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { windUniforms, GUST_GLSL } from './wind.js';
 import { smoothNoise } from './random.js';
-import { groundGeometry, height } from './terrain.js';
+import { groundGeometry, groundPatch, height } from './terrain.js';
 
 // Трава на земле — набор из 20 акварельных плиток по GRASS_TILE метров с общими краями (сетка 5 × 4
 // в одной картинке): каждая клетка земли берёт свою плитку, и узор не повторяется.
@@ -22,10 +22,14 @@ const material = soften(new THREE.MeshLambertMaterial({ map: texture, vertexColo
 // своя у каждого запуска игры и не меняется, пока на делянке растят новые деревья.
 // litter(x, z) — сколько на земле опавшей хвои, 0..1: там вместо травы подстилка, и она в тени сомкнутых крон
 // (тени солнца от карты теней туда не достают): земля темнее на SHADE.
-export function makeGround(size, litter = () => 0) {
+export function makeGround(size, litter = () => 0, bounds = null) {
   texture.repeat.set(size / GRASS_TILE, size / GRASS_TILE);
   texture.offset.set(Math.floor(Math.random() * 100), Math.floor(Math.random() * 100));
-  const geometry = groundGeometry(size), pos = geometry.attributes.position;
+  const full = groundGeometry(size);
+  const geometry = bounds
+    ? groundPatch((x, z) => Math.abs(x) <= bounds.w / 2 && Math.abs(z) <= bounds.d / 2)
+    : full;
+  const pos = geometry.attributes.position;
   const under = Array.from({ length: pos.count }, (_, i) => litter(pos.getX(i), pos.getZ(i)));
   geometry.setAttribute('blend', new THREE.Float32BufferAttribute(under.map((k) => 1 - k), 1));
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(under.flatMap((k) => Array(3).fill(1 - SHADE * k)), 3));
