@@ -734,6 +734,7 @@ export class TrunkVoxels {
       jHigh = Math.max(jHigh, j);
     }
     const part = new TrunkVoxels(this.shape, (jHigh - jLow + 1) * VOXEL, this.skin, this.floor + jLow);
+    part.freeEnds = true;
     part.data.fill(0);
     part.sums.fill(0);
     part.top.fill(-1);
@@ -918,10 +919,11 @@ export class TrunkVoxels {
           for (let f = 0; f < 6; f++) {
             const { dir, corners } = FACES[f];
             const ii = i + dir[0], jj = j + dir[1], kk = k + dir[2];
-            if (jj < 0 || jj >= ny) continue; // снизу земля, сверху продолжается ствол
-            const outside = ii < 0 || kk < 0 || ii >= n || kk >= m;
+            const end = jj < 0 || jj >= ny;
+            if (end && !this.freeEnds) continue; // у стоящего дерева снизу земля, сверху продолжается ствол
+            const outside = end || ii < 0 || kk < 0 || ii >= n || kk >= m;
             if (!outside && data[(jj * m + kk) * n + ii]) continue;
-            const bark = outside || !this.wood(ii, jj, kk);
+            const bark = !end && (outside || !this.wood(ii, jj, kk));
             // Вросшая кора внутри дерева: грань коры, но плоская, как срез, и на контур её не ставим.
             const seam = bark && !outside && this.shape.seam(this.x(ii), (this.floor + jj + 0.5) * VOXEL, this.z(kk));
             if (!stem) {
@@ -934,7 +936,7 @@ export class TrunkVoxels {
             const a = Math.atan2(this.z(k) - axis.z, this.x(i) - axis.x);
             if (bark && !seam) {
               [nx, nyy, nz] = stem.normal(a, y, Math.hypot(this.x(i) - axis.x, this.z(k) - axis.z));
-            } else {
+            } else if (!end) {
               [nx, nyy, nz] = this.cutNormal(i, j, k, dir);
             }
             out.reserve();
