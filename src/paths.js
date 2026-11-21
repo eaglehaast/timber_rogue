@@ -101,7 +101,7 @@ function slabs(points, surface, rnd, mask = () => 1) {
     const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)];
     const t = new THREE.Vector2(b.x - a.x, b.z - a.z).normalize(), m = new THREE.Vector2(-t.y, t.x);
     const cx = THREE.MathUtils.lerp(points[i].x, points[i + 1].x, u), cz = THREE.MathUtils.lerp(points[i].z, points[i + 1].z, u);
-    const seen = mask(i / (points.length - 1));
+    const seen = mask(Math.min(i, points.length - 1)); // лента считает маску по индексу точки; здесь i — номер камня вдоль пути
     const rows = PATH.rows[0] + Math.floor(rnd() * (PATH.rows[1] - PATH.rows[0] + 1));
     for (let r = 0; r < rows; r++) {
       const across = rows === 1 ? 0 : (r / (rows - 1) - 0.5) * 2 * (PATH.half - 0.28);
