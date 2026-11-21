@@ -1,7 +1,5 @@
 import * as THREE from 'three';
 import { attachGame } from './main.js';
-import { prepareCrown, coarseCapsules, animateFall } from './art-fall.js';
-import { makeFallLeaves } from './fall-leaves.js';
 import { tiles, soften } from './surface.js';
 import { blow, stepWind, wind } from './wind.js';
 
@@ -48,14 +46,12 @@ export async function startFallStand() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(40, 1, 0.07, 150);
   clearing(scene);
-  const effects = makeFallLeaves(scene);
   const seed = Number(new URLSearchParams(location.search).get('seed') ?? 27) >>> 0;
   const view = { yaw: 0.12, pitch: 0.12, dist: 22.2, focus: new THREE.Vector3(0, 4.35, 0) };
   const target = view.focus.clone(), direction = new THREE.Vector3(1, 0, 0);
   let stage = 'ready', afterHit = -1, follow = 0, samples = null, maxBodies = 0, seeFall = false, broken = 0;
   const study = {
     get artistic() { return $('fall-mode').value === 'art'; },
-    prepareCrown, coarseCapsules, animateFall, effects,
     onFall(u, separation) {
       direction.copy(u);
       stage = 'falling';
@@ -92,7 +88,6 @@ export async function startFallStand() {
   function reset() {
     observe();
     stage = 'ready'; samples = null; afterHit = -1; seeFall = false; broken = 0; follow = 0;
-    effects.clear();
     blow(0.3, 0, 0.8);
     wind.time = 0;
     game.regrow(() => seed / 2 ** 32);
@@ -183,7 +178,6 @@ export async function startFallStand() {
     const begin = performance.now();
     stepWind(dt);
     game.tick(now, dt);
-    effects.tick(dt);
     const cost = performance.now() - begin;
     if (seeFall) { seeFall = false; observe(); }
     if (!game.active) orbit(dt);

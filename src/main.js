@@ -11,6 +11,8 @@ import { makeSaw, dressSaw, lamp, runChain, PACKS, BAR_W } from './saw.js';
 import { Arms } from './arms.js';
 import { Chips } from './chips.js';
 import { growMaple, DENSITY } from './maple.js';
+import { animateFall, coarseCapsules, prepareCrown } from './art-fall.js';
+import { makeFallLeaves } from './fall-leaves.js';
 import { Limb, Kerf, combine } from './limbs.js';
 import { Body, World, Grip, rayHit } from './bodies.js';
 import { dressBark, dressLimbs } from './bark.js';
@@ -25,7 +27,7 @@ let spawnPoint = null;
 
 // Три клёна за домом. r — радиус ствола выше корневых наплывов.
 export const MAPLES = [{ r: 0.1, x: -15, z: -3 }, { r: 0.3, x: 0, z: -3 }, { r: 0.2, x: 15, z: -3 }];
-let plots = MAPLES, fallStand;
+let plots = MAPLES, fallStand, fallLeaves;
 const TREE_H = 12;
 const BODY_RADIUS = 0.35;
 const REACH = 1.0;        // докуда достаёт пила от лица до коры
@@ -177,7 +179,7 @@ const barL = () => sawModel.userData.bar;
 // Крона каждого ствола и каждая его нижняя ветвь — ветки (limbs.js), от них можно отпиливать.
 // Крона качается на своём сгибе bend — над осью ствола у верха зоны. Торец ветки — те же кольца, что на срезе,
 // стенки раскола — те же рваные волокна, что у отщепа.
-function growTree(voxels) {
+function growTree(voxels, artistic) {
   const { shape } = voxels;
   const { skeleton, crowns } = growMaple(shape, ZONE_H, TREE_H, ZONE_H - 0.03);
   const wood = voxels.skin[1];
@@ -186,7 +188,7 @@ function growTree(voxels) {
   const stems = crowns.map((c, i) => {
     const bend = new THREE.Group();
     bend.position.copy(shape.stems[i].center(ZONE_H)).setY(ZONE_H - 0.03);
-    const prepared = fallStand?.artistic ? fallStand.prepareCrown(c, { skin, cloud: c.cloud, zone: ZONE_H }) : null;
+    const prepared = artistic ? prepareCrown(c, { skin, cloud: c.cloud, zone: ZONE_H }) : null;
     const crown = prepared ? Object.assign(prepared.limb, { stem: i }) : grow(c, i);
     const breaks = prepared?.breaks ?? [];
     for (const { limb } of breaks) {
@@ -241,10 +243,12 @@ function regrow(rnd = Math.random) {
   noted.until = 0;
   aimPlane.visible = false;
   chips.clear();
+  fallLeaves.clear();
   if (woodyard) {
     woodyard.reset();
   }
-  plots.forEach((_, slot) => newRound(slot, (rnd() * 2 ** 32) >>> 0));
+  const artistic = fallStand?.artistic ?? true;
+  plots.forEach((_, slot) => newRound(slot, (rnd() * 2 ** 32) >>> 0, artistic));
   round = nearest();
   arm(0);
   clearTimeout(resultTimer);
@@ -254,13 +258,13 @@ function regrow(rnd = Math.random) {
 
 // Вырастить заново дерево на месте slot делянки. treeSeed — зерно, из которого оно растёт
 // (по нему его можно вырастить заново из отчёта).
-function newRound(slot, treeSeed) {
+function newRound(slot, treeSeed, artistic) {
   const { r, x, z } = plots[slot];
 
   seed(treeSeed);
   const voxels = new TrunkVoxels(trunkShape(r, ZONE_H, random() * Math.PI * 2), ZONE_H, [dressBark(), dressWood()]);
   voxels.remesh();
-  const tree = growTree(voxels);
+  const tree = growTree(voxels, artistic);
 
   const root = new THREE.Group();
   root.name = 'maple';
@@ -276,7 +280,7 @@ function newRound(slot, treeSeed) {
 
   round = trees[slot] = {
     slot, base: root.position, root, voxels, world, ...tree,
-    seed: treeSeed,
+    seed: treeSeed, artistic, shedStems: 0,
     time: 0,
     stumps: [], // на какой высоте спилен ствол (по номеру ствола)
     cuts: [],
@@ -905,6 +909,20 @@ function crack(power) {
   source.start();
 }
 
+// Первые листья принадлежат подпиленному стволу. Если недопил поддаётся несколько раз
+// или к одному пню приросли два ствола, каждый осыпает свою крону один раз.
+function crackTrunk(power) {
+  const stems = round.body & ~round.shedStems;
+  if (round.artistic && stems) {
+    const cutY = round.voxels.middle * VOXEL;
+    const sources = round.stems.flatMap((stem, i) => stems & (1 << i)
+      ? [stem.crown, ...stem.lows.filter(l => l.y > cutY).map(l => l.limb)] : []);
+    fallLeaves.shed(sources, round.base, round.seed ^ stems, ground);
+    round.shedStems |= stems;
+  }
+  crack(power);
+}
+
 // Стоящее дерево: качает ветром, недопил гнётся под весом, и после каждого кубика
 // пересчитываем, держит ли он дерево.
 function stand(dt) {
@@ -990,7 +1008,7 @@ function stand(dt) {
 
   if (!sec.intact.length) say('free', 'Ствол перерезан насквозь, но стоит: вес пока над пнём');
   else if (tip.ratio > 0.7) {
-    if (!round.said.creak) crack(0.3);
+    if (!round.said.creak) crackTrunk(0.3);
     say('creak', 'Недопил потрескивает — ещё немного');
   } else if (tip.ratio < 0.5) unsay('creak');
 
@@ -1059,7 +1077,7 @@ function yieldHinge(sec, tip, c, dt) {
     say('stood', 'Ствол встал: щель за недопилом осталась раскрытой');
     return;
   }
-  if (!round.said.yield) crack(0.4);
+  if (!round.said.yield) crackTrunk(0.4);
   say('yield', 'Недопил поддаётся — щель за ним раскрывается');
   unsay('stood');
   give.u = u;
@@ -1077,7 +1095,7 @@ function splitHinge(sec, tip, load) {
   round.tongue = new Set(pulledFibres(sec, tip).map((f) => f.col));
   round.voxels.splinter(round.tongue, split);
   round.voxels.remesh();
-  crack(0.5);
+  crackTrunk(0.5);
   say('split', 'Треск вдоль ствола — его раскалывает вверх от недопила');
 }
 
@@ -1086,7 +1104,7 @@ function splitHinge(sec, tip, load) {
 // обрывок коры, — отваливается.
 function separate(h, tongue, split) {
   round.stems.forEach((_, i) => { if (round.body & (1 << i)) round.stumps[i] = round.voxels.cutLow * VOXEL; });
-  const log = round.voxels.splitTop(h, tongue, split, fallStand?.artistic);
+  const log = round.voxels.splitTop(h, tongue, split, round.artistic);
   round.upper.add(log.group);
   log.group.userData.log = log;
   log.set = round.world.fix(round.upper, { solids: [log] });
@@ -1099,7 +1117,7 @@ function startSlide(s) {
   separate(round.voxels.middle * VOXEL);
   round.slide = { ...s, s: 0, v: 0 };
   dropSaw();
-  crack(0.6);
+  crackTrunk(0.6);
   say('slide', 'Косой рез — ствол поехал вниз по срезу!');
 }
 
@@ -1122,7 +1140,7 @@ function slideTop(dt) {
 function startTwist(tw, c) {
   round.sec = { ...round.sec, intact: [] };
   const u = new THREE.Vector3(c.x - tw.o.x, 0, c.z - tw.o.z).normalize();
-  crack(0.8);
+  crackTrunk(0.8);
   say('twist', 'Ствол провернулся на косых срезах — остаток скрутило!');
   startFall({ u, p: tw.o.x * u.x + tw.o.z * u.z, hold: 0 }, c);
   // Пока верх ещё на площадках, они крутят его дальше: момент сверх трения скольжения.
@@ -1166,16 +1184,16 @@ function startFall(tip, c, slip = 0, speed = 0) {
     knots: [],
   };
   round.upper.traverse((o) => { if (o.name === 'trunk') round.fall.knots.push(o); });
-  if (fallStand?.artistic) {
-    round.fall.motion = fallStand.animateFall(round, round.fall, {
-      floor: ground, query: fallStand.query, effects: fallStand.effects,
-      hit(count) { fallStand.onImpact(count); crack(0.85); },
+  if (round.artistic) {
+    round.fall.motion = animateFall(round, round.fall, {
+      floor: ground, query: fallStand?.query, effects: fallLeaves,
+      hit(count) { fallStand?.onImpact(count); crack(0.85); },
       park(limb) { limbBody(limb, round.world.frame(limb.group, new THREE.Matrix4()), true).park(); },
     });
   }
   fallStand?.onFall(tip.u, performance.now() - began);
   dropSaw();
-  crack(1);
+  crackTrunk(1);
   say('go', hinge ? 'Хруст! Пропил за недопилом раскрылся — дерево пошло' : 'Дерево пошло!');
 }
 
@@ -1420,25 +1438,25 @@ function sever(limb, axis, s, chair) {
   limb.dress();
   const body = bodyOf(limb);
   const isHeld = Boolean(body && grasp?.body === body);
-  let kept = null;
-  if (body?.limbs) kept = relay(body);
+  const simple = Boolean(body?.fixedPose || body?.fallBranch);
+  if (body?.limbs) relay(body);
   else if (body) {
     round.world.remove(body);
     body.object.removeFromParent();
-    kept = limbBody(limb, frame);
+    limbBody(limb, frame, simple);
   } else {
     round.world.refit(limb.set, limb.shape);
     const stem = round.stems[limb.stem];
     Object.assign(stem, heft(stem));
     if (!round.top) weigh();
   }
-  const fell = limbBody(piece, frame);
+  limbBody(piece, frame, simple);
   if (isHeld) regrip();
 }
 
 // Отпиленная ветка — твёрдое тело: вес и инерция — по её древесине и листьям, форма — её капсулы.
 // Падает оттуда, где была: frame — где ветка была в осях дерева.
-function limbBody(limb, frame, simple = Boolean(fallStand?.artistic && round.done)) {
+function limbBody(limb, frame, simple = false) {
   const { mass, com, inertia } = limb.weight;
   const object = new THREE.Group();
   limb.group.position.copy(com).negate();
@@ -1447,9 +1465,10 @@ function limbBody(limb, frame, simple = Boolean(fallStand?.artistic && round.don
   round.root.add(object);
   const body = new Body(object, {
     mass, inertia, position: com.clone().applyMatrix4(frame), quaternion: new THREE.Quaternion().setFromRotationMatrix(frame),
-    capsules: (simple ? fallStand.coarseCapsules(limb) : limb.shape).map((c) => ({ a: c.a.clone().sub(com), b: c.b.clone().sub(com), r: c.r, soft: c.soft, src: { limb, capsule: c } })),
+    capsules: (simple ? coarseCapsules(limb) : limb.shape).map((c) => ({ a: c.a.clone().sub(com), b: c.b.clone().sub(com), r: c.r, soft: c.soft, src: { limb, capsule: c } })),
   });
   body.limb = limb;
+  body.fallBranch = simple;
   round.world.add(body);
   return body;
 }
@@ -1494,7 +1513,7 @@ function lyingBody(upper, limbs, logs, simple = false) {
     ...placed.map((l) => ({ mass: l.mass, com: l.com.clone().applyMatrix4(l.m), inertia: turned(l.inertia, l.m) })),
     ...logs.map(({ heft: h }) => ({ mass: h.mass, com: h.com.clone().applyMatrix4(m), inertia: turned(h.inertia, m) })),
   ]);
-  const capsules = placed.flatMap(({ limb, m: lm }) => (simple ? fallStand.coarseCapsules(limb) : limb.shape).map((c) => ({
+  const capsules = placed.flatMap(({ limb, m: lm }) => (simple ? coarseCapsules(limb) : limb.shape).map((c) => ({
     a: c.a.clone().applyMatrix4(lm).sub(com), b: c.b.clone().applyMatrix4(lm).sub(com), r: c.r, soft: c.soft, src: { limb, capsule: c },
   })));
   for (const log of logs) {
@@ -1589,7 +1608,7 @@ function gravityIn(limb, body) {
 // него тело ложится иначе.
 function snapLimbs() {
   for (const body of round.world.bodies) {
-    if (body.asleep) continue;
+    if (body.asleep || body.fallBranch) continue;
     for (const limb of body.limbs ?? (body.limb ? [body.limb] : [])) {
       const loads = loadsOn(body, limb), g = gravityIn(limb, body);
       if (limb.kerfs.some((kerf) => bear(limb, kerf, loads, g))) return;
@@ -1858,10 +1877,15 @@ function updateTrees(dt) {
         if (round.fall.motion.step(dt)) land(true);
       } else fallTop(dt);
     }
-    if (!fallStand?.artistic || round.world.bodies.some(b => !b.asleep)) round.world.step(dt);
-    if (!fallStand?.artistic) snapLimbs();
+    // Уложенные анимацией сучья уже в покое. Обычные отпилы и пропилы по-прежнему
+    // чувствуют движение своих опор, в том числе пока их дерево ещё стоит.
+    if (!tree.artistic || tree.world.bodies.some(b => !b.asleep || !(b.fixedPose || b.fallBranch))) {
+      tree.world.step(dt);
+      snapLimbs();
+    }
   }
   round = here;
+  fallLeaves.tick(dt);
 }
 
 // Камера по ракурсу shot. Сменился ракурс, или пилу приставили, или отошли — камера не прыгает,
@@ -2329,13 +2353,13 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
       }
     },
   });
+  fallLeaves = makeFallLeaves(scene);
+  // Открытие звукового устройства может задержать первый хруст. Готовим его во время загрузки.
+  audio ??= new AudioContext();
+  const listen = () => { if (audio.state === 'suspended') audio.resume().catch(() => {}); };
+  addEventListener('pointerup', listen, { capture: true, once: true });
+  addEventListener('keydown', listen, { capture: true, once: true });
   if (study) {
-    // Некоторые браузеры открывают звуковое устройство сотни миллисекунд. На стенде
-    // готовим его во время загрузки, а после жеста пользователя разрешаем воспроизведение.
-    audio ??= new AudioContext();
-    const listen = () => { if (audio.state === 'suspended') audio.resume().catch(() => {}); };
-    addEventListener('pointerdown', listen, { capture: true, once: true });
-    addEventListener('keydown', listen, { capture: true, once: true });
     // Та же геометрия пропила и тот же вход в падение, что у пилы. Для повтора стенд
     // прорезает весь ряд на заданной высоте и задаёт направление одного толчка.
     study.fell = direction => {
