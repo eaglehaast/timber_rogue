@@ -181,19 +181,20 @@ export class Limb {
 
   // Луч из origin по единичному dir (в осях ветки) не дальше limit: в какую ось, где по её длине, на каком
   // расстоянии он упрётся первым и какой там радиус — { axis, s, t, r }.
-  hit(origin, dir, limit) {
+  hit(origin, dir, limit, standingStem = false) {
     let best = null;
     for (const c of this.shape) {
+      if (standingStem && c.axis.level === 0) continue;
       if (c.mid.distanceToSquared(origin) > (Math.min(limit, best?.t ?? limit) + c.reach) ** 2) continue;
       const t = ray(origin, dir, c.a, c.b, c.r);
-      if (t !== null && t <= limit && (!best || t < best.t)) best = { t, c };
+      if (t === null || t > (best?.t ?? limit)) continue;
+      const ab = c.b.clone().sub(c.a), len2 = ab.lengthSq();
+      const k = len2 > 0 ? THREE.MathUtils.clamp(origin.clone().addScaledVector(dir, t).sub(c.a).dot(ab) / len2, 0, 1) : 0;
+      const s = THREE.MathUtils.lerp(c.from, c.to, k);
+      const r = section(c.axis, s).r;
+      if (r >= THIN) best = { axis: c.axis, s, t, r };
     }
-    if (!best) return null;
-    const { c, t } = best;
-    const ab = c.b.clone().sub(c.a), len2 = ab.lengthSq();
-    const k = len2 > 0 ? THREE.MathUtils.clamp(origin.clone().addScaledVector(dir, t).sub(c.a).dot(ab) / len2, 0, 1) : 0;
-    const s = THREE.MathUtils.lerp(c.from, c.to, k);
-    return { axis: c.axis, s, t, r: section(c.axis, s).r };
+    return best;
   }
 
   // Перепилить ось axis на длине дуги s: всё, что за пропилом, — новая ветка (её и отдаём), здесь остаётся
@@ -325,6 +326,7 @@ export class Kerf {
     this.cell = (2 * this.r) / this.N;
     this.wood = new Uint8Array(this.N * this.N);
     this.cut = new Uint8Array(this.N * this.N);
+    this.closed = [];
     this.left = 0;
     for (let j = 0, id = 0; j < this.N; j++) {
       for (let i = 0; i < this.N; i++, id++) {
@@ -523,7 +525,23 @@ export class Kerf {
 
   // Недопил смяло: щель там, где он сжат, сомкнулась.
   close(ids) {
-    for (const id of ids) this.cut[id] = 2;
+    for (const id of ids) {
+      this.cut[id] = 2;
+      this.closed.push(id);
+    }
+  }
+
+  // Сжатая древесина с дальнего края пропила не давит на шину, пока шина до неё не дошла.
+  onBlade(ids, { origin, along, side }, length, width) {
+    // При встречном резе ветки можно дойти до старой щели и перерезать оставшиеся волокна.
+    if (this.stoppedFrom && this.stoppedFrom.dot(along) < 0) return false;
+    const [x, y] = this.flat(origin), [ax, ay] = this.flat(along, true), [sx, sy] = this.flat(side, true);
+    const margin = this.cell / 2;
+    return ids.some(id => {
+      const dx = this.x(id % this.N) - x, dy = this.x(Math.floor(id / this.N)) - y;
+      const depth = dx * ax + dy * ay;
+      return depth >= -width - margin && depth <= margin && Math.abs(dx * sx + dy * sy) <= length / 2 + margin;
+    });
   }
 
   // Щель на коре: по тем азимутам, где пропил дошёл до коры, — тёмная полоска по ширине цепи.

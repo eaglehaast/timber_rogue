@@ -7,8 +7,8 @@ import { growMaple } from './maple.js';
 import { Limb } from './limbs.js';
 import { tiles, soften } from './surface.js';
 import {
-  HOLD_DROP_LOW, PICK_RANGE, PAVING_POS, PAVING_HALF, PILE_POS, PILE_SIZE, FIRE_POS, FIRE_SIDE, MAX_LIFT_KG,
-  makeYardPaving, buildBackFence, buildWoodpileFrame, buildCampfire, scorchLimb, classifyLimbBody,
+  HOLD_DROP_LOW, PICK_RANGE, PAVING_POS, PAVING_HALF, PILE_POS, PILE_SIZE, FIRE_POS, FIRE_SIDE,
+  makeYardPaving, buildBackFence, buildWoodpileFrame, buildCampfire, scorchLimb, classifyLimbBody, dragBranch, haulSpeed,
 } from './campfire.js';
 import { isOnEmberBed } from './ember-bed.js';
 import { generator, seed, random } from './random.js';
@@ -139,7 +139,7 @@ function createLogItem(world, scene, { length, radius, twigs = 0, pos, yaw = 0 }
   return createLimbBody(world, scene, limb, pos, q);
 }
 
-// Выращивает настоящий игровой клён (growMaple) и отрезает от него крупные ветви с листвой (Limb) весом до 45 кг.
+// Выращивает игровой клён и отрезает от него ветви с листвой для стенда.
 function spawnRealMapleBranches(world, scene, treeSeed = 107) {
   seed(treeSeed);
   const ZONE_H = 3.2, TREE_H = 11.5;
@@ -151,7 +151,7 @@ function spawnRealMapleBranches(world, scene, treeSeed = 107) {
   const pickedLimbs = [];
   for (const l of c.lows) {
     const lowLimb = new Limb(l.parts, l.cards, { skin: limbSkin, cloud: l.cloud, zone: ZONE_H }).dress();
-    if (lowLimb.weight.mass >= 1.5 && lowLimb.weight.mass <= MAX_LIFT_KG && lowLimb.shape.length > 0) {
+    if (lowLimb.weight.mass >= 1.5 && lowLimb.shape.length > 0) {
       pickedLimbs.push(lowLimb);
     }
   }
@@ -161,7 +161,7 @@ function spawnRealMapleBranches(world, scene, treeSeed = 107) {
     if (!crown.parts.some((p) => p.axis === a && p.to - p.from > 0.4)) continue;
     const cutS = Math.min(a.len * 0.15, 0.25);
     const { mass } = crown.heft(a, cutS);
-    if (mass >= 3.5 && mass <= MAX_LIFT_KG) {
+    if (mass >= 3.5) {
       const piece = crown.split(a, cutS).dress();
       crown.dress();
       if (piece.shape.length > 0 && piece.weight.mass > 1.5) pickedLimbs.push(piece);
@@ -493,7 +493,7 @@ export async function startWoodStand() {
         el('log').textContent = activeNotice || held.wood.verdict;
       } else {
         crosshair.style.background = '#9be89b';
-        el('hint').textContent = `Несёшь: ${held.wood.title}`;
+        el('hint').textContent = `${held.wood.canDrag ? 'Тащишь по земле' : held.wood.canRoll ? 'Катишь' : 'Несёшь'} · ${held.wood.title}`;
         el('log').textContent = activeNotice || 'На плитняке дрова сортируются. Прямо на углях сгорит любое полено.';
       }
       return;
@@ -503,7 +503,7 @@ export async function startWoodStand() {
       crosshair.style.background = aimed.wood.tooHeavy ? '#ff6b6b' : '#ffd15c';
       el('hint').textContent = aimed.wood.tooHeavy
         ? `${aimed.wood.title} — Бревно тяжёлое, распили на части!`
-        : `${aimed.wood.title} — ЛКМ: взять`;
+        : `${aimed.wood.title} · ${aimed.wood.canDrag ? 'Тащить' : aimed.wood.canRoll ? 'Катить' : 'Взять'}`;
       el('log').textContent = activeNotice || aimed.wood.verdict;
     } else {
       crosshair.style.background = 'rgba(255, 255, 255, 0.85)';
@@ -584,7 +584,7 @@ export async function startWoodStand() {
     elapsed += dt;
 
     const input = walkInput(keys, stick), forward = forwardOf(player.yaw), right = new THREE.Vector3(-forward.z, 0, forward.x);
-    const speed = walkSpeed(player, keys);
+    const speed = walkSpeed(player, keys) * haulSpeed(held?.wood);
     player.pos.addScaledVector(forward, input.ahead * speed * dt).addScaledVector(right, input.side * speed * dt);
     player.pos.clampScalar(-35, 35);
 
@@ -604,7 +604,9 @@ export async function startWoodStand() {
 
     if (held) {
       const lerpFactor = 1 - Math.exp(-18 * dt);
-      if (held.wood.canRoll) {
+      if (held.wood.canDrag) {
+        dragBranch(held, world, player.pos, forward, dt);
+      } else if (held.wood.canRoll) {
         const r = Math.max(0.08, held.wood.radius || 0.14);
         holdTargetPos.copy(player.pos).addScaledVector(forward, 1.45);
         holdTargetPos.y = r;
