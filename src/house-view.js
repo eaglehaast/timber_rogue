@@ -72,12 +72,18 @@ function rebuild(seed) {
   // вдоль стены по Z (house.js: turn(s,x,h) = (x+wall.at, h, s)). Площадка без тамбура — глубиной 1.1 м,
   // лестница идёт от неё наружу проступями по 0.3 м (porch.js); нижняя ступень — qLow = L+(steps-1)*run.
   const doorOpening = plan.openings.find((o) => o.kind === 'door');
-  const steps = Math.max(2, Math.round((PLINTH + doorOpening.bottom) / 0.18));
-  const qLow = 1.1 + (steps - 1) * 0.3;
+  const [, L] = plan.tambour ? [2.4, 1.8] : [1.8, 1.1]; // LANDINGS из porch.js: глубина площадки от стены
+  const top = PLINTH + doorOpening.bottom;
+  const steps = Math.max(2, Math.round(top / 0.18));               // STAIR.rise и STAIR.run из porch.js
+  const qLow = L + (steps - 1) * 0.3;                              // вынос низа лестницы от лица стены
+  // Стена с дверью — боковая (left/right): её лицо по X (walls.right.at = +w/2), проём отсчитан вдоль
+  // стены по Z (house.js). Для смотрящего на дверь снаружи «вправо» — ось s = (0,0,-side); мировая точка
+  // двери = at.z - side*door.at, а side = door (wall 'right' → +1). Наружу от стены — тот же door.
   const porch = { x: at.x + door * (plan.w / 2 + R + qLow + 0.15), z: at.z - door * doorOpening.at };
   // Root хоздвора повёрнут на π (placeByGate), поэтому локальные оси площадки в мире перевёрнуты:
-  // мировая точка центра pad = origin − PAD_AT. Ближний к калитке край — со стороны улицы (+z).
-  const padNear = { x: woodOrigin.x - PAD_AT.x, z: woodOrigin.z - PAD_AT.z + DROP_PAD.z };
+  // мировая точка центра pad = origin − PAD_AT. Стык тропы — передний (ближний к забору у дороги, +z)
+  // край площадки по её середине: там кладка визуально кончается, и дальше — сортировка не идёт.
+  const padNear = { x: woodOrigin.x - PAD_AT.x, z: woodOrigin.z - (PAD_AT.z + DROP_PAD.z) };
   const paths = planPaths({ seed, from: { x: WICKET.at, z: fence - 0.5 }, porch, pad: padNear, gate: { x: GATES.at, z: fence } });
   const pier = planPier(river, seed);
   house.position.set(at.x, at.y, at.z);

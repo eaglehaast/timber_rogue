@@ -475,6 +475,9 @@ export function createWoodyard({ scene, origin = new THREE.Vector3(), yaw = 0, w
     pileDirection = side;
     paving.mesh.position.x = PAVING_POS.x * side;
     fire.x = FIRE_POS.x * side;
+    // Площадка сдачи стоит у лица поленницы (PILE_POS.z + глубины), а не в центре плитняка: зеркалим её
+    // вместе с костром и мощением — иначе тропинка из paths.js ведёт в траву мимо кладки.
+    pad.mesh.position.x = PILE_POS.x * side;
     root.updateMatrixWorld(true);
   }
 
