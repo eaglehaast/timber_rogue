@@ -26,6 +26,15 @@ export function makeGround(size, bounds = null) {
   const geometry = bounds
     ? groundPatch((x, z) => Math.abs(x) <= bounds.w / 2 && Math.abs(z) <= bounds.d / 2)
     : full;
+  if (bounds) {
+    const pos = geometry.attributes.position;
+    const uv = new Float32Array(pos.count * 2);
+    for (let i = 0; i < pos.count; i++) {
+      uv[i * 2] = 0.5 + pos.getX(i) / size;
+      uv[i * 2 + 1] = 0.5 - pos.getZ(i) / size;
+    }
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  }
   const ground = new THREE.Mesh(geometry, material);
   ground.receiveShadow = true;
   return ground;
