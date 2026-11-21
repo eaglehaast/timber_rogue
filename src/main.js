@@ -777,7 +777,7 @@ function carry(dt) {
 
     const moveVec = grasp.worldPos.clone().sub(grasp.prevWorldPos);
     const signedDist = moveVec.dot(forward);
-    grasp.rollAngle += signedDist / r;
+    grasp.rollAngle -= signedDist / r;
     grasp.prevWorldPos.copy(grasp.worldPos);
 
     // Ось бревна (cutDir) ставим поперёк хода (вдоль right) и крутим вокруг right на угол качения rollAngle

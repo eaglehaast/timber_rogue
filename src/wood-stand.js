@@ -615,7 +615,7 @@ export async function startWoodStand() {
         holdTargetPos.y = r;
         held.position.lerp(holdTargetPos, lerpFactor);
         const signedDist = held.position.clone().sub(prevHeldPos).dot(forward);
-        heldRollAngle += signedDist / r;
+        heldRollAngle -= signedDist / r;
         prevHeldPos.copy(held.position);
         const alignAcross = new THREE.Quaternion().setFromUnitVectors(held.wood.cutDir, right);
         const wheelSpin = new THREE.Quaternion().setFromAxisAngle(right, heldRollAngle);
