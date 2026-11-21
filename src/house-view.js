@@ -68,10 +68,16 @@ function rebuild(seed) {
   // Две тропинки от пешеходной калитки (paths.js). Концы привязаны к фактическим объектам этого варианта двора:
   // нижняя ступень крыльца — по плану дома (porch.js: лестница во всю ширину площадки без тамбура), край
   // площадки у поленницы — мировой ближний к калитке угол плотного плитняка (root хоздвора повёрнут на π).
+  // Стена с дверью — боковая (left/right): её лицо стоит по X (walls.right.at = +w/2), проём отсчитывается
+  // вдоль стены по Z (house.js: turn(s,x,h) = (x+wall.at, h, s)). Площадка без тамбура — глубиной 1.1 м,
+  // лестница идёт от неё наружу проступями по 0.3 м (porch.js); нижняя ступень — qLow = L+(steps-1)*run.
   const doorOpening = plan.openings.find((o) => o.kind === 'door');
-  const stair = Math.max(2, Math.round((PLINTH + doorOpening.bottom) / 0.18));
-  const porch = { x: at.x + door * (plan.d / 2 + R + 1.1 + 0.3 * stair), z: at.z - doorOpening.at };
-  const padNear = { x: woodOrigin.x - PAD_AT.x, z: woodOrigin.z + PAD_AT.z + DROP_PAD.z };
+  const steps = Math.max(2, Math.round((PLINTH + doorOpening.bottom) / 0.18));
+  const qLow = 1.1 + (steps - 1) * 0.3;
+  const porch = { x: at.x + door * (plan.w / 2 + R + qLow + 0.15), z: at.z - door * doorOpening.at };
+  // Root хоздвора повёрнут на π (placeByGate), поэтому локальные оси площадки в мире перевёрнуты:
+  // мировая точка центра pad = origin − PAD_AT. Ближний к калитке край — со стороны улицы (+z).
+  const padNear = { x: woodOrigin.x - PAD_AT.x, z: woodOrigin.z - PAD_AT.z + DROP_PAD.z };
   const paths = planPaths({ seed, from: { x: WICKET.at, z: fence - 0.5 }, porch, pad: padNear, gate: { x: GATES.at, z: fence } });
   const pier = planPier(river, seed);
   house.position.set(at.x, at.y, at.z);
@@ -95,9 +101,10 @@ function rebuild(seed) {
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
   game.regrow(generator(seed + 41));
   view.target.set(at.x, at.y + 2.5, at.z);
-  // Появление в «Игре» — у самих ворот, с внутренней стороны: спиной к улице, лицом во двор (yaw = π —
-  // forwardOf даёт +z), чтобы сразу пойти вперёд по двору: по одну руку дом с крыльцом, по другую костёр с поленницей.
-  spawnPoint = { x: GATES.at, z: fence - 0.7, yaw: Math.PI };
+  // Появление в «Игре» — у самих ворот, с внутренней стороны: спиной к улице, лицом во двор.
+  // forwardOf(yaw) = (-sin yaw, 0, -cos yaw): yaw = 0 смотрит на −z, т.е. от забора у дороги вглубь участка,
+  // чтобы сразу пойти вперёд: по одну руку дом с крыльцом, по другую костёр с поленницей.
+  spawnPoint = { x: GATES.at, z: fence - 0.7, yaw: 0 };
   if (game.active) game.enter(spawnPoint, spawnPoint.yaw, PHONE, false);
   label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов · палисадник ${front.toFixed(1)} м`;
 }
@@ -190,7 +197,7 @@ function toggleWalk() {
     camera.updateProjectionMatrix();
   } else {
     const point = [view.target, camera.position].find(({ x, z }) => game.canStand(x, z));
-    game.enter(point ?? spawn(), point ? view.yaw : (spawnPoint?.yaw ?? Math.PI), PHONE);
+    game.enter(point ?? spawn(), point ? view.yaw : (spawnPoint?.yaw ?? 0), PHONE);
   }
   walkButton.textContent = game.active ? 'Облёт' : 'Пешком';
   flight.classList.toggle('walking', game.active);
@@ -253,7 +260,7 @@ function frame(now) {
 }
 rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
 export async function startYard() {
-  if (mode === 'game') game.enter(spawn(), spawnPoint?.yaw ?? Math.PI, PHONE, false);
+  if (mode === 'game') game.enter(spawn(), spawnPoint?.yaw ?? 0, PHONE, false);
   document.querySelector('#help').hidden = !game.active;
   await renderer.compileAsync(scene, camera);
   frame(performance.now());

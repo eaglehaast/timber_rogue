@@ -7,8 +7,8 @@ import { growMaple } from './maple.js';
 import { Limb } from './limbs.js';
 import { tiles, soften } from './surface.js';
 import {
-  HOLD_DROP_LOW, PICK_RANGE, PAVING_POS, PAVING_HALF, PILE_POS, PILE_SIZE, FIRE_POS, FIRE_SIDE,
-  makeYardPaving, buildBackFence, buildWoodpileFrame, buildCampfire, scorchLimb, classifyLimbBody, dragBranch, haulSpeed,
+  HOLD_DROP_LOW, PICK_RANGE, PAVING_POS, PAVING_HALF, PILE_POS, PILE_SIZE, FIRE_POS, FIRE_SIDE, BODY_RADIUS,
+  makeYardPaving, buildBackFence, buildWoodpileFrame, buildCampfire, scorchLimb, classifyLimbBody, dragBranch, haulSpeed, blocksYard,
 } from './campfire.js';
 import { isOnEmberBed } from './ember-bed.js';
 import { generator, seed, random } from './random.js';
@@ -588,15 +588,18 @@ export async function startWoodStand() {
     player.pos.addScaledVector(forward, input.ahead * speed * dt).addScaledVector(right, input.side * speed * dt);
     player.pos.clampScalar(-35, 35);
 
-    // Заходить в костёр нельзя (физическая граница вокруг квадрата костра без штрафов)
-    const fireBlock = FIRE_SIDE * 0.46 + 0.35;
-    const fdx = player.pos.x - FIRE_POS.x, fdz = player.pos.z - FIRE_POS.z;
-    if (Math.abs(fdx) < fireBlock && Math.abs(fdz) < fireBlock) {
-      if (fireBlock - Math.abs(fdx) < fireBlock - Math.abs(fdz)) {
-        player.pos.x = FIRE_POS.x + (fdx >= 0 ? fireBlock : -fireBlock);
-      } else {
-        player.pos.z = FIRE_POS.z + (fdz >= 0 ? fireBlock : -fireBlock);
-      }
+    // Границы хоздвора — общая проверка с игрой (campfire.blocksYard): костёр и каждая секция поленницы
+    // останавливают спереди, сбоку и по диагонали; новая секция получает их сразу, как появилась.
+    const blocked = { x: player.pos.x, z: player.pos.z };
+    if (blocksYard(blocked, piles, FIRE_POS)) {
+      const push = (center, half) => {
+        const dx = player.pos.x - center.x, dz = player.pos.z - center.z;
+        if (!(Math.abs(dx) < half && Math.abs(dz) < half)) return;
+        if (half - Math.abs(dx) < half - Math.abs(dz)) player.pos.x = center.x + (dx >= 0 ? half : -half);
+        else player.pos.z = center.z + (dz >= 0 ? half : -half);
+      };
+      push(FIRE_POS, FIRE_SIDE * 0.46 + 0.35);
+      for (const pile of piles) push(pile.pos, Math.max(PILE_SIZE.w, PILE_SIZE.d) / 2 + BODY_RADIUS);
     }
 
     stepEyes(player, right, Math.hypot(input.side, input.ahead) * speed, dt);

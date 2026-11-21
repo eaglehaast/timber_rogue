@@ -14,7 +14,9 @@ const CELL = 0.05;                                       // м: клетка р�
 const EDGE_TILE = 16, SLAB_TILE = 1.6;                   // м: длина маски края; сторона плитки под камень
 const LIFT = 0.004;                                      // м над настилом тропы, чтобы камни не мерцали с ним
 
-const [edgeTex, slabTex] = tiles(['road-edge.png', 'yard/timber_yard_paving_01.jpg']);
+// Пути — полные: device.texture() сам подставляет half/ для игры; без префикса получался 404 и загрузка двора
+// обрывалась на «212/212» (текстура грузится асинхронно, ошибка не бросается в код — просто висело ожидание).
+const [edgeTex, slabTex] = tiles(['assets/textures/road-edge.png', 'assets/textures/yard/timber_yard_paving_01.jpg']);
 edgeTex.colorSpace = THREE.NoColorSpace;                 // маска — доли, а не цвет
 edgeTex.channel = 1;                                     // вторые координаты: вдоль ленты и поперёк неё
 edgeTex.wrapT = THREE.ClampToEdgeWrapping;               // внутри полотна — нижний ряд маски (земля), за ним — верхний (трава)
