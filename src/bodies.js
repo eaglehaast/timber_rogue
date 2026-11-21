@@ -79,7 +79,16 @@ export class Body {
     this.object.quaternion.copy(this.quaternion);
   }
 
+  // Тело, уже уложенное анимацией. Его рамка нужна первой же встречной ветке.
+  park() {
+    this.asleep = true;
+    this.velocity.set(0, 0, 0);
+    this.spin.set(0, 0, 0);
+    bound(this);
+  }
+
   wake() {
+    if (this.fixedPose) return;
     this.asleep = false;
     this.still = 0;
   }

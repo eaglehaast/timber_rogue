@@ -47,6 +47,27 @@
       <div id="flight" hidden><a href="./#stands">← Стенды</a><b id="seed"></b><span id="keys">Мышь — облететь · колесо — приблизить · WASD — сдвиг · Q/E — высота</span>
         <button id="walk" type="button" title="F" disabled>Пешком</button><button id="another" type="button">Новый двор</button>
       </div>
+      <section id="fall-stand" aria-label="Стенд падения клёна" hidden>
+        <header class="fall-title"><a href="./#stands">← Стенды</a><h1>Падение клёна</h1></header>
+        <details class="fall-report"><summary>Замеры</summary>
+          <table><caption>От начала падения до трёх секунд после удара</caption>
+            <thead><tr><th>Падение</th><th>Отрыв</th><th>Расчёт, пик</th><th>Кадр¹</th><th>Тел²</th></tr></thead>
+            <tbody><tr id="fall-art-result"><th>Новое</th><td colspan="4">Ещё нет замера</td></tr>
+              <tr id="fall-old-result"><th>Прежнее</th><td colspan="4">Ещё нет замера</td></tr></tbody>
+          </table><p>¹ Время, в которое уложились 95% кадров.<br>² Пик числа тел с расчётом столкновений.</p>
+        </details>
+        <div class="fall-dock">
+          <div class="fall-actions">
+            <label>Падение<select id="fall-mode"><option value="art">Художественное</option><option value="old">Прежнее</option></select></label>
+            <label>Направление<select id="fall-direction"><option value="1">Вправо</option><option value="-1">Влево</option></select></label>
+            <button id="fell-tree" type="button">Повалить</button>
+            <button id="fall-saw" type="button">Взять пилу</button>
+            <button id="fall-reset" type="button">Вернуть дерево</button>
+          </div>
+          <span id="fall-state" role="status">Дерево стоит</span>
+          <span class="fall-keys">Мышь — облететь · колесо — приблизить</span>
+        </div>
+      </section>
       <div id="loading" role="status"><span>Загрузка…</span><a href="./">В меню</a></div>
     </div></div>
     <p id="orientation" hidden>Для большего игрового поля поверни телефон.</p>

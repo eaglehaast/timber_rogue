@@ -269,7 +269,7 @@ export class TrunkVoxels {
   // кора, остальные открытые грани — свежий срез. floor — с какого слоя (от земли) начинается сетка:
   // у отвалившихся кусков она не с нуля, но сетка в плане у всех кусков одна.
   // skin — материалы коры и среза этого дерева (dressBark, dressWood): куски берут их от ствола.
-  constructor(shape, height, skin, floor = 0) {
+  constructor(shape, height, skin, floor = 0, filled = true) {
     this.shape = shape;
     this.skin = skin;
     this.radius = shape.radius;
@@ -293,10 +293,10 @@ export class TrunkVoxels {
     // У двойного дерева у каждого кубика — маска стволов, к которым он принадлежит (в сросшемся низу
     // обоим), а body — маска стволов, которые сейчас держит недопил: только они клонятся и падают.
     // У отвалившихся кусков стволов нет: они ничего не держат.
-    this.owner = shape.stems.length > 1 && !floor ? new Uint8Array(this.data.length) : null;
+    this.owner = filled && shape.stems.length > 1 && !floor ? new Uint8Array(this.data.length) : null;
     this.body = 0;
     this.carved = -1; // последний выпиленный кубик
-    for (let j = 0, id = 0; j < this.ny; j++) {
+    for (let j = 0, id = 0; filled && j < this.ny; j++) {
       const y = (floor + j + 0.5) * VOXEL;
       for (let k = 0, col = 0; k < this.m; k++) {
         for (let i = 0; i < this.n; i++, id++, col++) {
@@ -311,7 +311,7 @@ export class TrunkVoxels {
     // Сколько древесины в каждом слое и её центр — по маскам стволов: так вес того, что над пропилом,
     // считается без обхода всей сетки. Ведётся при каждом убранном и перенесённом кубике (tally).
     this.sums = new Float64Array(this.ny * 16);
-    for (let id = 0; id < this.data.length; id++) if (this.data[id]) this.tally(id, 1);
+    if (filled) for (let id = 0; id < this.data.length; id++) if (this.data[id]) this.tally(id, 1);
     // Волокна идут вдоль ствола, по колонкам кубиков. Для каждой колонки: сколько в ней выпилено,
     // нижний и верхний край выреза и наклон пропила, что её перерезал. version растёт с каждым кубиком.
     this.gap = new Uint16Array(this.n * this.m);
@@ -618,7 +618,7 @@ export class TrunkVoxels {
   // Отделяет верхушку, которая падает; здесь остаётся пень. Перерезанная колонка делится по выпилу:
   // что выше него — верх. Целые колонки недопила рвутся на высоте h, а отщепившиеся (tongue —
   // их номера) — выше на длину отщепа split: полоса остаётся на пне, в комле верха — жёлоб.
-  splitTop(h, tongue = new Set(), split = 0) {
+  splitTop(h, tongue = new Set(), split = 0, reuse = false) {
     const { n, m, data, gap, gapLow, gapHigh } = this;
     const layer = n * m;
     this.standing = false;
@@ -647,7 +647,11 @@ export class TrunkVoxels {
     // Кубики других стволов (их недопил не держит) остаются на пне целиком.
     const open = (j, col) => this.held(j * layer + col) && (rim[col] ? j >= this.cutLow && j <= last : between(j, col));
     const top = new Uint8Array(data.length);
-    for (let id = 0; id < data.length; id++) {
+    // Выше всех надломов результат уже известен по владельцу древесины.
+    const boundary = reuse ? Math.min(data.length, (last + 1) * layer) : data.length;
+    const whole = !this.owner || this.body === (1 << this.shape.stems.length) - 1;
+    if (!whole) for (let id = boundary; id < data.length; id++) if (this.held(id)) top[id] = data[id];
+    for (let id = 0; id < boundary; id++) {
       if (!data[id] || !this.held(id)) continue;
       const j = Math.floor(id / layer);
       const col = id - j * layer;
@@ -697,9 +701,9 @@ export class TrunkVoxels {
       // не держит, он отвалится (breakLoose).
       for (let col = 0; col < layer; col++) if (side[col] === 1 && open(j, col)) top[row + col] = 1;
     }
-    const ids = [];
-    for (let id = 0; id < data.length; id++) if (top[id]) ids.push(id);
-    return this.detach(ids);
+    const ids = [], bulk = whole ? boundary / layer : this.ny;
+    for (let id = 0; id < bulk * layer; id++) if (top[id]) ids.push(id);
+    return this.detach(ids, reuse, bulk);
   }
 
   // Трещина отщепа: вдоль кромки пропила, в перерезанных колонках рядом с отщепляющимися (tongue),
@@ -725,33 +729,95 @@ export class TrunkVoxels {
   }
 
   // Переносит перечисленные кубики в новую сетку высотой ровно в их слои — отдельное тело.
-  detach(ids) {
+  detach(ids, reuse = false, bulk = this.ny) {
     const layer = this.n * this.m;
-    let jLow = Infinity, jHigh = -1;
+    // Целые слои от bulk до макушки уходят вместе. В списке ids только сложная граница.
+    let jHigh = bulk < this.ny ? this.top.reduce((high, j) => Math.max(high, j), -1) : -1;
+    let jLow = jHigh >= bulk ? bulk : Infinity;
     for (const id of ids) {
       const j = Math.floor(id / layer);
       jLow = Math.min(jLow, j);
       jHigh = Math.max(jHigh, j);
     }
-    const part = new TrunkVoxels(this.shape, (jHigh - jLow + 1) * VOXEL, this.skin, this.floor + jLow);
+    // Совмещаем границы сеток. Неповреждённые куски коры можно передать вместе с уже
+    // загруженными вершинами, а в новом объёме сразу оставить место для настоящих кубиков.
+    if (reuse) jLow -= jLow % CHUNK;
+    const available = reuse && this.chunks.map(c => !c.dirty);
+    const part = new TrunkVoxels(this.shape, (jHigh - jLow + 1) * VOXEL, this.skin, this.floor + jLow, !reuse);
     part.freeEnds = true;
     part.data.fill(0);
     part.sums.fill(0);
     part.top.fill(-1);
     part.chunks.forEach((c) => { c.dirty = false; });
+    let previous = -1;
     for (const id of ids) {
       const j = Math.floor(id / layer);
       part.data[id - jLow * layer] = 1;
       part.tally(id - jLow * layer, 1);
       part.top[id % layer] = Math.max(part.top[id % layer], j - jLow);
-      part.touch(j - jLow);
+      if (j !== previous) {
+        part.touch(j - jLow);
+        this.touch(j);
+        previous = j;
+      }
       this.empty(id);
-      this.touch(j);
       this.removed.push(id);
     }
+    if (bulk <= jHigh) {
+      const start = bulk * layer, end = (jHigh + 1) * layer;
+      part.data.set(this.data.subarray(start, end), (bulk - jLow) * layer);
+      this.data.fill(0, start, end);
+      for (let col = 0; col < layer; col++) {
+        if (this.top[col] < bulk) continue;
+        part.top[col] = this.top[col] - jLow;
+        let j = bulk - 1;
+        while (j >= 0 && !this.data[j * layer + col]) j--;
+        this.top[col] = j;
+        // Из унесённых целыми слоёв только самый нижний мог поддерживать обломок на пне.
+        if (part.data[(bulk - jLow) * layer + col]) this.removed.push(start + col);
+      }
+      for (let j = bulk; j <= jHigh; j++) {
+        const dst = (j - jLow) * 16;
+        for (let k = 0; k < 16; k++) part.sums[dst + k % 4] += this.sums[16 * j + k];
+        part.touch(j - jLow);
+        this.touch(j);
+      }
+      this.sums.fill(0, bulk * 16, (jHigh + 1) * 16);
+    }
+    if (reuse) this.transferChunks(part, jLow / CHUNK, available);
     part.remesh();
     this.remesh();
     return part;
+  }
+
+  // Внутри полностью перенесённого участка все соседние грани те же. У пропила,
+  // на концах и на границе двух стволов геометрию строим по фактической древесине.
+  transferChunks(part, offset, available) {
+    const empty = part.chunks.map((_, i) => {
+      const j0 = (offset + i) * CHUNK;
+      for (let j = j0; j < Math.min(j0 + CHUNK, this.ny); j++) {
+        for (let v = 0; v < 4; v++) if (this.sums[16 * j + 4 * v]) return false;
+      }
+      return true;
+    });
+    for (let i = 0; i < part.chunks.length; i++) {
+      if (!empty[i]) continue;
+      const src = this.chunks[offset + i], dst = part.chunks[i];
+      if (available[offset + i] && empty[i - 1] && empty[i + 1] && (src.state === 'lifted' || src.state === 'parted')) {
+        const mesh = src.state === 'parted' ? src.top : src.mesh;
+        const blank = dst.mesh.geometry;
+        dst.mesh.geometry = mesh.geometry;
+        mesh.geometry = blank;
+        dst.mesh.position.y = mesh.position.y - offset * CHUNK * VOXEL;
+        dst.dirty = false;
+      }
+      for (const mesh of [src.mesh, src.top]) {
+        mesh.geometry.dispose();
+        mesh.geometry = new THREE.BufferGeometry();
+      }
+      src.dirty = false;
+      src.state = 'still';
+    }
   }
 
   // Объём древесины и её центр (в координатах ствола): от слоя from и выше, mask — только этих стволов.
@@ -864,6 +930,7 @@ export class TrunkVoxels {
       chunk.dirty = false;
       chunk.mesh.geometry.dispose();
       chunk.top.geometry.dispose();
+      chunk.mesh.position.y = chunk.top.position.y = 0;
       const [still, top] = this.buildChunk(c * CHUNK, Math.min((c + 1) * CHUNK, this.ny), two(state));
       chunk.mesh.geometry = still;
       chunk.top.geometry = top;

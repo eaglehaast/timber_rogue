@@ -17,12 +17,13 @@ import { dressBark, dressLimbs } from './bark.js';
 import { watch, note, beat, pauseWatch, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, gust } from './wind.js';
-import { createWoodyard, classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './campfire.js';
+import { classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './wood-handling.js';
 
 let woodyard = null;
 
 // Три клёна за домом. r — радиус ствола выше корневых наплывов.
 export const MAPLES = [{ r: 0.1, x: -15, z: -3 }, { r: 0.3, x: 0, z: -3 }, { r: 0.2, x: 15, z: -3 }];
+let plots = MAPLES, fallStand;
 const TREE_H = 12;
 const BODY_RADIUS = 0.35;
 const REACH = 1.0;        // докуда достаёт пила от лица до коры
@@ -183,7 +184,13 @@ function growTree(voxels) {
   const stems = crowns.map((c, i) => {
     const bend = new THREE.Group();
     bend.position.copy(shape.stems[i].center(ZONE_H)).setY(ZONE_H - 0.03);
-    const crown = grow(c, i);
+    const prepared = fallStand?.artistic ? fallStand.prepareCrown(c, { skin, cloud: c.cloud, zone: ZONE_H }) : null;
+    const crown = prepared ? Object.assign(prepared.limb, { stem: i }) : grow(c, i);
+    const breaks = prepared?.breaks ?? [];
+    for (const { limb } of breaks) {
+      limb.stem = i;
+      crown.group.add(limb.group);
+    }
     crown.group.position.copy(bend.position).negate();
     for (const { at, r } of c.knots) {
       const knot = new THREE.Object3D();
@@ -194,7 +201,7 @@ function growTree(voxels) {
     }
     bend.add(crown.group);
     bend.updateMatrixWorld(true);
-    const stem = { bend, crown, lows: c.lows.map((l) => ({ limb: grow(l, i), y: l.y })) };
+    const stem = { bend, crown, lows: [...c.lows.map((l) => ({ limb: grow(l, i), y: l.y })), ...breaks] };
     return Object.assign(stem, heft(stem));
   });
   return { skeleton, stems, skin };
@@ -235,7 +242,7 @@ function regrow(rnd = Math.random) {
   if (woodyard) {
     woodyard.reset();
   }
-  MAPLES.forEach((_, slot) => newRound(slot, (rnd() * 2 ** 32) >>> 0));
+  plots.forEach((_, slot) => newRound(slot, (rnd() * 2 ** 32) >>> 0));
   round = nearest();
   arm(0);
   clearTimeout(resultTimer);
@@ -246,7 +253,7 @@ function regrow(rnd = Math.random) {
 // Вырастить заново дерево на месте slot делянки. treeSeed — зерно, из которого оно растёт
 // (по нему его можно вырастить заново из отчёта).
 function newRound(slot, treeSeed) {
-  const { r, x, z } = MAPLES[slot];
+  const { r, x, z } = plots[slot];
 
   seed(treeSeed);
   const voxels = new TrunkVoxels(trunkShape(r, ZONE_H, random() * Math.PI * 2), ZONE_H, [dressBark(), dressWood()]);
@@ -258,7 +265,7 @@ function newRound(slot, treeSeed) {
   root.position.set(x, ground(x, z), z);
   voxels.standing = true;
   // Кроны сначала стоят на месте, а над пропилом их потом переносят с сохранением положения (attach).
-  root.add(voxels.group, ...tree.stems.flatMap((s) => [s.bend, ...s.lows.map((l) => l.limb.group)]));
+  root.add(voxels.group, ...tree.stems.flatMap((s) => [s.bend, ...s.lows.filter(l => !l.crownBranch).map(l => l.limb.group)]));
   scene.add(root);
   // Отпилы — твёрдые тела у этого дерева: лежат на земле, на пне, на ветках и друг на друге.
   const world = new World(root, ground, groundNormal);
@@ -303,7 +310,7 @@ function lift() {
   const y = round.voxels.middle * VOXEL;
   round.stems.forEach((s, i) => {
     if (!(round.standing & (1 << i))) return;
-    for (const l of s.lows) (round.body & (1 << i) && l.y > y ? round.upper : round.root).attach(l.limb.group);
+    for (const l of s.lows) if (!l.crownBranch) (round.body & (1 << i) && l.y > y ? round.upper : round.root).attach(l.limb.group);
   });
 }
 
@@ -1077,7 +1084,7 @@ function splitHinge(sec, tip, load) {
 // обрывок коры, — отваливается.
 function separate(h, tongue, split) {
   round.stems.forEach((_, i) => { if (round.body & (1 << i)) round.stumps[i] = round.voxels.cutLow * VOXEL; });
-  const log = round.voxels.splitTop(h, tongue, split);
+  const log = round.voxels.splitTop(h, tongue, split, fallStand?.artistic);
   round.upper.add(log.group);
   log.group.userData.log = log;
   log.set = round.world.fix(round.upper, { solids: [log] });
@@ -1126,6 +1133,7 @@ function startTwist(tw, c) {
 // slip — с какой скоростью верх ещё съезжает через кромку, если до этого скользил по косому резу.
 // speed — с какой скоростью дерево уже поворачивается, если недопил поддавался.
 function startFall(tip, c, slip = 0, speed = 0) {
+  const began = fallStand && performance.now();
   const { sec } = round;
   const h = pivotHeight(sec, tip.u, tip.p);
   // Падая, дерево тянет недопил, пока тот не порвётся, то есть до полной прочности.
@@ -1156,6 +1164,14 @@ function startFall(tip, c, slip = 0, speed = 0) {
     knots: [],
   };
   round.upper.traverse((o) => { if (o.name === 'trunk') round.fall.knots.push(o); });
+  if (fallStand?.artistic) {
+    round.fall.motion = fallStand.animateFall(round, round.fall, {
+      floor: ground, query: fallStand.query, effects: fallStand.effects,
+      hit(count) { fallStand.onImpact(count); crack(0.85); },
+      park(limb) { limbBody(limb, round.world.frame(limb.group, new THREE.Matrix4()), true).park(); },
+    });
+  }
+  fallStand?.onFall(tip.u, performance.now() - began);
   dropSaw();
   crack(1);
   say('go', hinge ? 'Хруст! Пропил за недопилом раскрылся — дерево пошло' : 'Дерево пошло!');
@@ -1420,7 +1436,7 @@ function sever(limb, axis, s, chair) {
 
 // Отпиленная ветка — твёрдое тело: вес и инерция — по её древесине и листьям, форма — её капсулы.
 // Падает оттуда, где была: frame — где ветка была в осях дерева.
-function limbBody(limb, frame) {
+function limbBody(limb, frame, simple = Boolean(fallStand?.artistic && round.done)) {
   const { mass, com, inertia } = limb.weight;
   const object = new THREE.Group();
   limb.group.position.copy(com).negate();
@@ -1429,7 +1445,7 @@ function limbBody(limb, frame) {
   round.root.add(object);
   const body = new Body(object, {
     mass, inertia, position: com.clone().applyMatrix4(frame), quaternion: new THREE.Quaternion().setFromRotationMatrix(frame),
-    capsules: limb.shape.map((c) => ({ a: c.a.clone().sub(com), b: c.b.clone().sub(com), r: c.r, soft: c.soft, src: { limb, capsule: c } })),
+    capsules: (simple ? fallStand.coarseCapsules(limb) : limb.shape).map((c) => ({ a: c.a.clone().sub(com), b: c.b.clone().sub(com), r: c.r, soft: c.soft, src: { limb, capsule: c } })),
   });
   body.limb = limb;
   round.world.add(body);
@@ -1438,7 +1454,7 @@ function limbBody(limb, frame) {
 
 // Дерево легло — дальше оно твёрдое тело, как отпил: ветки и комель упавшего верха (upper) ложатся на землю,
 // на пень и друг на друга, а на чём оно легло, то его и держит. Что не держит, ломается (snapLimbs).
-function lay() {
+function lay(simple) {
   const limbs = [], logs = [];
   round.upper.traverse((o) => {
     if (o.userData.limb) limbs.push(o.userData.limb);
@@ -1446,15 +1462,21 @@ function lay() {
   });
   for (const x of [...limbs, ...logs]) round.world.unfix(x.set);
   for (const log of logs) {
-    const { volume, center, inertia } = log.form();
-    log.heft = { mass: DENSITY * volume, com: center, inertia: inertia.multiplyScalar(DENSITY) };
+    if (simple) {
+      const { volume, center } = log.measure(), mass = DENSITY * volume;
+      const r2 = log.radius ** 2, side = mass * (3 * r2 + (log.ny * VOXEL) ** 2) / 12;
+      log.heft = { mass, com: center, inertia: new THREE.Matrix3().set(side, 0, 0, 0, mass * r2 / 2, 0, 0, 0, side) };
+    } else {
+      const { volume, center, inertia } = log.form();
+      log.heft = { mass: DENSITY * volume, com: center, inertia: inertia.multiplyScalar(DENSITY) };
+    }
   }
-  lyingBody(round.upper, limbs, logs);
+  lyingBody(round.upper, limbs, logs, simple);
 }
 
 // Лежащее дерево — одно тело: вес, инерция и форма — по тому, где сейчас его ветки и комель. Комель из кубиков —
 // капсулы по оси ствола радиусом в ствол, от торца (поджаты на радиус) до зоны, где начинаются капсулы ветки.
-function lyingBody(upper, limbs, logs) {
+function lyingBody(upper, limbs, logs, simple = false) {
   const at = (o) => round.world.frame(o, new THREE.Matrix4());
   const turned = (inertia, m) => {
     const r = new THREE.Matrix3().setFromMatrix4(m);
@@ -1470,7 +1492,7 @@ function lyingBody(upper, limbs, logs) {
     ...placed.map((l) => ({ mass: l.mass, com: l.com.clone().applyMatrix4(l.m), inertia: turned(l.inertia, l.m) })),
     ...logs.map(({ heft: h }) => ({ mass: h.mass, com: h.com.clone().applyMatrix4(m), inertia: turned(h.inertia, m) })),
   ]);
-  const capsules = placed.flatMap(({ limb, m: lm }) => limb.shape.map((c) => ({
+  const capsules = placed.flatMap(({ limb, m: lm }) => (simple ? fallStand.coarseCapsules(limb) : limb.shape).map((c) => ({
     a: c.a.clone().applyMatrix4(lm).sub(com), b: c.b.clone().applyMatrix4(lm).sub(com), r: c.r, soft: c.soft, src: { limb, capsule: c },
   })));
   for (const log of logs) {
@@ -1498,6 +1520,10 @@ function lyingBody(upper, limbs, logs) {
   object.attach(upper);
   const body = new Body(object, { mass, inertia, position: com, quaternion: new THREE.Quaternion(), capsules });
   Object.assign(body, { upper, limbs: placed.map((l) => l.limb), logs });
+  if (simple) {
+    body.fixedPose = true;
+    body.park();
+  }
   round.world.add(body);
   return body;
 }
@@ -1507,7 +1533,7 @@ function relay(old) {
   round.world.remove(old);
   round.root.attach(old.upper);
   old.object.removeFromParent();
-  const body = lyingBody(old.upper, old.limbs, old.logs);
+  const body = lyingBody(old.upper, old.limbs, old.logs, old.fixedPose);
   if (!body) return null;
   body.velocity.copy(old.velocity);
   body.spin.copy(old.spin);
@@ -1589,12 +1615,17 @@ function crush(limb) {
   limb.dress();
 }
 
-function land() {
+function land(simple = false) {
   round.done = true;
-  const lying = [];
-  round.upper.traverse((o) => { if (o.userData.limb) lying.push(o.userData.limb); });
-  lying.forEach(crush);
-  lay();
+  if (!simple) {
+    fallStand?.onImpact(null);
+    const lying = [];
+    round.upper.traverse((o) => { if (o.userData.limb) lying.push(o.userData.limb); });
+    lying.forEach(crush);
+  }
+  lay(simple);
+  round.fall.motion?.finish();
+  fallStand?.onLand();
   // Ствол лёг — его пропилы в пне разжались: брошенные в них пилы свободны.
   const freed = kit.filter((item) => item.tree === round && item.stuck && !item.kerf && fallen(round, stemOf(item.cut)));
   freed.forEach((item) => { item.stuck = false; });
@@ -1817,9 +1848,13 @@ function updateTrees(dt) {
     round.squeeze = false;
     if (!round.top) stand(dt);
     else if (round.slide) slideTop(dt);
-    if (round.fall && !round.done) fallTop(dt);
-    round.world.step(dt);
-    snapLimbs();
+    if (round.fall && !round.done) {
+      if (round.fall.motion) {
+        if (round.fall.motion.step(dt)) land(true);
+      } else fallTop(dt);
+    }
+    if (!fallStand?.artistic || round.world.bodies.some(b => !b.asleep)) round.world.step(dt);
+    if (!fallStand?.artistic) snapLimbs();
   }
   round = here;
 }
@@ -1985,7 +2020,7 @@ addEventListener('keydown', (e) => {
   if (!playing || e.code === 'KeyF') return;
   if (!e.repeat) note(e.code);
   keys.add(e.code);
-  if (e.code === 'KeyR' && !e.repeat) regrow();
+  if (e.code === 'KeyR' && !e.repeat && !fallStand) regrow();
   if (e.code === 'KeyP' && !e.repeat) {
     const reported = round;
     tell().then((ok) => {
@@ -2268,7 +2303,9 @@ function renderInset(renderer, now) {
 }
 
 // Стенд владеет сценой, камерой и кадром. Игра добавляет в его двор клёны, пилу, хоздвор (поленницу и костёр) и управление.
-export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNormal: normal, walkable: free }) {
+export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNormal: normal, walkable: free, createWoodyard, treePlots = MAPLES, study }) {
+  plots = treePlots;
+  fallStand = study;
   scene = yard;
   camera = eyes;
   ground = floor;
@@ -2276,7 +2313,7 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
   walkable = free;
   camera.rotation.order = 'YXZ';
   scene.add(aimPlane, sawModel, chips, arms.group);
-  woodyard = createWoodyard({
+  woodyard = createWoodyard?.({
     scene,
     withFence: false,
     onNotice: (msg) => {
@@ -2287,5 +2324,26 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
       }
     },
   });
-  return { get active() { return playing; }, placeWoodyard: woodyard.placeByGate, regrow, canStand, enter, leave, tick, renderInset, look, touchWalk };
+  if (study) {
+    // Некоторые браузеры открывают звуковое устройство сотни миллисекунд. На стенде
+    // готовим его во время загрузки, а после жеста пользователя разрешаем воспроизведение.
+    audio ??= new AudioContext();
+    const listen = () => { if (audio.state === 'suspended') audio.resume().catch(() => {}); };
+    addEventListener('pointerdown', listen, { capture: true, once: true });
+    addEventListener('keydown', listen, { capture: true, once: true });
+    // Та же геометрия пропила и тот же вход в падение, что у пилы. Для повтора стенд
+    // прорезает весь ряд на заданной высоте и задаёт направление одного толчка.
+    study.fell = direction => {
+      if (!round || round.top) return;
+      const y = 0.705, side = UP.clone().cross(direction);
+      round.voxels.carve({ origin: new THREE.Vector3(0, y, 0), along: direction, side, normal: UP }, -2, 2, 4);
+      round.voxels.remesh();
+      round.sec = section(round.voxels);
+      lift();
+      weigh();
+      startFall({ u: direction, p: round.voxels.radius * 0.8, hold: 0 }, round.com, 0, 0.48);
+    };
+    study.movingBodies = () => round.world.bodies.reduce((n, b) => n + Number(!b.asleep), 0);
+  }
+  return { get active() { return playing; }, placeWoodyard: woodyard?.placeByGate, regrow, canStand, enter, leave, tick, renderInset, look, touchWalk };
 }

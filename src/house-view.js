@@ -16,7 +16,7 @@ import { blow, stepWind } from './wind.js';
 import { EYE } from './player.js';
 import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
-import { PAVING_HALF, PAVING_POS } from './campfire.js';
+import { createWoodyard, PAVING_HALF, PAVING_POS } from './campfire.js';
 
 // Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
 const canvas = document.getElementById('scene');
@@ -101,7 +101,7 @@ function walkable(x, z) {
   if (Math.abs(x - pad.x) < pad.w / 2 + 0.35 && Math.abs(z - pad.z) < pad.d / 2 + 0.35) return false;
   return pier.deck(x, z) > -Infinity || (z >= river.shore(x) && height(x, z) >= river.level(x));
 }
-const game = attachGame({ scene, camera, ground, groundNormal, walkable });
+const game = attachGame({ scene, camera, ground, groundNormal, walkable, createWoodyard });
 const spawn = { x: MAPLES[1].x, z: MAPLES[1].z + 4 };
 
 // В облёте мышь и палец водят камеру. Пешком мышью управляет игра, палец поворачивает взгляд или пилу.
