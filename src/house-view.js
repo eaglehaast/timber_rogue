@@ -13,10 +13,11 @@ import { shapeGround, height, normal } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
-import { EYE } from './player.js';
+import { EYE, forwardOf } from './player.js';
 import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
-import { PAVING_HALF, PAVING_POS } from './campfire.js';
+import { PAVING_HALF, PAVING_POS, PILE_POS, PILE_SIZE, DROP_PAD } from './campfire.js';
+import { planPaths } from './paths.js';
 
 // Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
 const canvas = document.getElementById('scene');

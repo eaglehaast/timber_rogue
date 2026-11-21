@@ -20,6 +20,8 @@ import { wind, gust } from './wind.js';
 import { createWoodyard, classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './campfire.js';
 
 let woodyard = null;
+// Где игрок появляется при выборе «Игра» — задаёт house-view.js: у ворот, с внутренней стороны двора.
+let spawnPoint = null;
 
 // Три клёна за домом. r — радиус ствола выше корневых наплывов.
 export const MAPLES = [{ r: 0.1, x: -15, z: -3 }, { r: 0.3, x: 0, z: -3 }, { r: 0.2, x: 15, z: -3 }];
@@ -2287,5 +2289,8 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
       }
     },
   });
-  return { get active() { return playing; }, placeWoodyard: woodyard.placeByGate, regrow, canStand, enter, leave, tick, renderInset, look, touchWalk };
+  // Точка появления игрока при входе в «Игру»: у ворот, с внутренней стороны (house-view.js привязывает её
+  // к фактическим воротам забора). yaw = Math.PI — лицом во двор (спиной к улице), чтобы сразу идти вперёд.
+  const spawn = () => spawnPoint ?? { x: MAPLES[1].x, z: MAPLES[1].z + 4, yaw: 0 };
+  return { get active() { return playing; }, setSpawn: (p) => { spawnPoint = p; }, spawn, placeWoodyard: woodyard.placeByGate, regrow, canStand, enter, leave, tick, renderInset, look, touchWalk };
 }
