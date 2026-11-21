@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { planHouse, buildHouse } from './house.js';
+import { planHouse, buildHouse, R, PLINTH } from './house.js';
 import { generator } from './random.js';
 import { makeFence, YARD, GATES, WICKET } from './fence.js';
 import { planGas, buildGas } from './gas.js';
@@ -13,10 +13,11 @@ import { shapeGround, height, normal } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS } from './world.js';
 import { driftClouds } from './sky.js';
 import { blow, stepWind } from './wind.js';
-import { EYE } from './player.js';
+import { EYE, forwardOf } from './player.js';
 import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
-import { createWoodyard, PAVING_HALF, PAVING_POS } from './campfire.js';
+import { createWoodyard, PAVING_POS, PAVING_HALF, DROP_PAD, PAD_AT } from './campfire.js';
+import { planPaths } from './paths.js';
 
 // Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
 const canvas = document.getElementById('scene');
@@ -64,6 +65,26 @@ function rebuild(seed) {
   at.y = height(at.x, at.z);
   const woodOrigin = new THREE.Vector3(woodPad.x + PAVING_POS.x * door, height(woodPad.x, woodPad.z), woodPad.z + PAVING_POS.z);
   game.placeWoodyard(woodOrigin, door);
+  // Две тропинки от пешеходной калитки (paths.js). Концы привязаны к фактическим объектам этого варианта двора:
+  // нижняя ступень крыльца — по плану дома (porch.js: лестница во всю ширину площадки без тамбура), край
+  // площадки у поленницы — мировой ближний к калитке угол плотного плитняка (root хоздвора повёрнут на π).
+  // Стена с дверью — боковая (left/right): её лицо стоит по X (walls.right.at = +w/2), проём отсчитывается
+  // вдоль стены по Z (house.js: turn(s,x,h) = (x+wall.at, h, s)). Площадка без тамбура — глубиной 1.1 м,
+  // лестница идёт от неё наружу проступями по 0.3 м (porch.js); нижняя ступень — qLow = L+(steps-1)*run.
+  const doorOpening = plan.openings.find((o) => o.kind === 'door');
+  const [, L] = plan.tambour ? [2.4, 1.8] : [1.8, 1.1]; // LANDINGS из porch.js: глубина площадки от стены
+  const top = PLINTH + doorOpening.bottom;
+  const steps = Math.max(2, Math.round(top / 0.18));               // STAIR.rise и STAIR.run из porch.js
+  const qLow = L + (steps - 1) * 0.3;                              // вынос низа лестницы от лица стены
+  // Стена с дверью — боковая (left/right): её лицо по X (walls.right.at = +w/2), проём отсчитан вдоль
+  // стены по Z (house.js). Для смотрящего на дверь снаружи «вправо» — ось s = (0,0,-side); мировая точка
+  // двери = at.z - side*door.at, а side = door (wall 'right' → +1). Наружу от стены — тот же door.
+  const porch = { x: at.x + door * (plan.w / 2 + R + qLow + 0.15), z: at.z - door * doorOpening.at };
+  // Root хоздвора повёрнут на π (placeByGate), поэтому локальные оси площадки в мире перевёрнуты:
+  // ближний к калитке край площадки сдачи в мире = origin − (PAD_AT − DROP_PAD).
+  // Именно сюда должна сходиться тропа, а не в центр зоны или в дальний край кладки.
+  const padNear = { x: woodOrigin.x - PAD_AT.x, z: woodOrigin.z - (PAD_AT.z - DROP_PAD.z) };
+  const paths = planPaths({ seed, from: { x: WICKET.at, z: fence - 0.5 }, porch, pad: padNear, gate: { x: GATES.at, z: fence } });
   const pier = planPier(river, seed);
   house.position.set(at.x, at.y, at.z);
   // Трава: во дворе густая, за забором — луг пореже, в лесополосе — сплошная и сочная, к краю квадрата MEADOW
@@ -74,19 +95,23 @@ function rebuild(seed) {
     : THREE.MathUtils.lerp(OUTSIDE, 1, land.lush(x, z)) * (1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(x), Math.abs(z)), MEADOW / 2 - 3, MEADOW / 2)));
   const grass = (x, z) => {
     if (inside(x, z, pad, pad.w, pad.d) || inside(x, z, woodPad, woodPad.w, woodPad.d) || pier.deck(x, z) > -Infinity || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
-    return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * (1 - field.cover(x, z));
+    return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * paths.grass(x, z) * (1 - field.cover(x, z));
   };
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field));
-  layout = { at, gas, power, road, pier, pad, river };
+  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), buildField(field), paths.build());
+  layout = { at, gas, power, road, pier, pad, river, paths };
   scene.add(house, yard);
   animated.length = 0;
   for (const group of [house, yard]) group.traverse(part => { if (part.tick) animated.push(part); });
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
   game.regrow(generator(seed + 41));
   view.target.set(at.x, at.y + 2.5, at.z);
-  if (game.active) game.enter(spawn, 0, PHONE, false);
+  // Появление в «Игре» — у самих ворот, с внутренней стороны: спиной к улице, лицом во двор.
+  // forwardOf(yaw) = (-sin yaw, 0, -cos yaw): yaw = 0 смотрит на −z, т.е. от забора у дороги вглубь участка,
+  // чтобы сразу пойти вперёд: по одну руку дом с крыльцом, по другую костёр с поленницей.
+  spawnPoint = { x: GATES.at, z: fence - 0.7, yaw: 0 };
+  if (game.active) game.enter(spawnPoint, spawnPoint.yaw, PHONE, false);
   label.textContent = `дом ${seed} · ${plan.w} × ${plan.d} м · ${plan.courses} венцов · палисадник ${front.toFixed(1)} м`;
 }
 
@@ -102,7 +127,9 @@ function walkable(x, z) {
   return pier.deck(x, z) > -Infinity || (z >= river.shore(x) && height(x, z) >= river.level(x));
 }
 const game = attachGame({ scene, camera, ground, groundNormal, walkable, createWoodyard });
-const spawn = { x: MAPLES[1].x, z: MAPLES[1].z + 4 };
+// Точка появления — у фактических ворот забора; её задаёт rebuild() после каждого нового участка.
+let spawnPoint = null;
+const spawn = () => spawnPoint ?? { x: GATES.at, z: YARD.d / 2 - 0.7 };
 
 // В облёте мышь и палец водят камеру. Пешком мышью управляет игра, палец поворачивает взгляд или пилу.
 const pointers = new Map();
@@ -176,7 +203,7 @@ function toggleWalk() {
     camera.updateProjectionMatrix();
   } else {
     const point = [view.target, camera.position].find(({ x, z }) => game.canStand(x, z));
-    game.enter(point ?? spawn, point ? view.yaw : 0, PHONE);
+    game.enter(point ?? spawn(), point ? view.yaw : (spawnPoint?.yaw ?? 0), PHONE);
   }
   walkButton.textContent = game.active ? 'Облёт' : 'Пешком';
   flight.classList.toggle('walking', game.active);
@@ -239,7 +266,7 @@ function frame(now) {
 }
 rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
 export async function startYard() {
-  if (mode === 'game') game.enter(spawn, 0, PHONE, false);
+  if (mode === 'game') game.enter(spawn(), spawnPoint?.yaw ?? 0, PHONE, false);
   document.querySelector('#help').hidden = !game.active;
   await renderer.compileAsync(scene, camera);
   frame(performance.now());

@@ -20,6 +20,8 @@ import { wind, gust } from './wind.js';
 import { classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './wood-handling.js';
 
 let woodyard = null;
+// Где игрок появляется при выборе «Игра» — задаёт house-view.js: у ворот, с внутренней стороны двора.
+let spawnPoint = null;
 
 // Три клёна за домом. r — радиус ствола выше корневых наплывов.
 export const MAPLES = [{ r: 0.1, x: -15, z: -3 }, { r: 0.3, x: 0, z: -3 }, { r: 0.2, x: 15, z: -3 }];
@@ -746,7 +748,7 @@ function letGo(why) {
   const { tree, body } = grasp;
   const worldPos = body.position.clone().add(tree.root.position);
   grasp = null;
-  if (woodyard) woodyard.paving.mat.color.setHex(0xffffff);
+  if (woodyard) woodyard.pad.mat.color.setHex(0xffffff);
   const zone = !why && woodyard ? woodyard.dropZoneAt(worldPos) : null;
   if (zone) {
     woodyard.acceptDroppedBody(body, zone);
@@ -782,7 +784,7 @@ function carry(dt) {
 
     const moveVec = grasp.worldPos.clone().sub(grasp.prevWorldPos);
     const signedDist = moveVec.dot(forward);
-    grasp.rollAngle += signedDist / r;
+    grasp.rollAngle -= signedDist / r;
     grasp.prevWorldPos.copy(grasp.worldPos);
 
     // Ось бревна (cutDir) ставим поперёк хода (вдоль right) и крутим вокруг right на угол качения rollAngle
@@ -1696,6 +1698,9 @@ function movePlayer(dx, dz) {
   if (canStand(x + dx, z + dz)) player.pos.set(x + dx, 0, z + dz);
   else if (dx && canStand(x + dx, z)) player.pos.x += dx;
   else if (dz && canStand(x, z + dz)) player.pos.z += dz;
+  // Поленница и костёр — твёрдые границы: если шаг всё же ввёл тело в рамку, общая проверка хоздвора
+  // выталкивает наружу кратчайшей стороной (campfire.js: clampPlayer, она же blocksYard в canStand).
+  if (woodyard) woodyard.clampPlayer(player.pos);
   player.pos.y = ground(player.pos.x, player.pos.z);
 }
 
@@ -1824,9 +1829,9 @@ function update(dt) {
   if (woodyard) {
     if (grasp) {
       const zone = woodyard.dropZoneAt(grasp.worldPos);
-      woodyard.paving.mat.color.setHex(zone === 'paving' ? 0xc2d8b8 : 0xe8e2d4);
+      woodyard.pad.mat.color.setHex(zone === 'paving' ? 0xc2d8b8 : 0xe8e2d4);
     } else {
-      woodyard.paving.mat.color.setHex(0xffffff);
+      woodyard.pad.mat.color.setHex(0xffffff);
     }
   }
 }
@@ -2345,5 +2350,8 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
     };
     study.movingBodies = () => round.world.bodies.reduce((n, b) => n + Number(!b.asleep), 0);
   }
-  return { get active() { return playing; }, placeWoodyard: woodyard?.placeByGate, regrow, canStand, enter, leave, tick, renderInset, look, touchWalk };
+  // Точка появления игрока при входе в «Игру»: у ворот, с внутренней стороны (house-view.js привязывает её
+  // к фактическим воротам забора). yaw = Math.PI — лицом во двор (спиной к улице), чтобы сразу идти вперёд.
+  const spawn = () => spawnPoint ?? { x: MAPLES[1].x, z: MAPLES[1].z + 4, yaw: 0 };
+  return { get active() { return playing; }, setSpawn: (p) => { spawnPoint = p; }, spawn, placeWoodyard: woodyard?.placeByGate, regrow, canStand, enter, leave, tick, renderInset, look, touchWalk };
 }
