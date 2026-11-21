@@ -10,7 +10,7 @@ import { dressBark } from './bark.js';
 import { watch, note, beat } from './watch.js';
 import {
   buildCampfire, buildWoodpileFrame, buildDropZone, placeProcessingSite, isInDropZone,
-  classifyPiece, addLogToPile, burnLogInFire,
+  classifyPiece, addLogToPile, burnLogInFire, DROP_HALF,
 } from './campfire.js';
 
 const TRUNK_R = 0.3;      // радиус ствола выше корневых наплывов
@@ -200,9 +200,11 @@ scene.add(site.root);
 function buildSite(yard = []) {
   const place = placeProcessingSite(yard, round ? round.voxels.shape.reach : 2);
   if (!place) return;
+  // Костёр и поленница стоят ровно (осью к стволу), а зона приёмки — под тем же углом, что и каркас,
+  // иначе её прямоугольник задевает кострище, и кусок уходит в переработку, ещё не долетев до площадки.
   site.fire = buildCampfire(place.firePos);
   site.pile = { group: buildWoodpileFrame(place.pilePos), row: 0, col: 0 };
-  site.zone = buildDropZone(place.pos);
+  site.zone = buildDropZone(place.pos, DROP_HALF, -place.yaw); // поворот плоскости вокруг Z — это азимут -yaw
   site.root.clear();
   site.root.add(site.fire.group, site.pile.group, site.zone.mesh);
 }
@@ -230,8 +232,12 @@ function pickPiece() {
 // Сбросить кусок: в зоне приёмки он уходит в переработку, мимо — снова под ноги.
 function dropCarried() {
   if (!carried) return;
-  const at = player.pos;
-  if (site.zone && isInDropZone(at, site.zone)) {
+  // В зону приёмки смотрим по взгляду игрока: край площадки бывает прямо под ногами,
+  // и без этого кусок уходил в переработку, ещё не долетев до площадки.
+  const eye = player.pos.clone().setY(player.eye);
+  const dir = forwardOf(player.yaw);
+  const overZone = site.zone && isInDropZone(eye.clone().addScaledVector(dir, 0.5), site.zone);
+  if (overZone) {
     if (carried.piece.fitsPile && addLogToPile(site.pile, carried.piece)) {
       say('pile', `${carried.piece.title} — в поленницу (${site.pile.row + 1}-й ряд)`);
     } else {
@@ -240,8 +246,22 @@ function dropCarried() {
     }
     scene.remove(carried.body);
   } else {
-    carried.body.position.set(at.x, 0.08, at.z);
-    round.debris.push({ body: carried.body, velocity: new THREE.Vector3(), spin: new THREE.Vector3(), rest: 0.08, landed: true });
+    // Кладём перед собой плашмя: точка крепления смещена из центра куска (см. dropPiece),
+    // поэтому цель считаем по центру габарита, а не по position.
+    const box = new THREE.Box3().setFromObject(carried.body);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const offset = center.sub(carried.body.position); // смещение центра куска из точки крепления
+    carried.body.position.add(dir.multiplyScalar(0.7).setY(0)).sub(offset);
+    carried.body.quaternion.setFromAxisAngle(UP, azimuthOf(dir));
+    carried.body.updateMatrixWorld(true);
+    round.debris.push({
+      body: carried.body,
+      velocity: new THREE.Vector3(),
+      spin: new THREE.Vector3(),
+      rest: Math.min(size.y / 2, 0.08),
+      landed: true,
+    });
   }
   carried = null;
   mode = 'free';
@@ -820,6 +840,31 @@ function dropPiece(part) {
     rest: part.center.y - part.low,
     landed: false,
   });
+}
+
+// Дерево легло: верх сходит с пня и распадается на pieces — чурбаки длиной ~1.5 м вдоль оси ствола.
+// Без этого после падения поднимать нечего: весь упавший ствол жил в round.upper и в debris не попадал.
+// Кусок кладём там, где он реально лежит (мировая позиция из round.upper), а не у начала оси X,
+// иначе все чурбаки сваливались бы в одну кучу и перекрывали друг друга.
+function scatterTop() {
+  const top = round.voxels.splitTop(round.fall ? round.fall.h : ZONE_H, round.tongue, round.split);
+  // splitTop возвращает TrunkVoxels с группой кубиков в координатах ствола; разрезаем её по слоям j.
+  const layerSize = Math.ceil(1.5 / VOXEL);
+  const ny = Math.max(1, Math.floor(top.ny / layerSize));
+  for (let s = 0; s < ny; s++) {
+    const ids = [];
+    const jLow = s * layerSize, jHigh = Math.min((s + 1) * layerSize, top.ny);
+    for (let id = 0; id < top.data.length; id++) {
+      if (!top.data[id]) continue;
+      const j = Math.floor(id / (top.n * top.n));
+      if (j >= jLow && j < jHigh) ids.push(id);
+    }
+    if (!ids.length) continue;
+    const piece = top.detach(ids);
+    // Кусок лежит горизонтально: ставим его "на бок" — длинная ось (local Y) вдоль world X.
+    piece.group.rotation.z = Math.PI / 2;
+    dropPiece(piece);
+  }
 }
 
 function fallPiece(piece, dt) {
