@@ -81,9 +81,9 @@ function rebuild(seed) {
   // двери = at.z - side*door.at, а side = door (wall 'right' → +1). Наружу от стены — тот же door.
   const porch = { x: at.x + door * (plan.w / 2 + R + qLow + 0.15), z: at.z - door * doorOpening.at };
   // Root хоздвора повёрнут на π (placeByGate), поэтому локальные оси площадки в мире перевёрнуты:
-  // мировая точка центра pad = origin − PAD_AT. Стык тропы — передний (ближний к забору у дороги, +z)
-  // край площадки по её середине: там кладка визуально кончается, и дальше — сортировка не идёт.
-  const padNear = { x: woodOrigin.x - PAD_AT.x, z: woodOrigin.z - (PAD_AT.z + DROP_PAD.z) };
+  // ближний к калитке край площадки сдачи в мире = origin − (PAD_AT − DROP_PAD).
+  // Именно сюда должна сходиться тропа, а не в центр зоны или в дальний край кладки.
+  const padNear = { x: woodOrigin.x - PAD_AT.x, z: woodOrigin.z - (PAD_AT.z - DROP_PAD.z) };
   const paths = planPaths({ seed, from: { x: WICKET.at, z: fence - 0.5 }, porch, pad: padNear, gate: { x: GATES.at, z: fence } });
   const pier = planPier(river, seed);
   house.position.set(at.x, at.y, at.z);
