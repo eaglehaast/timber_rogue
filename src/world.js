@@ -74,8 +74,8 @@ const yarrow = (x, z) => THREE.MathUtils.smoothstep(noise(x / 12 + 190, z / 12),
 // Число пучков — на 1000 м² там, где трава густая; высокие сорняки (tall) там, где топчут, не растут.
 // lush — как сочная трава меняет густоту: злаков вдвое больше, сорняки и большинство цветов она глушит,
 // одуванчик растёт и в ней.
-const PLANTS = [[grassTufts, 22000, () => 0.5, false, 1], [mugwortTufts, 1700, colonies(40), true, -1], [nettleTufts, 1700, colonies(90), true, -1],
-  [tansyTufts, 1100, colonies(140), true, -1], [dandelionTufts, 1700, lawn, false, 0], [cloverTufts, 5500, clover, false, -0.6], [yarrowTufts, 1200, yarrow, false, -0.6]];
+const PLANTS = [[grassTufts, 16000, () => 0.5, false, 1], [mugwortTufts, 1200, colonies(40), true, -1], [nettleTufts, 1200, colonies(90), true, -1],
+  [tansyTufts, 800, colonies(140), true, -1], [dandelionTufts, 1200, lawn, false, 0], [cloverTufts, 4000, clover, false, -0.6], [yarrowTufts, 800, yarrow, false, -0.6]];
 
 // Земля со стороной ground метров и трава на квадрате со стороной size. grass(x, z) — сколько здесь травы, 0..1:
 // у ствола, под домом, на дороге её нет. trodden(x, z) — насколько здесь топчут, 0..1: там трава низкая;

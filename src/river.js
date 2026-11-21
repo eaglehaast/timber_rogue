@@ -40,7 +40,7 @@ const STONES = await (await fetch('assets/textures/river-stones.json')).json();
 const STONE = { flat: 5, size: [[0.12, 0.25], [0.08, 0.12]], tall: [0.3, 0.55], sink: 0.25, ring: 10, rows: 4, reach: 55, step: 0.15 };
 const stoneMaterial = new THREE.MeshLambertMaterial({ map: tiles(['assets/textures/river-stones.webp'])[0], alphaTest: 0.5 });
 // Осока по урезу (tools/tufts.py): куртинами, от воды на ладонь глубиной до пары десятков сантиметров над ней.
-const SEDGE = await atlas('river-sedge-tufts'), SEDGE_PER = 20000;   // попыток на 1000 м² квадрата травы
+const SEDGE = await atlas('river-sedge-tufts'), SEDGE_PER = 12000;   // попыток на 1000 м² квадрата травы
 const WATER = flowingWater();
 
 // back — z задней границы двора: от неё луг спускается к реке.

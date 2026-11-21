@@ -65,7 +65,7 @@ material.customProgramCacheKey = () => `${key} wind`;
 // (NEAR / r)², у кромки — медленнее (FRONT): её видно вдоль, издали пучки сливаются.
 // Между бровкой и кромкой массы пшеница обтрёпана: у кромки сплошная, к бровке редеет куртинами в пару метров.
 const WHEAT = { ...(await atlas('wheat-tufts', { dusk: DUSK })), heights: Array(8).fill(HEIGHT) };
-const BAND = 2.5, EAR = 0.45, PER = { band: 16000, ears: 5000 }, NEAR = 55, FRONT = 80;
+const BAND = 2.5, EAR = 0.45, PER = { band: 12000, ears: 3500 }, NEAR = 55, FRONT = 80;
 
 // river — русло (river.js): кромка поля идёт вдоль бровки дальнего берега.
 export function planField(seed, river) {
