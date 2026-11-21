@@ -10,6 +10,37 @@ export const HOLD_DROP_LOW = -0.32, PICK_RANGE = 3.6;
 export const PAVING_POS = new THREE.Vector3(-1.6, 0, -2.1), PAVING_HALF = { x: 6.6, z: 2.15 };
 export const PILE_POS = new THREE.Vector3(0, 0, -3.2), PILE_SIZE = { w: 2.4, d: 1.15, h: 1.85 };
 export const FIRE_POS = new THREE.Vector3(3.2, 0, -2.3), FIRE_SIDE = 2.7;
+// Тело игрока (для общих границ препятствий) и площадка приёмки дров у поленницы — половина её размеров
+// вдоль и поперёк. Дрова сортируются, когда их отпустили на плотно вымощенном месте для сдачи, а не где
+// попало на всём плитняке: границу игрок читает глазами по самой кладке (тротуарный камень там мельче).
+export const BODY_RADIUS = 0.35;
+export const DROP_PAD = { x: 2.1, z: 1.0 };
+// Площадка у поленницы — из той же картинки плитняка, но в два раза мельче: с высоты глаз её край
+// читается по самой кладке — здесь место для сдачи дров, дальше — просто дорожка.
+export function makeDropPad() {
+  const map = pavingTex.clone();
+  map.repeat.set(DROP_PAD.x * 2 / 1.0, DROP_PAD.z * 2 / 1.0);
+  const mat = soften(new THREE.MeshLambertMaterial({ map, color: 0xffffff }), {
+    contrast: 0.88, saturation: 0.75, scales: [0.15, 0.5], low: [0.9, 0.88, 0.84], high: [1.05, 1.04, 1.0], cells: [1, 1],
+  });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(DROP_PAD.x * 2, DROP_PAD.z * 2), mat);
+  mesh.rotation.x = -Math.PI / 2;
+  // Ближе к забору — калитка и подход; полено лежит у лица рамки со стороны двора.
+  mesh.position.set(PILE_POS.x, 0.012, PILE_POS.z + PILE_SIZE.d / 2 + DROP_PAD.z + 0.15);
+  mesh.receiveShadow = true;
+  return { mesh, mat };
+}
+
+// Общая проверка границ хоздвора для игры и стенда: локальная точка root (без учёта его поворота) и список
+// секций поленницы. Костёр и каждая рамка (пустая и заполненная — границы берёт pos рамки, поэтому новая
+// секция получает их сразу, как появилась) останавливают спереди, сбоку и по диагонали; скольжение вдоль
+// края даёт обход препятствия. radius — полуширина тела игрока.
+export function blocksYard(local, piles, fire, radius = BODY_RADIUS) {
+  const fireBlock = FIRE_SIDE * 0.46 + 0.35;
+  if (Math.abs(local.x - fire.x) < fireBlock && Math.abs(local.z - fire.z) < fireBlock) return true;
+  return piles.some((pile) => Math.abs(local.x - pile.pos.x) < PILE_SIZE.w / 2 + radius
+    && Math.abs(local.z - pile.pos.z) < PILE_SIZE.d / 2 + radius);
+}
 
 const [ash, flames, paint, heat, ashCrust, pavingTex, fenceBoardMap] = tiles([
   'assets/textures/yard/campfire-ground-ash.webp',
@@ -424,6 +455,9 @@ export function createWoodyard({ scene, origin = new THREE.Vector3(), yaw = 0, w
 
   const paving = makeYardPaving();
   root.add(paving.mesh);
+  // Площадка для сдачи дров у лица поленницы: её край читается по кладке, на ней сортируются отпущенные поленья.
+  const pad = makeDropPad();
+  root.add(pad.mesh);
   if (withFence) root.add(buildBackFence());
 
   const campfire = buildCampfire(FIRE_POS, FIRE_SIDE, generator(394));
@@ -491,30 +525,30 @@ export function createWoodyard({ scene, origin = new THREE.Vector3(), yaw = 0, w
     root.updateMatrixWorld();
     const local = root.worldToLocal(worldPos.clone());
     if (isOnEmberBed(local.x - fire.x, local.z - fire.z)) return 'embers';
-    if (Math.abs(local.x - paving.mesh.position.x) <= PAVING_HALF.x && Math.abs(local.z - paving.mesh.position.z) <= PAVING_HALF.z) return 'paving';
+    // Сортировка — только на площадке у поленницы: её край виден по кладке. На дорожке рядом со стыком
+    // полено падает на землю и ждёт, пока его снова поднимут.
+    if (Math.abs(local.x - pad.mesh.position.x) <= DROP_PAD.x && Math.abs(local.z - pad.mesh.position.z) <= DROP_PAD.z) return 'paving';
     return null;
   }
 
   function canWalk(wx, wz) {
     root.updateMatrixWorld();
     const local = root.worldToLocal(new THREE.Vector3(wx, root.position.y, wz));
-    const fireBlock = FIRE_SIDE * 0.46 + 0.35;
-    return !(Math.abs(local.x - fire.x) < fireBlock && Math.abs(local.z - fire.z) < fireBlock);
+    return !blocksYard(local, piles, fire);
   }
 
   function clampPlayer(pos) {
     root.updateMatrixWorld();
     const local = root.worldToLocal(pos.clone());
-    const fireBlock = FIRE_SIDE * 0.46 + 0.35;
-    const fdx = local.x - fire.x, fdz = local.z - fire.z;
-    if (Math.abs(fdx) < fireBlock && Math.abs(fdz) < fireBlock) {
-      if (fireBlock - Math.abs(fdx) < fireBlock - Math.abs(fdz)) {
-        local.x = fire.x + (fdx >= 0 ? fireBlock : -fireBlock);
-      } else {
-        local.z = fire.z + (fdz >= 0 ? fireBlock : -fireBlock);
-      }
-      pos.copy(root.localToWorld(local));
-    }
+    const push = (center, block) => {
+      const dx = local.x - center.x, dz = local.z - center.z;
+      if (!(Math.abs(dx) < block && Math.abs(dz) < block)) return;
+      if (block - Math.abs(dx) < block - Math.abs(dz)) local.x = center.x + (dx >= 0 ? block : -block);
+      else local.z = center.z + (dz >= 0 ? block : -block);
+    };
+    push(fire, FIRE_SIDE * 0.46 + 0.35);
+    for (const pile of piles) push(pile.pos, Math.max(PILE_SIZE.w, PILE_SIZE.d) / 2 + BODY_RADIUS);
+    pos.copy(root.localToWorld(local));
   }
 
   function sendToCampfire(body, customNotice = null) {
@@ -681,6 +715,7 @@ export function createWoodyard({ scene, origin = new THREE.Vector3(), yaw = 0, w
   return {
     root,
     paving,
+    pad,
     campfire,
     piles,
     placeByGate,
