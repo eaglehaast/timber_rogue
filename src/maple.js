@@ -471,6 +471,7 @@ leafMaterial.onBeforeCompile = (shader) => {
 };
 leafMaterial.customProgramCacheKey = () => 'maple-leaf';
 const LEAVES = await (await fetch('assets/textures/maple-leaf.json')).json();
+export const leafAtlas = { map: leafTexture, grid: LEAVES.grid };
 // Длина кадра листа (м) по виду: отдельный листочек, тройчатый, из пяти листочков. Сам лист — около 0,8 кадра.
 const LEAF_FRAME = [0.15, 0.26, 0.33];
 const NODE = [0.035, 0.06]; // м между парами листьев вдоль веточки

@@ -16,7 +16,7 @@ import { blow, stepWind } from './wind.js';
 import { EYE, forwardOf } from './player.js';
 import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
-import { PAVING_POS, PAVING_HALF, DROP_PAD, PAD_AT } from './campfire.js';
+import { createWoodyard, PAVING_POS, PAVING_HALF, DROP_PAD, PAD_AT } from './campfire.js';
 import { planPaths } from './paths.js';
 
 // Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
@@ -126,7 +126,7 @@ function walkable(x, z) {
   if (Math.abs(x - pad.x) < pad.w / 2 + 0.35 && Math.abs(z - pad.z) < pad.d / 2 + 0.35) return false;
   return pier.deck(x, z) > -Infinity || (z >= river.shore(x) && height(x, z) >= river.level(x));
 }
-const game = attachGame({ scene, camera, ground, groundNormal, walkable });
+const game = attachGame({ scene, camera, ground, groundNormal, walkable, createWoodyard });
 // Точка появления — у фактических ворот забора; её задаёт rebuild() после каждого нового участка.
 let spawnPoint = null;
 const spawn = () => spawnPoint ?? { x: GATES.at, z: YARD.d / 2 - 0.7 };

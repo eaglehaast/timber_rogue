@@ -14,6 +14,12 @@ if (PHONE && mode !== 'game') {
       document.title = 'Редактор HUD · Timber Rogue';
       const { startEditor } = await import('./hud-editor.js');
       await startEditor(hud);
+    } else if (mode === 'fall') {
+      document.title = 'Падение клёна · Timber Rogue';
+      loading.firstElementChild.textContent = 'Выращиваем клён…';
+      for (const id of Object.keys(hud.base.elements)) hud.apply(hud.base, id);
+      const { startFallStand } = await import('./fall-stand.js');
+      await startFallStand();
     } else if (mode === 'wood') {
       document.title = 'Костёр и поленница · Timber Rogue';
       for (const id of ['back', 'help', 'stick', 'touch-saw']) hud.apply(hud.base, id);
