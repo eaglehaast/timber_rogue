@@ -741,7 +741,7 @@ function letGo(why) {
   const { tree, body } = grasp;
   const worldPos = body.position.clone().add(tree.root.position);
   grasp = null;
-  if (woodyard) woodyard.paving.mat.color.setHex(0xffffff);
+  if (woodyard) woodyard.pad.mat.color.setHex(0xffffff);
   const zone = !why && woodyard ? woodyard.dropZoneAt(worldPos) : null;
   if (zone) {
     woodyard.acceptDroppedBody(body, zone);
@@ -1667,6 +1667,9 @@ function movePlayer(dx, dz) {
   if (canStand(x + dx, z + dz)) player.pos.set(x + dx, 0, z + dz);
   else if (dx && canStand(x + dx, z)) player.pos.x += dx;
   else if (dz && canStand(x, z + dz)) player.pos.z += dz;
+  // Поленница и костёр — твёрдые границы: если шаг всё же ввёл тело в рамку, общая проверка хоздвора
+  // выталкивает наружу кратчайшей стороной (campfire.js: clampPlayer, она же blocksYard в canStand).
+  if (woodyard) woodyard.clampPlayer(player.pos);
   player.pos.y = ground(player.pos.x, player.pos.z);
 }
 
@@ -1795,9 +1798,9 @@ function update(dt) {
   if (woodyard) {
     if (grasp) {
       const zone = woodyard.dropZoneAt(grasp.worldPos);
-      woodyard.paving.mat.color.setHex(zone === 'paving' ? 0xc2d8b8 : 0xe8e2d4);
+      woodyard.pad.mat.color.setHex(zone === 'paving' ? 0xc2d8b8 : 0xe8e2d4);
     } else {
-      woodyard.paving.mat.color.setHex(0xffffff);
+      woodyard.pad.mat.color.setHex(0xffffff);
     }
   }
 }

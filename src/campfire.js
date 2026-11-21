@@ -15,10 +15,14 @@ export const FIRE_POS = new THREE.Vector3(3.2, 0, -2.3), FIRE_SIDE = 2.7;
 // попало на всём плитняке: границу игрок читает глазами по самой кладке (тротуарный камень там мельче).
 export const BODY_RADIUS = 0.35;
 export const DROP_PAD = { x: 2.1, z: 1.0 };
+// Центр площадки приёмки в локальных координатах хоздвора (root повёрнут на π: x там зеркалится стороной door).
+export const PAD_AT = { x: PILE_POS.x, z: PILE_POS.z + PILE_SIZE.d / 2 + DROP_PAD.z + 0.15 };
+// Картинку плитника грузим сами: makeDropPad вызывается и до списка общих текстур модуля.
+const pavingPhoto = tiles(['assets/textures/yard/timber_yard_paving_01.jpg'])[0];
 // Площадка у поленницы — из той же картинки плитняка, но в два раза мельче: с высоты глаз её край
 // читается по самой кладке — здесь место для сдачи дров, дальше — просто дорожка.
 export function makeDropPad() {
-  const map = pavingTex.clone();
+  const map = pavingPhoto.clone();
   map.repeat.set(DROP_PAD.x * 2 / 1.0, DROP_PAD.z * 2 / 1.0);
   const mat = soften(new THREE.MeshLambertMaterial({ map, color: 0xffffff }), {
     contrast: 0.88, saturation: 0.75, scales: [0.15, 0.5], low: [0.9, 0.88, 0.84], high: [1.05, 1.04, 1.0], cells: [1, 1],
