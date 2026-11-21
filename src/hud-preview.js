@@ -1,3 +1,4 @@
+import { showAction } from './hud-layout.js';
 import * as THREE from 'three';
 import { MOUSE, fieldOfView, makePlayer, forwardOf, turnHead, walkInput, walkSpeed, stepEyes, eyeCamera, bindStick } from './player.js';
 
@@ -28,9 +29,10 @@ export function makePreview() {
   let playing = false, selected = 'held-saw', slot = 0, pressed = false, actionPointer = null, lookPointer = null, previous = 0;
   function show() {
     saw.hidden = playing && slot === 2;
+    saw.classList.toggle('short-bar', playing && slot === 1);
     saw.classList.toggle('running', playing && pressed && slot !== 2);
-    action.classList.toggle('pressed', pressed);
-    action.textContent = slot === 2 ? 'Взять' : pressed ? 'Газ нажат' : 'Газ';
+    const hasSaw = !playing || slot !== 2;
+    showAction(action, hasSaw ? 'Газ' : 'Взять', hasSaw, pressed);
     slots.forEach((el, i) => el.setAttribute('aria-pressed', i === slot));
     for (const id of contextual) el(id).hidden = playing || selected !== id;
   }

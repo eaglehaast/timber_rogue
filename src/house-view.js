@@ -258,7 +258,6 @@ function frame(now) {
     camera.lookAt(view.target);
   }
   const light = world.light(camera);
-  game.renderInset(renderer, now);
   renderer.setViewport(0, 0, w, h);
   renderer.render(scene, camera);
   world.rays.render(camera, light, dt);
