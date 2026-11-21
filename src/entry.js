@@ -1,4 +1,4 @@
-import { mode, PHONE } from './device.js';
+import { mode, PHONE, NO_GRASS } from './device.js';
 
 if (PHONE && mode !== 'game') {
   location.replace('./#stands');
@@ -39,9 +39,12 @@ if (PHONE && mode !== 'game') {
       let loaded = Promise.resolve(), failed;
       images.onStart = () => { loaded = new Promise(resolve => { images.onLoad = resolve; }); };
       images.onError = url => { failed = url; };
-      images.onProgress = (_, done, total) => { loading.firstElementChild.textContent = `Загружаем двор · ${done} / ${total}`; };
+      images.onProgress = (_, done, total) => {
+        loading.firstElementChild.textContent = `Загружаем двор · ${done} / ${total}`;
+        if (done === total) images.onLoad?.();
+      };
       const { startYard } = await import('./house-view.js');
-      await loaded;
+      if (!NO_GRASS) await Promise.race([loaded, new Promise(resolve => setTimeout(resolve, 5000))]);
       images.onStart = images.onLoad = images.onError = images.onProgress = undefined;
       if (failed) throw new Error(`Не загрузился рисунок ${failed}`);
       await Promise.all([...document.querySelectorAll('.hud-art img')].map(img => img.decode()));
