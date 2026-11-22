@@ -67,6 +67,41 @@ material.customProgramCacheKey = () => `${key} wind`;
 // Между бровкой и кромкой массы пшеница обтрёпана: у кромки сплошная, к бровке редеет куртинами в пару метров.
 const WHEAT = { ...(await atlas('wheat-tufts', { dusk: DUSK })), heights: Array(8).fill(HEIGHT) };
 const BAND = 2.5, EAR = 0.45, PER = { band: 12000, ears: 3500 }, NEAR = 55, FRONT = 80;
+const [farEdgeMap] = tiles(['assets/textures/wheat-field-far-edge.png']);
+farEdgeMap.wrapS = farEdgeMap.wrapT = THREE.ClampToEdgeWrapping;
+const farEdgeMaterial = new THREE.MeshLambertMaterial({ map: farEdgeMap, alphaTest: 0.35, side: THREE.DoubleSide });
+farEdgeMaterial.onBeforeCompile = (shader) => {
+  Object.assign(shader.uniforms, windUniforms);
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>
+      ${GUST_GLSL}`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      vec4 fieldPosition = vec4(position, 1.0);
+      #ifdef USE_INSTANCING
+        fieldPosition = instanceMatrix * fieldPosition;
+      #endif
+      vec3 fieldWorld = (modelMatrix * fieldPosition).xyz;
+      float fieldHeight = clamp((position.y + 1.25) / 2.5, 0.0, 1.0);
+      transformed.x += windDir.x * windMax * gust(fieldWorld.xz) * fieldHeight * 0.18;`);
+};
+const farEdgeGeometry = new THREE.PlaneGeometry(10, 2.5);
+
+// Два дальних ряда рисунков заменяют редкие колосья, у берега остаются живые пучки.
+function farEdge(field) {
+  const positions = [];
+  for (const depth of [20, 31]) {
+    for (let x = -REACH + 5; x < REACH; x += 10) {
+      const z = field.edge(x) - depth;
+      if (z < -REACH) continue;
+      positions.push([x, height(x, z) + 1.25, z]);
+    }
+  }
+  const strips = new THREE.InstancedMesh(farEdgeGeometry, farEdgeMaterial, positions.length);
+  const matrix = new THREE.Matrix4();
+  positions.forEach(([x, y, z], i) => strips.setMatrixAt(i, matrix.makeTranslation(x, y, z)));
+  strips.computeBoundingSphere();
+  return strips;
+}
 
 // river — русло (river.js): кромка поля идёт вдоль бровки дальнего берега.
 export function planField(seed, river) {
@@ -91,9 +126,9 @@ export function buildField(field) {
   const tufts = (per, density, top) => makeTufts(WHEAT, Math.round((per * size * size) / 1000), size,
     (x, z) => (free(x) ? density(field.into(x, z), x, z) : 0), { top });
   const fray = (d, x, z) => field.cover(x, z) * field.grows(x, z) * THREE.MathUtils.lerp(0.3 + 0.7 * s(noise(x / 2 + 70, z / 2), 0.35, 0.65), 1, s(d, -GAP, 0));
-  return new THREE.Group().add(floor(field), mass(field),
+  return new THREE.Group().add(floor(field), mass(field), farEdge(field),
     tufts(PER.band, (d, x, z) => (d < BAND ? fray(d, x, z) * far(x, z, FRONT) : 0)),
-    tufts(PER.ears, (d, x, z) => (d > INSET - 0.3 ? far(x, z, NEAR) : 0), EAR));
+    tufts(PER.ears, (d, x, z) => (d > INSET - 0.3 && d < 20 ? far(x, z, NEAR) : 0), EAR));
 }
 
 // Земля поля — кусок сетки земли от уреза до стенки массы (под массой землю не видно); голую глину откоса кладёт

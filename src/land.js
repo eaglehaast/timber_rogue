@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { generator, smoothNoise } from './random.js';
 import { KINDS, plantBirches, plantFallen, makeLogs } from './birch.js';
 import { height } from './terrain.js';
+import { tiles } from './surface.js';
 
 // Местность вокруг двора по плану Никиты (2026-11-08), вся объёмом. Двор — в середине, улица — к +z, всё в метрах двора.
 // Сделано: берёзовая лесополоса за улицей (по фото Никиты из такой полосы). Полоса посажена на пологом валу;
@@ -28,6 +29,37 @@ const GROVE = { step: [1.8, 3.4], jitter: 0.35, gaps: 0.12, reach: 100, size: 0.
 const FELL = { lying: 0.5, kinds: [0, 1, 2, 3, 4, 5], log: [[1, 1.2], [1.8, 2.4]], stump: [0.15, 0.45], taken: 0.6 };
 // Подрост — молодые берёзки (последние виды KINDS) около рядов: по одной на per м² полосы, до reach м от ряда.
 const UNDER = { kinds: [8, 9, 10], per: 8, reach: 2.2 };
+
+// Дальние участки лесополосы собираются из рисунков; рядом остаются объёмные деревья.
+const BELT_CHUNK = 20, BELT_DISTANCE = 60;
+const beltMaps = tiles(['assets/textures/birch-belt-01.png', 'assets/textures/birch-belt-02.png']);
+const beltMaterials = beltMaps.map((map) => {
+  map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
+  return new THREE.MeshLambertMaterial({ map, alphaTest: 0.35, side: THREE.DoubleSide });
+});
+const beltGeometry = new THREE.PlaneGeometry(26, 19.5);
+
+function plantBelt(trees) {
+  const group = new THREE.Group(), chunks = Map.groupBy(trees, (tree) => Math.floor(tree.x / BELT_CHUNK));
+  for (const [chunk, part] of chunks) {
+    const x = (chunk + 0.5) * BELT_CHUNK, z = (BELT.from + BELT.to) / 2;
+    const variant = ((chunk % 4) + 4) % 4;
+    const near = plantBirches(part);
+    near.position.set(-x, 0, -z);
+    const far = new THREE.Mesh(beltGeometry, beltMaterials[[0, 1, 1, 0][variant]]);
+    const scale = [0.96, 1, 1.04, 0.99][variant];
+    far.scale.set(variant < 2 ? scale : -scale, scale, 1);
+    far.position.z = [-0.7, 0.5, -0.3, 0.7][variant];
+    // Стволы в рисунках заканчиваются примерно на 92% высоты холста.
+    far.position.y = height(x, z + far.position.z) + 19.5 * 0.42 * scale;
+    const detail = new THREE.LOD();
+    detail.position.set(x, 0, z);
+    detail.addLevel(near, 0);
+    detail.addLevel(far, BELT_DISTANCE, 0.1);
+    group.add(detail);
+  }
+  return group;
+}
 
 const bump = (t) => (Math.abs(t) < 1 ? (1 - t * t) ** 2 : 0);
 
@@ -123,5 +155,5 @@ export function buildLand({ seed, birches, saplings, fallen, cut }) {
       const mid = from.clone().addScaledVector(d, length / 2);
       return { at: from.setY(height(mid.x, mid.z) + (r0 + r1) / 2), dir: d, r0, r1, length };
     })]);
-  return new THREE.Group().add(plantBirches(standing), plantFallen(lying), makeLogs(logs, generator(seed + 67)));
+  return new THREE.Group().add(plantBelt(standing), plantFallen(lying), makeLogs(logs, generator(seed + 67)));
 }

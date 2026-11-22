@@ -117,7 +117,7 @@ function mergeGeometries(parts) {
   const count = (name) => parts.reduce((sum, g) => sum + g.attributes[name].count, 0);
   const position = new Float32Array(count('position') * 3), normal = new Float32Array(count('position') * 3);
   const uv = new Float32Array(count('position') * 2), color = new Float32Array(count('position') * 4);
-  const index = new Uint32Array(count('position'));
+  const index = new Uint32Array(parts.reduce((sum, g) => sum + g.index.count, 0));
   let vo = 0, io = 0;
   for (const g of parts) {
     position.set(g.attributes.position.array, vo * 3);
