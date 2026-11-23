@@ -3,18 +3,14 @@ import { planHouse, buildHouse, R, COURSE, PLINTH } from './house.js';
 import { PANE, LINING } from './window.js';
 import { Planks, boardMaterials, TONES } from './attic.js';
 import { buildPier } from './pier.js';
-import { groundPatch, height } from './terrain.js';
+import { height } from './terrain.js';
 import { generator } from './random.js';
-import { tiles, soften } from './surface.js';
 import { gasPostMaterial } from './gas.js';
 import { powerWireMaterial } from './power.js';
 import { curve, sag, tube } from './pipe.js';
 
 const W = 4, D = 4, POLE_HEIGHT = 2, SPAN = 4;
 const UP = new THREE.Vector3(0, 1, 0);
-const earth = soften(new THREE.MeshLambertMaterial({ map: tiles(['assets/textures/road-base.jpg'])[0] }),
-  { contrast: 0.9, saturation: 0.8, scales: [0.13, 0.5], low: [0.92, 0.92, 0.9], high: [1.02, 1.02, 1], cells: [4, 2] });
-
 // Сруб параллелен касательной к нашему берегу; его площадка не выравнивает сам берег.
 export function planBanya(seed, river, side) {
   const x = side * 10, angle = -Math.atan(river.slope(x));
@@ -104,25 +100,6 @@ export function buildBanya(site, river, power, house) {
   };
   const powerLine = buildBanyaPower(base, power, house, localToWorld);
   return { group, dock, powerLine, deck, blocks, plan, deckPlan };
-}
-
-// Берег внутри боковых заборов соединяет баню с двором без дополнительной вертикальной травы.
-// Вызывать после makeMeadow, когда общая сетка рельефа уже построена.
-export function buildBanyaGround(river, yard) {
-  const geometry = groundPatch((x, z) => Math.abs(x) <= yard.w / 2 && z <= -yard.d / 2 && z >= river.shore(x) - 0.5);
-  const pos = geometry.attributes.position, uv = new Float32Array(pos.count * 2);
-  for (let i = 0; i < pos.count; i++) {
-    const x = THREE.MathUtils.clamp(pos.getX(i), -yard.w / 2, yard.w / 2);
-    const z = Math.min(pos.getZ(i), -yard.d / 2);
-    if (x !== pos.getX(i) || z !== pos.getZ(i)) pos.setXYZ(i, x, height(x, z), z);
-    uv[2 * i] = x / 4;
-    uv[2 * i + 1] = -z / 4;
-  }
-  geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  geometry.computeVertexNormals();
-  const ground = new THREE.Mesh(geometry, earth);
-  ground.receiveShadow = true;
-  return ground;
 }
 
 function buildBanyaPower(base, power, house, localToWorld) {

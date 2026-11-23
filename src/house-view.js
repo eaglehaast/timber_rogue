@@ -8,7 +8,7 @@ import { planRoad, buildRoad } from './road.js';
 import { planLand, buildLand } from './land.js';
 import { planRiver, buildRiver } from './river.js';
 import { planPier, buildPier } from './pier.js';
-import { planBanya, buildBanya, buildBanyaGround } from './banya.js';
+import { planBanya, buildBanya } from './banya.js';
 import { planField, buildField } from './field.js';
 import { shapeGround, height, normal } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS } from './world.js';
@@ -97,11 +97,12 @@ function rebuild(seed) {
   // Двор — между боковыми заборами, от улицы до реки.
   const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
   const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.shore(x) ? 1 : 0);
+  const grassBounds = (x, z) => Math.abs(x) <= YARD.w / 2 && z <= fence && z >= river.brow(x);
   const grass = (x, z) => {
     if (inside(x, z, pad, pad.w, pad.d) || inside(x, z, woodPad, woodPad.w, woodPad.d) || banya.blocks(x, z) || banya.deck(x, z) > -Infinity || pier.deck(x, z) > -Infinity || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
     return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * paths.grass(x, z) * (1 - field.cover(x, z));
   };
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { bounds: { w: YARD.w, d: YARD.d }, trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }), buildBanyaGround(river, YARD), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), banya.group, banya.dock, banya.powerLine, buildField(field), paths.build());
+  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { bounds: grassBounds, trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), banya.group, banya.dock, banya.powerLine, buildField(field), paths.build());
   layout = { at, gas, power, road, pier, pad, river, paths, banya };
   scene.add(house, yard);
   animated.length = 0;
