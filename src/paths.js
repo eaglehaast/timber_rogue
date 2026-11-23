@@ -3,6 +3,7 @@ import { generator, smoothNoise } from './random.js';
 import { groundAt } from './terrain.js';
 import { planPathNetwork } from './route.js';
 import { PAVING_ENTRY_HALF, pavingMaterial, pavingTexture } from './paving.js';
+import { ENDS, END_MATERIAL, LOG_MATERIAL } from './house.js';
 
 // Общая непрерывная сеть мощения; расширяется у ступеней и плавно входит в хозплощадку.
 const PATH = { half: 0.68, lift: 0.015 };
@@ -10,6 +11,9 @@ const CELL = 0.05;                                       // м: клетка р�
 const PAVING_TILE = 2;                                   // м: повтор плитняка на хозплощадке
 
 const stone = pavingMaterial(pavingTexture());
+const woodSide = new THREE.MeshLambertMaterial({ map: LOG_MATERIAL.map, color: 0x997755 });
+const woodEnd = new THREE.MeshLambertMaterial({ map: END_MATERIAL.map, color: 0xb39472 });
+const BORDER = { radius: 0.065, spacing: 0.128, sides: 8 };
 
 // Гладкий шум от rnd: s — ячейка, h — шаг сетки.
 const noise = (rnd, h = 1.3) => {
@@ -27,7 +31,7 @@ function ribbon(points, destination, surface, textureOrigin, seed) {
   const routeSeed = [...destination].reduce((sum, char) => sum + char.charCodeAt(0), seed);
   const edgeNoise = noise(generator(routeSeed + 160), 1.1);
   const smooth = (t) => t * t * (3 - 2 * t);
-  const columns = 17, positions = [], uvs = [], indices = [];
+  const columns = 17, positions = [], uvs = [], indices = [], edges = [[], []], widths = [];
   for (let i = 0; i < points.length; i++) {
     const before = points[Math.max(0, i - 1)], after = points[Math.min(points.length - 1, i + 1)];
     const tangent = new THREE.Vector2(after.x - before.x, after.z - before.z).normalize();
@@ -38,6 +42,10 @@ function ribbon(points, destination, surface, textureOrigin, seed) {
     const flare = Math.max(startFlare, endFlare);
     const half = THREE.MathUtils.lerp(PATH.half, terminalHalf, flare)
       + (edgeNoise(lengths[i]) - 0.5) * 0.12 * (1 - flare);
+    widths.push(half);
+    for (const [side, sign] of [-1, 1].entries()) {
+      edges[side].push({ x: points[i].x + normal.x * half * sign, z: points[i].z + normal.y * half * sign });
+    }
     for (let j = 0; j < columns; j++) {
       const offset = half * (2 * j / (columns - 1) - 1);
       const x = points[i].x + normal.x * offset, z = points[i].z + normal.y * offset;
@@ -53,7 +61,73 @@ function ribbon(points, destination, surface, textureOrigin, seed) {
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
-  return geometry;
+  return { geometry, edges, widths };
+}
+
+// Бордюр следует фактической кромке ленты, но не закрывает соседние пути и примыкания.
+function border(paths, junction, seed) {
+  const posts = [];
+  for (const path of paths) for (const edge of path.edges) {
+    const total = edge.slice(1).reduce((sum, p, i) => sum + Math.hypot(p.x - edge[i].x, p.z - edge[i].z), 0);
+    let remaining = 0.25, travelled = 0;
+    for (let i = 1; i < edge.length; i++) {
+      const a = edge[i - 1], b = edge[i], length = Math.hypot(b.x - a.x, b.z - a.z);
+      while (remaining <= length) {
+        const t = remaining / length, x = THREE.MathUtils.lerp(a.x, b.x, t), z = THREE.MathUtils.lerp(a.z, b.z, t);
+        const clearance = path.destination === 'utility' ? 1.4 : path.destination === 'gate' ? 0.3 : 0.8;
+        const endDistance = path.destination === 'gate' ? travelled + remaining : total - travelled - remaining;
+        const open = endDistance < clearance
+          || Math.hypot(x - junction.x, z - junction.z) < 1.05
+          || paths.some((other) => other !== path && other.points.some((p, k) =>
+            Math.hypot(x - p.x, z - p.z) < other.widths[k] + BORDER.radius + 0.08));
+        if (!open) posts.push({ x, z });
+        remaining += BORDER.spacing;
+      }
+      remaining -= length;
+      travelled += length;
+    }
+  }
+  const rnd = generator(seed + 4817);
+  const side = { p: [], n: [], uv: [], index: [] }, top = { p: [], n: [], uv: [], index: [] };
+  for (const { x, z } of posts) {
+    const r = BORDER.radius * (0.95 + 0.1 * rnd()), spin = rnd() * Math.PI * 2;
+    const cell = Math.floor(rnd() * ENDS.disc.length), [cx, cy, cr] = ENDS.disc[cell];
+    const [cols, rows] = ENDS.grid, col = cell % cols, row = rows - 1 - Math.floor(cell / cols);
+    const ground = [groundAt(x, z)];
+    for (let j = 0; j < BORDER.sides; j++) {
+      const angle = j * Math.PI * 2 / BORDER.sides;
+      ground.push(groundAt(x + r * Math.cos(angle), z + r * Math.sin(angle)));
+    }
+    const y0 = Math.min(...ground) - 0.12, y1 = Math.max(...ground) + 0.07 + 0.015 * rnd();
+    const si = side.p.length / 3, ti = top.p.length / 3;
+    top.p.push(x, y1, z); top.n.push(0, 1, 0); top.uv.push((col + cx) / cols, (row + cy) / rows);
+    for (let j = 0; j <= BORDER.sides; j++) {
+      const angle = j * Math.PI * 2 / BORDER.sides, dx = Math.cos(angle), dz = Math.sin(angle);
+      side.p.push(x + r * dx, y0, z + r * dz, x + r * dx, y1, z + r * dz);
+      side.n.push(dx, 0, dz, dx, 0, dz);
+      // Одна из десяти плиток сруба, волокна идут вдоль вертикального чурбачка.
+      side.uv.push((cell % 5 + 0.1) / 5, (Math.floor(cell / 5) % 2 + j / BORDER.sides * 0.95) / 2,
+        (cell % 5 + 0.8) / 5, (Math.floor(cell / 5) % 2 + j / BORDER.sides * 0.95) / 2);
+      if (j === BORDER.sides) continue;
+      const u = Math.cos(angle + spin), v = Math.sin(angle + spin);
+      top.p.push(x + r * dx, y1, z + r * dz); top.n.push(0, 1, 0);
+      top.uv.push((col + cx + u * cr) / cols, (row + cy + v * cr) / rows);
+      side.index.push(si + 2 * j, si + 2 * j + 1, si + 2 * j + 2,
+        si + 2 * j + 1, si + 2 * j + 3, si + 2 * j + 2);
+      top.index.push(ti, ti + 1 + (j + 1) % BORDER.sides, ti + 1 + j);
+    }
+  }
+  return [side, top].map((data, i) => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(data.p, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(data.n, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(data.uv, 2));
+    geometry.setIndex(data.index);
+    const mesh = new THREE.Mesh(geometry, i ? woodEnd : woodSide);
+    mesh.receiveShadow = true;
+    mesh.name = i ? 'path-border-ends' : 'path-border-sides';
+    return mesh;
+  });
 }
 
 // Строить после shapeGround: единый ствол от ворот расходится к дому, бане и хозплощадке.
@@ -107,8 +181,9 @@ export function planPaths({ seed, gate, porch, porchApproach, pad, padApproach, 
     trodden: (x, z) => (near(x, z, porch, 1.0) || near(x, z, pad, 0.8) || near(x, z, bath, 0.8) ? 0 : s(at(x, z), 0.15, 0.8)),
     build() {
       const group = new THREE.Group();
-      paths.forEach(({ points, destination }) => {
-        const mesh = new THREE.Mesh(ribbon(points, destination, surface, pavingOrigin, seed), stone);
+      const ribbons = paths.map((path) => ({ ...path, ...ribbon(path.points, path.destination, surface, pavingOrigin, seed) }));
+      ribbons.forEach(({ geometry }) => {
+        const mesh = new THREE.Mesh(geometry, stone);
         mesh.receiveShadow = true;
         group.add(mesh);
       });
@@ -125,6 +200,7 @@ export function planPaths({ seed, gate, porch, porchApproach, pad, padApproach, 
       }
       junction.geometry.computeVertexNormals();
       group.add(junction);
+      group.add(...border(ribbons, network.junction, seed));
       return group;
     },
   };

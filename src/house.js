@@ -53,13 +53,14 @@ const HIGH_CHANCE = 0.25, KNEE = [5, 7], GABLE_LIFT = 0.2;
 const SINK = 0.05, DAMP = 0.6;
 
 const [logMap, endMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-chinking.jpg']);
-const ENDS = await (await fetch('assets/textures/house-endgrain.json')).json();
+export const ENDS = await (await fetch('assets/textures/house-endgrain.json')).json();
 const LOOK = { contrast: 0.7, saturation: 0.65, scales: [0.3, 1.1], low: [0.8, 0.8, 0.8], high: [1.08, 1.04, 1.0] };
 const materials = [
   soften(new THREE.MeshLambertMaterial({ map: logMap }), { ...LOOK, cells: [5, 2] }),
   soften(new THREE.MeshLambertMaterial({ map: endMap }), LOOK),
 ];
 export const LOG_MATERIAL = materials[0];
+export const END_MATERIAL = materials[1];
 // Пакля — жгут в пазу между венцами снаружи: половина трубки радиуса CHINK.r, торчит из паза на CHINK.out.
 // Картинки — набор house-chinking.jpg (5 лент 2048 × 256 с общими краями), лента вдоль жгута — CHINK.tile метров.
 // Картинка темнее брёвен, а пакля в пазу видна светлыми волокнами — поэтому светлее в CHINK.tone раз.
