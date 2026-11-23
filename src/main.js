@@ -22,7 +22,7 @@ import { watch, note, beat, pauseWatch, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, gust } from './wind.js';
 import { classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './wood-handling.js';
-import { advanceLadderClimb, buildLadder, findLadderPlacement, ladderClimbPosition } from './ladder.js';
+import { advanceLadderClimb, buildLadder, findLadderPlacement, LADDER_ATTACH_HEIGHT, ladderClimbPosition } from './ladder.js';
 
 let woodyard = null;
 // Где игрок появляется при выборе «Игра» — задаёт house-view.js: у ворот, с внутренней стороны двора.
@@ -742,6 +742,12 @@ function mountLadder() {
     notice('К дереву, которое уже падает или спилено, не подняться');
     return false;
   }
+  if (ladderState.stem !== undefined
+    && Number.isFinite(ladderState.tree.stumps?.[ladderState.stem])
+    && ladderState.tree.stumps[ladderState.stem] >= LADDER_ATTACH_HEIGHT) {
+    notice('Уровень спила выше верхней точки лестницы');
+    return false;
+  }
   climbing = { progress: 0 };
   player.yaw = yawOf(ladderState.forward);
   updateClimbPosition();
@@ -753,6 +759,14 @@ function climb(input, dt) {
   if (ladderState.tree.fall || ladderState.tree.top || !ladderState.tree.standing) {
     climbing.progress = 0;
     leaveLadder();
+    return false;
+  }
+  if (ladderState.stem !== undefined
+    && Number.isFinite(ladderState.tree.stumps?.[ladderState.stem])
+    && ladderState.tree.stumps[ladderState.stem] >= LADDER_ATTACH_HEIGHT) {
+    climbing.progress = 0;
+    leaveLadder();
+    notice('Спил выше верхней точки лестницы');
     return false;
   }
   const next = advanceLadderClimb(ladderState, climbing.progress, input.ahead, dt);
