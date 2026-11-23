@@ -24,7 +24,7 @@ const { planRiver } = await import('./src/river.js');
 const { shapeGround, groundGeometry, height } = await import('./src/terrain.js');
 const { makeGround } = await import('./src/grass.js');
 const { planBanya, buildBanya } = await import('./src/banya.js');
-const { planHouse } = await import('./src/house.js');
+const { planHouse, LOG_MATERIAL } = await import('./src/house.js');
 const { PANE } = await import('./src/window.js');
 const { planGas, gasPostMaterial } = await import('./src/gas.js');
 const { planPower, powerWireMaterial } = await import('./src/power.js');
@@ -75,7 +75,20 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const doorBounds = new THREE.Box3().setFromObject(bathDoor);
   assert.ok(doorBounds.max.y - doorBounds.min.y > 1.7, 'дверное полотно и обсада закрывают проём');
   const dockRails = banya.group.getObjectByName('banya-dock-rails');
-  assert.ok(dockRails.children.length >= 3, 'у настила и боковой лестницы есть перила со стойками');
+  assert.ok(dockRails.children.length >= 3 && dockRails.children.some((part) => part.material?.map),
+    'перила используют резные балясины и столбы из набора крыльца');
+  const roofExtension = banya.group.getObjectByName('banya-roof-extension');
+  const roofRafters = banya.group.getObjectByName('banya-roof-rafters');
+  const roofSupports = banya.group.getObjectByName('banya-roof-supports');
+  assert.ok(roofExtension.children.length > 0 && roofRafters.children.length > 0, 'общая крыша продолжается над верандой на стропилах');
+  assert.ok(roofSupports.children.length >= 4 && roofSupports.children.every((post) => post.material === LOG_MATERIAL
+    && post.geometry.type === 'CylinderGeometry'), 'навес поддерживают круглые бревна в цвет сруба');
+  const banyaBench = banya.group.getObjectByName('banya-bench');
+  banyaBench.updateMatrixWorld(true);
+  const benchBounds = new THREE.Box3().setFromObject(banyaBench);
+  assert.ok(benchBounds.max.y - benchBounds.min.y > 0.7, 'на веранде есть деревянная лавка со спинкой');
+  const c = Math.cos(site.angle), s = Math.sin(site.angle);
+  const worldAtLocal = (x, z) => [site.x + c * x + s * z, site.z - s * x + c * z];
   const { start, along, across, length, top, width } = banya.deckPlan;
   assert.ok(length < 4.5 && site.z - river.brow(site.x) < 3, 'баня придвинута к берегу, настил стал короче');
   const at = (distance, offset = 0) => start.clone().addScaledVector(along, distance).addScaledVector(across, offset);
@@ -86,11 +99,14 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   assert.equal(banya.deck(...at(length / 2, -width / 2 - 0.3).toArray()), -Infinity);
   assert.ok(banya.blocks(site.x, site.z));
   assert.ok(!banya.blocks(middle.x, middle.y));
-  const c = Math.cos(site.angle), s = Math.sin(site.angle), stairZ = -2 - 0.13 - 0.8;
+  const stairZ = -2 - 0.13 - 0.8;
   const stairPoint = (x) => [site.x + c * x + s * stairZ, site.z - s * x + c * stairZ];
   const stairs = [2.05, 2.25, 2.45, 2.65, 2.85, 3.05].map((x) => banya.deck(...stairPoint(x)));
   assert.ok(stairs.every(Number.isFinite));
   assert.ok(stairs.every((y, i) => i === 0 || y <= stairs[i - 1]));
+  assert.ok(!banya.blocks(...stairPoint(2.6)), 'перила не перекрывают проход по лестнице');
+  assert.ok(banya.blocks(...worldAtLocal(-2, -2 - 0.13 - length / 2)), 'перила боковой стороны блокируют проход насквозь');
+  assert.ok(banya.blocks(...worldAtLocal(-1.1, -2 - 0.13 - 0.78)), 'лавка препятствует проходу сквозь основание');
   const posts = banya.powerLine.children.filter((mesh) => mesh.material === gasPostMaterial);
   const wires = banya.powerLine.children.filter((mesh) => mesh.material === powerWireMaterial);
   assert.ok(posts.length > 0);
