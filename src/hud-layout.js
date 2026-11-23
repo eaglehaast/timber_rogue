@@ -78,7 +78,7 @@ export function readLayout(data, base) {
     if ('visible' in saved && typeof saved.visible !== 'boolean' || 'comment' in saved && typeof saved.comment !== 'string') throw new Error(`Проверь свойства «${item.name}».`);
     if ('visible' in saved) item.visible = saved.visible;
     if ('comment' in saved) item.comment = saved.comment;
-    for (const key of ['asset', 'pressedAsset', 'shortAsset']) {
+    for (const key of ['asset', 'pressedAsset', 'shortAsset', 'shortPressedAsset']) {
       if (!item[key] || !Object.hasOwn(saved, key)) continue;
       if (!Object.hasOwn(layout.assets, saved[key])) throw new Error('В расстановке отсутствует выбранный рисунок.');
       item[key] = saved[key];

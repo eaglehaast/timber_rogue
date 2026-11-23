@@ -1,0 +1,33 @@
+* { box-sizing: border-box; }
+html { color-scheme: light; }
+body { margin: 0; background: #ece9df; color: #28312b; font: 16px/1.4 system-ui, sans-serif; }
+main { width: min(960px, 100%); margin: auto; padding: clamp(12px, 3vw, 34px); }
+header { margin-bottom: 22px; }
+header a { color: #425346; font-size: .9rem; }
+h1 { margin: 6px 0 0; font: 600 clamp(1.65rem, 4vw, 2.55rem)/1.1 Georgia, serif; }
+.settings, .controls, [role="group"] { display: flex; align-items: center; gap: 8px; }
+.settings { justify-content: space-between; flex-wrap: wrap; margin-bottom: 14px; }
+[role="group"] span, #status, .controls p { color: #4c594e; font-size: .88rem; }
+button { color: inherit; font: inherit; cursor: pointer; }
+.settings button { min-height: 40px; padding: 5px 12px; border: 1px solid #adaf9e; border-radius: 6px; background: #e9e7d9; font-size: .9rem; }
+.settings button[aria-pressed="true"] { background: #37473a; border-color: #37473a; color: #fff9e7; }
+:focus-visible { outline: 3px solid #a56522; outline-offset: 2px; }
+#stage { position: relative; aspect-ratio: 800/460; overflow: hidden; isolation: isolate; border: 1px solid #949b87; border-radius: 9px; background: radial-gradient(ellipse at 52% 32%, #d2d2be, #b4bba5 72%, #a7af9a); }
+#yard-backdrop { display: none; position: absolute; inset: 0; width: 100%; height: 100%; }
+.yard #yard-backdrop { display: block; }
+#rig { position: absolute; pointer-events: none; aspect-ratio: 3/2; width: 84.5%; right: -.2%; bottom: -.4%; }
+.yard #rig { right: auto; bottom: auto; width: 42%; left: 30.0625%; top: 64.782609%; transform: perspective(700px) rotateZ(1.9deg) rotateX(1.3deg) scaleY(1.03); }
+.controls { gap: 12px; margin-top: 14px; }
+.controls p { margin: 0; }
+.controls strong { display: block; color: #28372d; font-size: 1rem; }
+#status { margin-left: auto; }
+#gas { position: relative; width: 140px; height: 66px; flex: none; touch-action: none; user-select: none; border: 1px solid #aaa990; border-radius: 48% 42% 44% 46% / 57% 52% 48% 44%; background: radial-gradient(ellipse at 47% 34%, #60675b, #303b33 68%); }
+#gas img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+#gas img:last-child, #gas[aria-pressed="true"] img:first-child { visibility: hidden; }
+#gas[aria-pressed="true"] img:last-child { visibility: visible; }
+#gas:disabled { opacity: .55; cursor: wait; }
+@media (orientation: landscape) and (max-height: 620px) and (min-width: 690px) {
+  main { max-width: min(960px, calc((100dvh - 190px) * 800 / 460 + 24px)); padding: 10px 12px; }
+  header { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; }
+  h1 { font-size: 1.5rem; margin: 0; }
+}

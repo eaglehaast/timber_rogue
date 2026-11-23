@@ -20,8 +20,8 @@ body[data-mode="fly"] #stage { width: 100%; height: 100%; aspect-ratio: auto; }
 .hud-art img { width: 100%; height: 100%; display: block; object-fit: contain; object-position: bottom; }
 /* Только старые два рисунка получают поправку под свет двора. Новая живопись из редактора показывает свой цвет. */
 #held-saw img:is([src="assets/hud/saw-1.webp"], [src="assets/hud/saw-2.webp"]) { filter: saturate(.70) brightness(.89) contrast(.95); }
-#held-saw .short-saw, #held-saw.short-bar .long-saw, .editing #held-saw.preview-short .long-saw { display: none; }
-#held-saw.short-bar .short-saw, .editing #held-saw.preview-short .short-saw { display: block; }
+#held-saw .short-saw, #held-saw.short-bar .long-saw { display: none; }
+#held-saw.short-bar .short-saw { display: block; }
 #kit { display: contents; }
 #kit button, #touch-saw { pointer-events: auto; padding: 4px 8px; line-height: 1.1; font-weight: 600; font-size: 14px; background: #19251edb; border: 1px solid #f2f0d783; text-shadow: 0 1px 2px #0008; }
 #kit button { display: flex; align-items: center; gap: 3px; padding: 3px 5px; background: #25312bf2; border-color: #ccceb16b; }
@@ -53,9 +53,9 @@ body[data-mode="fly"] #stage { width: 100%; height: 100%; aspect-ratio: auto; }
 #touch-saw.saw-trigger { padding: 0; border: 1px solid #ddd7b380; border-radius: 48% 42% 44% 46% / 57% 52% 48% 44%; background: radial-gradient(ellipse at 47% 34%, #60675be8, #303b33e8 68%); box-shadow: inset 0 1px 1px #eee4bd4d, 0 2px 4px #19271d66; }
 #touch-saw.saw-trigger img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 #touch-saw.saw-trigger .trigger-rest { display: block; }
-#touch-saw.saw-trigger.pressed, .editing #touch-saw.preview-down { background: #39473ddf; box-shadow: inset 0 2px 4px #14211790; }
-#touch-saw.saw-trigger.pressed .trigger-rest, .editing #touch-saw.preview-down .trigger-rest { display: none; }
-#touch-saw.saw-trigger.pressed .trigger-down, .editing #touch-saw.preview-down .trigger-down { display: block; }
+#touch-saw.saw-trigger.pressed { background: #39473ddf; box-shadow: inset 0 2px 4px #14211790; }
+#touch-saw.saw-trigger.pressed .trigger-rest { display: none; }
+#touch-saw.saw-trigger.pressed .trigger-down { display: block; }
 #touch-saw.saw-trigger .action-label { display: none; }
 #flight, #loading { position: absolute; z-index: 2; }
 #utility { display: contents; }
@@ -104,6 +104,7 @@ body[data-mode="hud"] #desk { --gutter: clamp(12px, 2.4vw, 36px); grid-template:
 body[data-mode="hud"] #room { margin: 0 var(--gutter); }
 body[data-mode="hud"] #stage { outline: 1px solid var(--line); }
 #inspector { grid-column: 2; grid-row: 2 / 4; border-left: 1px solid var(--line); padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 13px; background: #223027; }
+#inspector > * { flex-shrink: 0; }
 #inspector label { display: grid; gap: 4px; font-size: 13px; }
 #inspector fieldset { margin: 0; padding: 0; border: 0; }
 #inspector legend { margin: 0 0 6px; padding: 0; font-weight: 650; }
