@@ -76,7 +76,7 @@ const weighted = (odds, u) => {
   let x = u * odds.reduce((a, b) => a + b);
   return odds.findIndex((o) => (x -= o) < 0);
 };
-export function planHouse(seed) {
+export function planHouse(seed, { doorWall } = {}) {
   const rnd = generator(seed);
   const pick = (list) => list[Math.floor(rnd() * list.length)];
   const w = pick([5, 6, 6, 6.5]), five = rnd() < FIVE_WALL_CHANCE, d = five ? pick([8, 9, 9.5]) : pick([5, 6, 6]);
@@ -98,7 +98,7 @@ export function planHouse(seed) {
   // n окон поровну по отрезку стены [a, b] (от её середины).
   const row = (wall, a, b, n) => Array.from({ length: n }, (_, i) => window(wall, a + ((i + 0.5) * (b - a)) / n));
   const front = w < 5.5 ? 2 : 3;
-  const door = pick(['left', 'right']), other = door === 'left' ? 'right' : 'left';
+  const door = doorWall ?? pick(['left', 'right']), other = door === 'left' ? 'right' : 'left';
   // Остеклённый тамбур на крыльце (porch.js) — у части домов; площадка под ним шире.
   const tambour = rnd() < TAMBOUR_CHANCE, porch = porchWidth(tambour);
   // Дверь на боку. У избы — ближе к улице, но крыльцо (с тамбуром — шире) не заходит на остатки брёвен соседней

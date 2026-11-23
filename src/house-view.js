@@ -17,7 +17,8 @@ import { blow, stepWind } from './wind.js';
 import { EYE, forwardOf } from './player.js';
 import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
-import { createWoodyard, PAVING_POS, PAVING_HALF } from './campfire.js';
+import { createWoodyard, PAVING_HALF, yardPavingContains } from './campfire.js';
+import { fitPavingCenter } from './route.js';
 import { planPaths } from './paths.js';
 
 // Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
@@ -47,26 +48,26 @@ function rebuild(seed) {
     scene.remove(house, yard);
     for (const part of [house, yard]) part.traverse((o) => o.geometry?.dispose());
   }
-  const plan = planHouse(seed), rnd = generator(seed + 13);
+  const plan = planHouse(seed, { doorWall: 'right' }), rnd = generator(seed + 13);
   house = buildHouse(plan);
   const front = PALISADE[0] + rnd() * (PALISADE[1] - PALISADE[0]);
-  const door = plan.openings.find((o) => o.kind === 'door').wall === 'right' ? 1 : -1;
+  const door = 1;
   const at = { x: GATES.at - door * (plan.w / 2 + ASIDE), z: YARD.d / 2 - front - plan.d / 2 };
   // Площадка под дом — всё, что он занимает с крыльцом и свесами крыши.
   const box = new THREE.Box3().setFromObject(house), size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
   const pad = { x: at.x + mid.x, z: at.z + mid.z, w: size.x, d: size.z };
   const fence = YARD.d / 2, road = planRoad({ seed, fence }), land = planLand(seed, road.verge), river = planRiver({ seed, back: -fence }), field = planField(seed, river);
   // Калитка слева от ворот. Оставляем проход от обоих входов; дом и дрова каждый раз по разные стороны.
-  const entranceEdge = door > 0 ? GATES.at + GATES.width / 2 : WICKET.at - WICKET.width / 2;
   const woodPad = {
-    x: entranceEdge + door * (1.1 + PAVING_HALF.x), z: fence - 0.65 - PAVING_HALF.z,
-    w: PAVING_HALF.x * 2 + 0.8, d: PAVING_HALF.z * 2 + 0.8,
+    x: fitPavingCenter(YARD.w / 2, PAVING_HALF.z, YARD.w / 2, 0.45),
+    z: fence - 1.65 - PAVING_HALF.x,
+    w: PAVING_HALF.z * 2 + 0.8, d: PAVING_HALF.x * 2 + 0.8,
   };
   const banyaSite = planBanya(seed, river, -door);
   shapeGround(seed, [pad, woodPad, banyaSite.pad, ...MAPLES], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
   at.y = height(at.x, at.z);
-  const woodOrigin = new THREE.Vector3(woodPad.x + PAVING_POS.x * door, height(woodPad.x, woodPad.z), woodPad.z + PAVING_POS.z);
-  game.placeWoodyard(woodOrigin, door);
+  const woodCenter = new THREE.Vector3(woodPad.x, height(woodPad.x, woodPad.z), woodPad.z);
+  game.placeWoodyard(woodCenter, door, -Math.PI / 2);
   // Узлы сети привязаны к нижней ступени крыльца, краю плитняка у поленницы и нижней ступени бани.
   // Стена с дверью — боковая (left/right): её лицо стоит по X (walls.right.at = +w/2), проём отсчитывается
   // вдоль стены по Z (house.js: turn(s,x,h) = (x+wall.at, h, s)). Площадка без тамбура — глубиной 1.1 м,
@@ -76,18 +77,20 @@ function rebuild(seed) {
   const top = PLINTH + doorOpening.bottom;
   const steps = Math.max(2, Math.round(top / 0.18));               // STAIR.rise и STAIR.run из porch.js
   const qLow = L + (steps - 1) * 0.3;                              // вынос низа лестницы от лица стены
-  // Стена с дверью — боковая (left/right): её лицо по X (walls.right.at = +w/2), проём отсчитан вдоль
-  // стены по Z (house.js). Для смотрящего на дверь снаружи «вправо» — ось s = (0,0,-side); мировая точка
-  // двери = at.z - side*door.at, а side = door (wall 'right' → +1). Наружу от стены — тот же door.
-  const porch = { x: at.x + door * (plan.w / 2 + R + qLow + 0.15), z: at.z - door * doorOpening.at };
-  // Общая площадка хоздвора центрирована в woodPad; +z — её ближний к воротам край.
-  const padNear = { x: woodPad.x, z: woodPad.z + PAVING_HALF.z };
+  // Положение вдоль боковой стены уже хранится в локальном z проёма: мировая точка двери — at.z + door.at.
+  const porch = { x: at.x + door * (plan.w / 2 + R + qLow), z: at.z + doorOpening.at };
+  const porchApproach = { x: porch.x + door * 1.6, z: porch.z };
+  // Плитняк развернут вдоль правого забора; его открытый торец обращён к воротам.
+  const padNear = { x: woodPad.x - PAVING_HALF.z, z: woodPad.z };
+  const padApproach = { x: padNear.x - 1.2, z: padNear.z };
   const pier = planPier(river, seed);
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
   const banya = buildBanya(banyaSite, river, power, { plan, at });
   const paths = planPaths({
-    seed, gate: { x: GATES.at, z: fence - 0.18 }, porch, pad: padNear, bath: banya.approach,
+    seed, gate: { x: GATES.at, z: fence - 0.18 }, porch, porchApproach, pad: padNear, padApproach,
+    pavingOrigin: woodPad,
+    bath: banya.approach, bathApproach: banya.approachGuide,
     house: { x: pad.x, z: pad.z, w: pad.w, d: pad.d },
   });
   house.position.set(at.x, at.y, at.z);
@@ -95,7 +98,9 @@ function rebuild(seed) {
   const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
   const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.shore(x) ? 1 : 0);
   const grass = (x, z) => {
-    if (inside(x, z, pad, pad.w, pad.d) || inside(x, z, woodPad, woodPad.w, woodPad.d) || banya.blocks(x, z) || banya.deck(x, z) > -Infinity || pier.deck(x, z) > -Infinity || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
+    if (inside(x, z, pad, pad.w, pad.d) || yardPavingContains(x - woodPad.x, z - woodPad.z)
+      || banya.blocks(x, z) || banya.deck(x, z) > -Infinity || pier.deck(x, z) > -Infinity
+      || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
     return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * paths.grass(x, z) * (1 - field.cover(x, z));
   };
   yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), banya.group, banya.dock, banya.powerLine, buildField(field), paths.build());

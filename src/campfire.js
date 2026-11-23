@@ -5,10 +5,10 @@ import { decal, tiles, soften } from './surface.js';
 import { classifyLimbBody } from './wood-handling.js';
 import { Limb } from './limbs.js';
 import { generator } from './random.js';
-import { pavingMaterial, pavingTexture } from './paving.js';
+import { PAVING_ENTRY_HALF, pavingMaterial, pavingTexture } from './paving.js';
 
 export { classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './wood-handling.js';
-export const PAVING_POS = new THREE.Vector3(-1.6, 0, -2.1), PAVING_HALF = { x: 6.6, z: 2.15 };
+export const PAVING_POS = new THREE.Vector3(-1.6, 0, -2.1), PAVING_HALF = { x: 6.6, z: 4.6 };
 export const PILE_POS = new THREE.Vector3(0, 0, -3.2), PILE_SIZE = { w: 2.4, d: 1.15, h: 1.85 };
 export const FIRE_POS = new THREE.Vector3(3.2, 0, -2.3), FIRE_SIDE = 2.7;
 // Тело игрока (для общих границ препятствий) и площадка приёмки дров у поленницы — половина её размеров
@@ -16,21 +16,47 @@ export const FIRE_POS = new THREE.Vector3(3.2, 0, -2.3), FIRE_SIDE = 2.7;
 // попало на всём плитняке: границу игрок читает глазами по самой кладке (тротуарный камень там мельче).
 export const BODY_RADIUS = 0.35;
 export const DROP_PAD = { x: 2.1, z: 1.0 };
-// Центр площадки приёмки в локальных координатах хоздвора (root повёрнут на π: x там зеркалится стороной door).
+// Центр площадки приёмки в локальных координатах хоздвора; x зеркалится стороной door.
 export const PAD_AT = { x: PILE_POS.x, z: PILE_POS.z + PILE_SIZE.d / 2 + DROP_PAD.z + 0.15 };
 // Картинку плитника грузим сами: makeDropPad вызывается и до списка общих текстур модуля.
 // Площадка у поленницы — из той же картинки плитняка, но в два раза мельче: с высоты глаз её край
 // читается по самой кладке — здесь место для сдачи дров, дальше — просто дорожка.
 export function makeDropPad() {
   const map = pavingTexture();
-  map.repeat.set(DROP_PAD.x * 2 / 1.0, DROP_PAD.z * 2 / 1.0);
+  map.repeat.set(DROP_PAD.x, DROP_PAD.z);
   const mat = pavingMaterial(map);
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(DROP_PAD.x * 2, DROP_PAD.z * 2), mat);
   mesh.rotation.x = -Math.PI / 2;
-  // Ближе к забору — калитка и подход; полено лежит у лица рамки со стороны двора.
-  mesh.position.set(PILE_POS.x, 0.012, PILE_POS.z + PILE_SIZE.d / 2 + DROP_PAD.z + 0.15);
+  // Полено лежит у лица рамки со стороны двора.
+  mesh.position.set(PILE_POS.x, 0.017, PILE_POS.z + PILE_SIZE.d / 2 + DROP_PAD.z + 0.15);
   mesh.receiveShadow = true;
   return { mesh, mat };
+}
+
+function makeYardPavingShape() {
+  const x = PAVING_HALF.x, z = PAVING_HALF.z;
+  const shape = new THREE.Shape();
+  shape.moveTo(-PAVING_ENTRY_HALF, -z);
+  shape.bezierCurveTo(-x * 0.36, -z, -x * 0.75, -z * 0.9, -x * 0.88, -z * 0.56);
+  shape.bezierCurveTo(-x, -z * 0.3, -x, z * 0.35, -x * 0.82, z * 0.66);
+  shape.bezierCurveTo(-x * 0.65, z, -x * 0.24, z * 0.94, 0, z * 0.84);
+  shape.bezierCurveTo(x * 0.28, z * 0.96, x * 0.68, z, x * 0.86, z * 0.62);
+  shape.bezierCurveTo(x, z * 0.3, x, -z * 0.36, x * 0.83, -z * 0.68);
+  shape.bezierCurveTo(x * 0.65, -z * 0.96, x * 0.28, -z, PAVING_ENTRY_HALF, -z);
+  shape.lineTo(-PAVING_ENTRY_HALF, -z);
+  shape.closePath();
+  return shape;
+}
+
+const yardPavingShape = makeYardPavingShape();
+const yardPavingOutline = yardPavingShape.extractPoints(16).shape.map((point) => ({ x: point.y, z: point.x }));
+export function yardPavingContains(x, z) {
+  let inside = false;
+  for (let i = 0, j = yardPavingOutline.length - 1; i < yardPavingOutline.length; j = i++) {
+    const a = yardPavingOutline[i], b = yardPavingOutline[j];
+    if ((a.z > z) !== (b.z > z) && x < (b.x - a.x) * (z - a.z) / (b.z - a.z) + a.x) inside = !inside;
+  }
+  return inside;
 }
 
 // Общая проверка границ хоздвора для игры и стенда: локальная точка root (без учёта его поворота) и список
@@ -78,13 +104,17 @@ export function makeBoardBox(sx, sy, sz) {
 }
 
 export function makeYardPaving() {
-  const W = PAVING_HALF.x * 2, D = PAVING_HALF.z * 2;
+  const geometry = new THREE.ShapeGeometry(yardPavingShape, 16);
+  geometry.rotateX(-Math.PI / 2);
+  const position = geometry.attributes.position, uv = geometry.attributes.uv;
+  for (let i = 0; i < position.count; i++) {
+    uv.setXY(i, position.getX(i) / 2, -position.getZ(i) / 2);
+  }
   const map = pavingTexture();
-  map.repeat.set(W / 2.0, D / 2.0);
+  map.repeat.set(1, 1);
   const mat = pavingMaterial(map);
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, D), mat);
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(PAVING_POS.x, 0.004, PAVING_POS.z);
+  const mesh = new THREE.Mesh(geometry, mat);
+  mesh.position.set(PAVING_POS.x, 0.015, PAVING_POS.z);
   mesh.receiveShadow = true;
   return { mesh, mat };
 }
@@ -311,15 +341,17 @@ export function createWoodyard({ scene, origin = new THREE.Vector3(), yaw = 0, w
   const fire = campfire.group.position;
   let pileDirection = 1;
 
-  function placeByGate(origin, side) {
-    root.position.copy(origin);
-    root.rotation.y = Math.PI;
+  function placeByGate(center, side, yaw = -Math.PI / 2) {
+    root.rotation.y = yaw;
     pileDirection = side;
     paving.mesh.position.x = PAVING_POS.x * side;
     fire.x = FIRE_POS.x * side;
     // Площадка сдачи стоит у лица поленницы (PILE_POS.z + глубины), а не в центре плитняка: зеркалим её
-    // вместе с костром и мощением — иначе тропинка из paths.js ведёт в траву мимо кладки.
+    // вместе с костром и мощением.
     pad.mesh.position.x = PILE_POS.x * side;
+    const offset = new THREE.Vector3(paving.mesh.position.x, 0, paving.mesh.position.z)
+      .applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    root.position.set(center.x - offset.x, center.y, center.z - offset.z);
     root.updateMatrixWorld(true);
   }
 
