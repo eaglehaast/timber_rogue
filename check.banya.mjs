@@ -21,7 +21,8 @@ globalThis.fetch = async (path) => ({ json: async () => JSON.parse(await readFil
 
 const { planRiver } = await import('./src/river.js');
 const { shapeGround, groundGeometry, height } = await import('./src/terrain.js');
-const { planBanya, buildBanya, buildBanyaGround } = await import('./src/banya.js');
+const { makeGround } = await import('./src/grass.js');
+const { planBanya, buildBanya } = await import('./src/banya.js');
 const { planHouse } = await import('./src/house.js');
 const { planGas, gasPostMaterial } = await import('./src/gas.js');
 const { planPower, powerWireMaterial } = await import('./src/power.js');
@@ -40,7 +41,20 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const gas = planGas(house, atHouse, { fence: 12.5, gate: GATES.at });
   const power = planPower(house, atHouse, gas, { fence: 12.5, keep: [WICKET, GATES] });
   groundGeometry(40);
-  const ground = buildBanyaGround(river, { w: 40, d: 25 });
+  const grassBounds = (x, z) => Math.abs(x) <= 20 && z <= 12.5 && z >= river.brow(x);
+  const grassGround = makeGround(40, grassBounds);
+  assert.ok(grassGround.material.map, 'плоская текстура травы подключена');
+  assert.equal(grassGround.material.vertexColors, false, 'текстура земли не зависит от удалённой цветовой сетки');
+  assert.equal(grassGround.geometry.attributes.color, undefined);
+  assert.equal(grassGround.geometry.attributes.uv.count, grassGround.geometry.attributes.position.count);
+  const grassPositions = grassGround.geometry.attributes.position;
+  assert.ok(Math.min(...Array.from({ length: grassPositions.count }, (_, i) => grassPositions.getZ(i))) < -20,
+    'текстурная трава доходит за край заднего двора к реке');
+  for (let i = 0; i < grassPositions.count; i++) {
+    const x = grassPositions.getX(i), z = grassPositions.getZ(i);
+    assert.ok(Math.abs(x) <= 20.2, 'трава не выходит за боковые границы участка');
+    assert.ok(z >= river.brow(x) - 0.5 && z <= 12.7, 'трава покрывает склон до кромки, не выходя за участок');
+  }
   const banya = buildBanya(site, river, power, { plan: house, at: atHouse });
   const { start, along, across, length, top, width } = banya.deckPlan;
   const at = (distance, offset = 0) => start.clone().addScaledVector(along, distance).addScaledVector(across, offset);
@@ -56,13 +70,6 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const stairs = [2.05, 2.25, 2.45, 2.65, 2.85, 3.05].map((x) => banya.deck(...stairPoint(x)));
   assert.ok(stairs.every(Number.isFinite));
   assert.ok(stairs.every((y, i) => i === 0 || y <= stairs[i - 1]));
-  assert.ok(ground.geometry.attributes.position.count > 0);
-  assert.equal(ground.geometry.attributes.uv.count, ground.geometry.attributes.position.count);
-  const positions = ground.geometry.attributes.position;
-  for (let i = 0; i < positions.count; i++) {
-    assert.ok(Math.abs(positions.getX(i)) <= 20);
-    assert.ok(positions.getZ(i) <= -12.5);
-  }
   const posts = banya.powerLine.children.filter((mesh) => mesh.material === gasPostMaterial);
   const wires = banya.powerLine.children.filter((mesh) => mesh.material === powerWireMaterial);
   assert.ok(posts.length > 0);
@@ -80,6 +87,6 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
         `провод пересекает сруб: seed ${seed}, точка ${positions.getX(i)}, ${positions.getZ(i)}, дом ${atHouse.x}, ${atHouse.z}`);
     }
   }
-  for (const part of [ground, banya.group, banya.dock, banya.powerLine]) part.traverse((o) => o.geometry?.dispose());
+  for (const part of [grassGround, banya.group, banya.dock, banya.powerLine]) part.traverse((o) => o.geometry?.dispose());
 }
 console.log('banya checks ok');

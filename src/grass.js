@@ -11,7 +11,7 @@ import { groundGeometry, groundPatch, height } from './terrain.js';
 const GRASS_TILE = 2;
 const LUSH = 'vec3(0.72, 1.25, 0.22)'; // сочная зелень: во сколько раз каждый цвет против яркости пучка
 const [texture] = tiles(['assets/textures/grass-clover.jpg']);
-const material = soften(new THREE.MeshLambertMaterial({ map: texture, vertexColors: true }), {
+const material = soften(new THREE.MeshLambertMaterial({ map: texture }), {
   contrast: 0.85, saturation: 0.65, scales: [0.13, 0.5], low: [0.8, 0.84, 0.82], high: [0.98, 0.98, 0.95], cells: [5, 4],
 });
 
@@ -23,8 +23,11 @@ export function makeGround(size, bounds = null) {
   texture.repeat.set(size / GRASS_TILE, size / GRASS_TILE);
   texture.offset.set(Math.floor(Math.random() * 100), Math.floor(Math.random() * 100));
   const full = groundGeometry(size);
+  const keep = typeof bounds === 'function'
+    ? bounds
+    : (x, z) => Math.abs(x) <= bounds.w / 2 && Math.abs(z) <= bounds.d / 2;
   const geometry = bounds
-    ? groundPatch((x, z) => Math.abs(x) <= bounds.w / 2 && Math.abs(z) <= bounds.d / 2)
+    ? groundPatch(keep)
     : full;
   if (bounds) {
     const pos = geometry.attributes.position;
