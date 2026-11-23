@@ -59,6 +59,7 @@ const materials = [
   soften(new THREE.MeshLambertMaterial({ map: logMap }), { ...LOOK, cells: [5, 2] }),
   soften(new THREE.MeshLambertMaterial({ map: endMap }), LOOK),
 ];
+export const LOG_MATERIAL = materials[0];
 // Пакля — жгут в пазу между венцами снаружи: половина трубки радиуса CHINK.r, торчит из паза на CHINK.out.
 // Картинки — набор house-chinking.jpg (5 лент 2048 × 256 с общими краями), лента вдоль жгута — CHINK.tile метров.
 // Картинка темнее брёвен, а пакля в пазу видна светлыми волокнами — поэтому светлее в CHINK.tone раз.
@@ -219,6 +220,7 @@ export function buildHouse(plan) {
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
   const door = openings.find((o) => o.kind === 'door');
   const house = new THREE.Group().add(srub, chinks, boards, windows);
+  house.userData.roofShape = boards.userData.roofShape;
   if (!plan.noPorch) house.add(buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, tambour: plan.tambour, tulle: plan.windows.tulle, trim: plan.windows.paint }));
   if (plan.plinth === 'brick') {
     const brick = new THREE.Mesh(brickPlinth(w / 2 + R + (plan.plinthOut ?? 0), d / 2 + R + (plan.plinthOut ?? 0), rnd, plinth, plan.plinthCap), plinthBrick);

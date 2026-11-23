@@ -280,5 +280,28 @@ export function buildBoards(plan, { front, low, side, plinth, r, reach }) {
       }
     }
   }
-  return new THREE.Group().add(...gable.meshes(), ...roof.meshes(), ...drip.meshes(), ...cladding.meshes(), ...extras);
+  const boards = new THREE.Group().add(...gable.meshes(), ...roof.meshes(), ...drip.meshes(), ...cladding.meshes(), ...extras);
+  boards.userData.roofShape = { ridge, pitch, length, zEnd };
+  return boards;
+}
+
+// Продолжение тесовой крыши по той же плоскости: доски и конёк продолжают скат за фронтон.
+export function buildRoofExtension(plan, { ridge, pitch, length, zEnd }, endZ) {
+  const roof = new Planks(materials.roof), rnd = generator(plan.seed + 19);
+  const Xs = [-1, 1].map((s) => new THREE.Vector3(s * Math.cos(pitch), -Math.sin(pitch), 0));
+  const normals = [-1, 1].map((s) => new THREE.Vector3(s * Math.sin(pitch), Math.cos(pitch), 0));
+  for (let side = 0; side < 2; side++) {
+    const X = Xs[side], n = normals[side], Y = new THREE.Vector3(0, 0, 1);
+    for (let z0 = -zEnd; z0 > endZ; z0 -= ROOF_BOARD) {
+      const z1 = Math.max(endZ, z0 - ROOF_BOARD), o = new THREE.Vector3(0, ridge, 0).addScaledVector(n, ((Math.round((-z0 - zEnd) / ROOF_BOARD)) % 2) * 0.012);
+      roof.add([[0, z0], [length, z0], [length, z1], [0, z1]], { o, X, Y }, n, [1, 0], ROOF_BOARD, rnd);
+    }
+    if (plan.roof === 'tes') {
+      const o = new THREE.Vector3(0, ridge, 0).addScaledVector(n, 0.012 + T);
+      roof.add([[-0.02, endZ], [0.17, endZ], [0.17, -zEnd], [-0.02, -zEnd]], { o, X, Y }, n, [0, 1], 0.19, rnd);
+    }
+  }
+  const extension = new THREE.Group().add(...roof.meshes());
+  extension.name = 'banya-roof-extension';
+  return extension;
 }
