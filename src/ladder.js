@@ -3,6 +3,7 @@ import { FENCE_BOARD_MATERIAL } from './fence.js';
 
 export const LADDER_LENGTH = 2.2;
 export const LADDER_ANGLE = THREE.MathUtils.degToRad(15);
+export const LADDER_ATTACH_HEIGHT = LADDER_LENGTH * Math.cos(LADDER_ANGLE);
 export const LADDER_WIDTH = 0.42;
 export const LADDER_CLIMB_SPEED = 1.1;
 const RAIL = 0.075, RUNG = 0.065, STEP = 0.3;
@@ -27,7 +28,7 @@ export function buildLadder() {
 }
 
 export function findLadderPlacement(trees, position, direction, ground) {
-  const attachHeight = LADDER_LENGTH * Math.cos(LADDER_ANGLE);
+  const attachHeight = LADDER_ATTACH_HEIGHT;
   const forward = direction.clone().setY(0).normalize();
   const reach = LADDER_LENGTH * Math.sin(LADDER_ANGLE);
   for (let distance = 0.2; distance <= 3.2; distance += 0.04) {
@@ -36,7 +37,9 @@ export function findLadderPlacement(trees, position, direction, ground) {
       if (!tree.standing || tree.fall || tree.done || tree.top) continue;
       const localX = x - tree.base.x, localZ = z - tree.base.z;
       const localY = attachHeight;
-      for (const stem of tree.voxels.shape.stems) {
+      for (const [i, stem] of tree.voxels.shape.stems.entries()) {
+        if ((tree.standing & (1 << i)) === 0) continue;
+        if (Number.isFinite(tree.stumps?.[i]) && attachHeight <= tree.stumps[i]) continue;
         if (!stem.contains(localX, localY, localZ)) continue;
         const center = stem.center(localY);
         const dx = localX - center.x, dz = localZ - center.z;
@@ -56,7 +59,7 @@ export function findLadderPlacement(trees, position, direction, ground) {
         const up = new THREE.Vector3().copy(UP).multiplyScalar(Math.cos(LADDER_ANGLE))
           .addScaledVector(ladderForward, Math.sin(LADDER_ANGLE));
         return {
-          tree, base, forward: ladderForward, right, up,
+          tree, stem: i, base, forward: ladderForward, right, up,
           maxProgress: LADDER_LENGTH - 0.18,
         };
       }
