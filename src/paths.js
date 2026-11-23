@@ -1,23 +1,19 @@
 import * as THREE from 'three';
 import { generator, smoothNoise } from './random.js';
-import { tiles, soften } from './surface.js';
+import { tiles, soften, merge } from './surface.js';
 import { groundAt } from './terrain.js';
-import { axisRoute } from './route.js';
+import { planPathNetwork } from './route.js';
+import { pavingMaterial, pavingTexture } from './paving.js';
 
-// Две тропинки от пешеходной калитки во двор (Никита, 2026-11-21): одна — прямо к нижней ступени крыльца,
-// другая — в другую сторону, к краю широкой плотно вымощенной площадки у поленницы. Ширина — на одного
-// человека; плоский плитняк лежит в один-два ряда, край рваный, травяной; между расходящимися тропами
-// остаётся трава. Стиль — акварельный, как остальной двор: земля просвечивает в колее шагов вдоль оси.
-// Концы троп привязаны к фактическому положению крыльца и площадки в каждом варианте двора (их считает
-// house-view.js по плану дома и origin хоздвора). Ворота и калитка — разные объекты: тропы идут от калитки.
-const PATH = { half: 0.45, edge: 0.18, tread: 0.7, rows: 1, lift: 0.008 }; // м: полуширина, полоса края, квадратная плитка, рядов поперёк
+// Единая сеть от ворот к крыльцу, бане и хозплощадке; между неровными плитами остаются узкие травяные швы.
+const PATH = { half: 0.64, edge: 0.2, lift: 0.012 };
 const CELL = 0.05;                                       // м: клетка растра протоптанного
-const EDGE_TILE = 16, SLAB_TILE = 1.6;                   // м: длина маски края; сторона плитки под камень
-const LIFT = 0.004;                                      // м над настилом тропы, чтобы камни не мерцали с ним
+const EDGE_TILE = 16, SLAB_TILE = 2.0;                   // м: длина маски края; масштаб плитняка под хозблоком
+const SLAB_THICKNESS = 0.055, STONE_LIFT = 0.018, STONE_STEP = 0.74, STONE_ROWS = 2;
 
 // Пути — полные: device.texture() сам подставляет half/ для игры; без префикса получался 404 и загрузка двора
 // обрывалась на «212/212» (текстура грузится асинхронно, ошибка не бросается в код — просто висело ожидание).
-const [edgeTex, slabTex] = tiles(['assets/textures/road-edge.png', 'assets/textures/yard/timber_yard_paving_01.jpg']);
+const [edgeTex] = tiles(['assets/textures/road-edge.png']);
 edgeTex.colorSpace = THREE.NoColorSpace;                 // маска — доли, а не цвет
 edgeTex.channel = 1;                                     // вторые координаты: вдоль ленты и поперёк неё
 edgeTex.wrapT = THREE.ClampToEdgeWrapping;               // внутри полотна — нижний ряд маски (земля), за ним — верхний (трава)
@@ -25,21 +21,13 @@ const flat = { transparent: true, depthWrite: false, polygonOffset: true, polygo
 const look = { contrast: 0.9, saturation: 0.8, scales: [0.13, 0.5], low: [0.92, 0.92, 0.9], high: [1.02, 1.02, 1], cells: [4, 2] };
 const mud = soften(new THREE.MeshLambertMaterial({ map: edgeTex.clone(), alphaMap: edgeTex, vertexColors: true, ...flat }), look);
 mud.map.colorSpace = THREE.SRGBColorSpace;               // дно тропы — грунт той же картинки, что колея улицы
-const stone = soften(new THREE.MeshLambertMaterial({ map: slabTex, color: 0xffffff }), {
-  contrast: 0.88, saturation: 0.75, scales: [0.15, 0.5], low: [0.92, 0.9, 0.86], high: [1.06, 1.05, 1.02], cells: [1, 1],
-});
+const stone = pavingMaterial(pavingTexture());
 
 // Гладкий шум от rnd: s — ячейка, h — шаг сетки.
 const noise = (rnd, h = 1.3) => {
   const w = smoothNoise(rnd);
   return (s) => w(s / h, 7.3);
 };
-
-// Путь от a до b через равные промежутки, с лёгким вилянием поперёк; последние keep точек прижаты к цели,
-// чтобы конец тропы читался там, где стоит крыльцо или лежит край площадок.
-function walk(from, to, rnd, keep = 4) {
-  return axisRoute(from, to, keep === 'pad' ? 'x' : 'z');
-}
 
 // Лента по земле вдоль пути: полуширина дышит (рваный край), mask(i) — насколько тропа видна (у конца — в ноль).
 // Тот же приём, что у колеи улицы (road.js): альфа-маска road-edge рвано тает в траву по полосе edge.
@@ -75,81 +63,85 @@ function ribbon(points, surface, mask = () => 1) {
   return geometry;
 }
 
-// Плоские плиты вдоль тропы в один-два ряда поперёк, с зазором до травяного края: швы темнее, посадка неровная.
-function slabs(points, surface, rnd, mask = () => 1) {
-  const parts = [];
-  let s = 0;
-  for (let i = 1; i < points.length; i++) s += Math.hypot(points[i].x - points[i - 1].x, points[i].z - points[i - 1].z);
-  const step = PATH.tread;
-  for (let along = 0.2; along < s - 0.1; along += step) {
-    // Точка пути на расстоянии along от начала.
-    let d = 0, i = 0;
-    while (i < points.length - 1 && d + Math.hypot(points[i + 1].x - points[i].x, points[i + 1].z - points[i].z) < along) {
-      d += Math.hypot(points[i + 1].x - points[i].x, points[i + 1].z - points[i].z), i++;
-    }
-    if (i >= points.length - 1) i = points.length - 2;
-    const segmentLength = Math.hypot(points[i + 1].x - points[i].x, points[i + 1].z - points[i].z);
-    const u = segmentLength > 1e-6 ? Math.min(1, (along - d) / segmentLength) : 1;
-    const a = points[Math.max(0, i - 1)], b = points[Math.min(points.length - 1, i + 1)];
-    const t = new THREE.Vector2(b.x - a.x, b.z - a.z).normalize(), m = new THREE.Vector2(-t.y, t.x);
-    const cx = THREE.MathUtils.lerp(points[i].x, points[i + 1].x, u), cz = THREE.MathUtils.lerp(points[i].z, points[i + 1].z, u);
-    const seen = mask(Math.min(i, points.length - 1));
-    const rows = PATH.rows;
-    for (let r = 0; r < rows; r++) {
-      const across = rows === 1 ? 0 : (r / (rows - 1) - 0.5) * 2 * (PATH.half - 0.28);
-      const w = PATH.tread, l = PATH.tread;
-      const x = cx + m.x * (across + (rnd() - 0.5) * 0.06), z = cz + m.y * (across + (rnd() - 0.5) * 0.06);
-      const y = surface(x, z) + LIFT - rnd() * 0.006;
-      const g = new THREE.BoxGeometry(w, 0.045, l).rotateY(Math.atan2(m.y, m.x));
-      const uv = g.attributes.uv, du = rnd() * 4, dv = rnd() * 4;
-      for (let k = 0; k < uv.count; k++) uv.setXY(k, du + uv.getX(k) * w / SLAB_TILE, dv + uv.getY(k) * l / SLAB_TILE);
-      g.translate(x, y, z);
-      const col = g.attributes.color ?? new THREE.Float32BufferAttribute(new Float32Array(uv.count * 4).fill(1), 4);
-      for (let k = 0; k < col.count; k++) col.setW(k, seen);
-      g.setAttribute('color', col);
-      parts.push(g);
-    }
+function flagstone(width, length, rnd) {
+  const outline = [
+    [-width * (0.5 - rnd() * 0.08), -length / 2],
+    [width * (0.5 - rnd() * 0.12), -length * (0.5 - rnd() * 0.1)],
+    [width / 2, -length * (0.5 - rnd() * 0.2)],
+    [width * (0.5 - rnd() * 0.07), length * (0.5 - rnd() * 0.13)],
+    [width * (0.5 - rnd() * 0.14), length / 2],
+    [-width * (0.5 - rnd() * 0.12), length / 2],
+    [-width / 2, length * (0.5 - rnd() * 0.16)],
+    [-width / 2, -length * (0.5 - rnd() * 0.18)],
+  ];
+  const shape = new THREE.Shape();
+  shape.moveTo(...outline[0]);
+  outline.slice(1).forEach((point) => shape.lineTo(...point));
+  shape.closePath();
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: SLAB_THICKNESS, bevelEnabled: false });
+  geometry.rotateX(-Math.PI / 2);
+  const uv = geometry.attributes.uv, position = geometry.attributes.position;
+  const du = rnd() * 2, dv = rnd() * 2;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, du + position.getX(i) / SLAB_TILE, dv - position.getZ(i) / SLAB_TILE);
   }
-  return mergeGeometries(parts);
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
-function mergeGeometries(parts) {
-  const count = (name) => parts.reduce((sum, g) => sum + g.attributes[name].count, 0);
-  const position = new Float32Array(count('position') * 3), normal = new Float32Array(count('position') * 3);
-  const uv = new Float32Array(count('position') * 2), color = new Float32Array(count('position') * 4);
-  const index = new Uint32Array(parts.reduce((sum, g) => sum + g.index.count, 0));
-  let vo = 0, io = 0;
-  for (const g of parts) {
-    position.set(g.attributes.position.array, vo * 3);
-    normal.set(g.attributes.normal.array, vo * 3);
-    uv.set(g.attributes.uv.array, vo * 2);
-    color.set(g.attributes.color.array, vo * 4);
-    const gi = g.index;
-    for (let i = 0; i < gi.count; i++) index[io + i] = gi.getX(i) + vo;
-    vo += g.attributes.position.count, io += gi.count;
+function sample(points, distance) {
+  let along = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const length = Math.hypot(b.x - a.x, b.z - a.z);
+    if (along + length >= distance) {
+      const t = length > 1e-6 ? (distance - along) / length : 0;
+      const before = points[Math.max(0, i - 2)], after = points[Math.min(points.length - 1, i + 1)];
+      const tangent = new THREE.Vector2(after.x - before.x, after.z - before.z).normalize();
+      return {
+        x: THREE.MathUtils.lerp(a.x, b.x, t),
+        z: THREE.MathUtils.lerp(a.z, b.z, t),
+        tangent,
+      };
+    }
+    along += length;
   }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
-  geometry.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
-  geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  geometry.setAttribute('color', new THREE.BufferAttribute(color, 4));
-  geometry.setIndex(new THREE.BufferAttribute(index, 1));
+  const last = points.at(-1), before = points.at(-2);
+  return { ...last, tangent: new THREE.Vector2(last.x - before.x, last.z - before.z).normalize() };
+}
+
+// Два ряда неровных плит со смещёнными швами; тот же камень и масштаб, что у хозплощадки.
+function slabs(points, surface, rnd) {
+  const parts = [];
+  const length = points.slice(1).reduce((total, point, i) =>
+    total + Math.hypot(point.x - points[i].x, point.z - points[i].z), 0);
+  for (let row = 0; row < STONE_ROWS; row++) {
+    let along = 0.12 + row * STONE_STEP / 2;
+    while (along < length - 0.12) {
+      const { x, z, tangent } = sample(points, along);
+      const across = (row - (STONE_ROWS - 1) / 2) * 0.52 + (rnd() - 0.5) * 0.05;
+      const normal = new THREE.Vector2(-tangent.y, tangent.x);
+      const cx = x + normal.x * across, cz = z + normal.y * across;
+      const geometry = flagstone(0.44 + rnd() * 0.1, 0.59 + rnd() * 0.15, rnd);
+      geometry.rotateY(Math.atan2(tangent.x, tangent.y) + (rnd() - 0.5) * 0.12);
+      geometry.translate(cx, surface(cx, cz) + STONE_LIFT - SLAB_THICKNESS, cz);
+      parts.push(geometry);
+      along += STONE_STEP + (rnd() - 0.5) * 0.12;
+    }
+  }
+  if (!parts.length) return new THREE.BufferGeometry();
+  const geometry = merge(parts);
   for (const g of parts) g.dispose();
   return geometry;
 }
 
-// Что где лежит: from — точка калитки внутри забора, porch — низкая ступень крыльца, pad — ближний к калитке
-// угол мощёной площадки у поленницы, gate — середина ворот (тропы их обходят). Строить после shapeGround:
-// лента и камни встают по рельефу. Возвращает trodden и grass для травы world.js и build() для сцены.
-export function planPaths({ seed, from, porch, pad, gate }) {
-  const rnd = generator(seed + 71);
+// Строить после shapeGround: единый ствол от ворот расходится к дому, бане и хозплощадке.
+export function planPaths({ seed, gate, porch, pad, bath, house }) {
   const surface = (x, z) => groundAt(x, z) + PATH.lift;
-  const avoid = (p) => Math.min(1, Math.hypot(p.x - gate.x, p.z - gate.z) / 1.4);
   const near = (x, z, p, r) => Math.hypot(x - p.x, z - p.z) < r;
-  const paths = [walk(from, porch, rnd), walk(from, { x: pad.x, z: pad.z }, rnd, 'pad')].map((points) => ({
-    points,
-    // У самой цели лента сходит на нет: дорожка стыкуется со ступенью и с краем площадок без обрыва.
-    mask: (i) => avoid(points[i]) * (1 - THREE.MathUtils.smoothstep(i / (points.length - 1), 0.9, 1)),
+  const network = planPathNetwork({ gate, porch, pad, bath, house });
+  const paths = network.routes.map(({ points, destination }) => ({
+    destination, points, mask: () => 1,
   }));
   // Растр протоптанного вокруг троп: в колее шагов (у оси) трава не растёт вовсе, у края — низкая.
   const all = paths.flatMap((p) => p.points);
@@ -179,25 +171,26 @@ export function planPaths({ seed, from, porch, pad, gate }) {
     const i = Math.floor(u), j = Math.floor(v), fu = u - i, fv = v - j, k = j * nx + i;
     return (layer[k] * (1 - fu) + layer[k + 1] * fu) * (1 - fv) + (layer[k + nx] * (1 - fu) + layer[k + nx + 1] * fu) * fv;
   };
+  const wearNoise = noise(generator(5), 0.35);
   const s = THREE.MathUtils.smoothstep;
   return {
     paths,
+    junction: network.junction,
     // Трава: на самой тропе её нет, по рваному краю — режется шумом, между расходящимися тропами — остаётся.
     grass: (x, z) => {
       const d = at(x, z);
-      if (near(x, z, porch, 1.1) || near(x, z, pad, 0.9)) return 1;
-      return 1 - s(d, 0.55, 0.95) * (0.6 + 0.4 * noise(generator(5), 0.35)(x + z));
+      if (near(x, z, porch, 1.1) || near(x, z, pad, 0.9) || near(x, z, bath, 0.9)) return 1;
+      return 1 - s(d, 0.55, 0.95) * (0.6 + 0.4 * wearNoise(x + z));
     },
     // Топтанье: высокая трава на тропе не растёт, у края — низкая (там, где d чуть меньше единицы, — куртины).
-    trodden: (x, z) => (near(x, z, porch, 1.0) || near(x, z, pad, 0.8) ? 0 : s(at(x, z), 0.15, 0.8)),
+    trodden: (x, z) => (near(x, z, porch, 1.0) || near(x, z, pad, 0.8) || near(x, z, bath, 0.8) ? 0 : s(at(x, z), 0.15, 0.8)),
     build() {
       const group = new THREE.Group();
       paths.forEach(({ points, mask }, k) => {
         const mesh = new THREE.Mesh(ribbon(points, surface, mask), mud);
         mesh.receiveShadow = true;
         mesh.renderOrder = 2;
-        const stones = new THREE.Mesh(slabs(points, surface, generator(seed + 91 + k), mask), stone.clone());
-        stones.material.vertexColors = true;
+        const stones = new THREE.Mesh(slabs(points, surface, generator(seed + 91 + k)), stone);
         stones.receiveShadow = true;
         stones.renderOrder = 3;
         group.add(mesh, stones);

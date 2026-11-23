@@ -17,7 +17,7 @@ import { blow, stepWind } from './wind.js';
 import { EYE, forwardOf } from './player.js';
 import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
-import { createWoodyard, PAVING_POS, PAVING_HALF, DROP_PAD, PAD_AT } from './campfire.js';
+import { createWoodyard, PAVING_POS, PAVING_HALF } from './campfire.js';
 import { planPaths } from './paths.js';
 
 // Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
@@ -67,9 +67,7 @@ function rebuild(seed) {
   at.y = height(at.x, at.z);
   const woodOrigin = new THREE.Vector3(woodPad.x + PAVING_POS.x * door, height(woodPad.x, woodPad.z), woodPad.z + PAVING_POS.z);
   game.placeWoodyard(woodOrigin, door);
-  // Две тропинки от пешеходной калитки (paths.js). Концы привязаны к фактическим объектам этого варианта двора:
-  // нижняя ступень крыльца — по плану дома (porch.js: лестница во всю ширину площадки без тамбура), край
-  // площадки у поленницы — мировой ближний к калитке угол плотного плитняка (root хоздвора повёрнут на π).
+  // Узлы сети привязаны к нижней ступени крыльца, краю плитняка у поленницы и нижней ступени бани.
   // Стена с дверью — боковая (left/right): её лицо стоит по X (walls.right.at = +w/2), проём отсчитывается
   // вдоль стены по Z (house.js: turn(s,x,h) = (x+wall.at, h, s)). Площадка без тамбура — глубиной 1.1 м,
   // лестница идёт от неё наружу проступями по 0.3 м (porch.js); нижняя ступень — qLow = L+(steps-1)*run.
@@ -82,15 +80,16 @@ function rebuild(seed) {
   // стены по Z (house.js). Для смотрящего на дверь снаружи «вправо» — ось s = (0,0,-side); мировая точка
   // двери = at.z - side*door.at, а side = door (wall 'right' → +1). Наружу от стены — тот же door.
   const porch = { x: at.x + door * (plan.w / 2 + R + qLow + 0.15), z: at.z - door * doorOpening.at };
-  // Root хоздвора повёрнут на π (placeByGate), поэтому локальные оси площадки в мире перевёрнуты:
-  // мировая точка центра pad = origin − PAD_AT. Стык тропы — передний (ближний к забору у дороги, +z)
-  // край площадки по её середине: там кладка визуально кончается, и дальше — сортировка не идёт.
-  const padNear = { x: woodOrigin.x - PAD_AT.x, z: woodOrigin.z - (PAD_AT.z + DROP_PAD.z) };
-  const paths = planPaths({ seed, from: { x: WICKET.at, z: fence - 0.5 }, porch, pad: padNear, gate: { x: GATES.at, z: fence } });
+  // Общая площадка хоздвора центрирована в woodPad; +z — её ближний к воротам край.
+  const padNear = { x: woodPad.x, z: woodPad.z + PAVING_HALF.z };
   const pier = planPier(river, seed);
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
   const banya = buildBanya(banyaSite, river, power, { plan, at });
+  const paths = planPaths({
+    seed, gate: { x: GATES.at, z: fence - 0.18 }, porch, pad: padNear, bath: banya.approach,
+    house: { x: pad.x, z: pad.z, w: pad.w, d: pad.d },
+  });
   house.position.set(at.x, at.y, at.z);
   // Вертикальные пучки растут только во дворе, от улицы до реки.
   const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
