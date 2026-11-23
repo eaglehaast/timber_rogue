@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import * as THREE from 'three';
 
 class ImageMock {
   addEventListener(name, fn) { this[`on${name}`] = fn; }
@@ -24,6 +25,7 @@ const { shapeGround, groundGeometry, height } = await import('./src/terrain.js')
 const { makeGround } = await import('./src/grass.js');
 const { planBanya, buildBanya } = await import('./src/banya.js');
 const { planHouse } = await import('./src/house.js');
+const { PANE } = await import('./src/window.js');
 const { planGas, gasPostMaterial } = await import('./src/gas.js');
 const { planPower, powerWireMaterial } = await import('./src/power.js');
 const { generator } = await import('./src/random.js');
@@ -41,7 +43,7 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const gas = planGas(house, atHouse, { fence: 12.5, gate: GATES.at });
   const power = planPower(house, atHouse, gas, { fence: 12.5, keep: [WICKET, GATES] });
   groundGeometry(40);
-  const grassBounds = (x, z) => Math.abs(x) <= 20 && z <= 12.5 && z >= river.brow(x);
+  const grassBounds = (x, z) => Math.abs(x) <= 20 && z <= 12.5 && z >= river.shore(x) - 0.15;
   const grassGround = makeGround(40, grassBounds);
   assert.ok(grassGround.material.map, 'плоская текстура травы подключена');
   assert.equal(grassGround.material.vertexColors, false, 'текстура земли не зависит от удалённой цветовой сетки');
@@ -53,16 +55,35 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   for (let i = 0; i < grassPositions.count; i++) {
     const x = grassPositions.getX(i), z = grassPositions.getZ(i);
     assert.ok(Math.abs(x) <= 20.2, 'трава не выходит за боковые границы участка');
-    assert.ok(z >= river.brow(x) - 0.5 && z <= 12.7, 'трава покрывает склон до кромки, не выходя за участок');
+    assert.ok(z >= river.shore(x) - 0.4 && z <= 12.7, 'трава доходит до уреза, не выходя за участок');
   }
   const banya = buildBanya(site, river, power, { plan: house, at: atHouse });
+  const bathWindows = banya.plan.openings.filter((opening) => opening.kind === 'window');
+  assert.equal(banya.plan.plinth, 'brick', 'баня стоит на кирпичном цоколе без деревянной обшивки');
+  assert.equal(banya.plan.curtains, false, 'в банных окнах нет занавесок');
+  assert.ok(bathWindows.every((opening) => opening.width < PANE[0] && opening.top - opening.bottom < PANE[1]), 'банные окна меньше окон дома');
+  assert.ok(banya.plan.windowBacking !== undefined && banya.plan.backingMargin > 0.24, 'обсада закрывает щели от пропилов по венцам');
+  assert.ok(banya.plan.plinthHeight > 0.5 && banya.plan.plinthOut > 0.02 && banya.plan.plinthCap,
+    'кирпичный цоколь перекрывает стык со срубом без деревянной прокладки');
+  const plinthGeometry = banya.group.children[4].geometry;
+  const plinthPositions = plinthGeometry.getAttribute('position'), plinthNormals = plinthGeometry.getAttribute('normal');
+  const capVertices = Array.from({ length: plinthPositions.count }, (_, i) => i)
+    .filter((i) => plinthNormals.getY(i) > 0.99 && Math.abs(plinthPositions.getY(i) - banya.plan.plinthHeight) < 1e-4);
+  assert.equal(capVertices.length, 4, 'кирпичная крышка цоколя закрывает верхний стык');
+  const bathDoor = banya.group.getObjectByName('banya-door');
+  bathDoor.updateMatrixWorld(true);
+  const doorBounds = new THREE.Box3().setFromObject(bathDoor);
+  assert.ok(doorBounds.max.y - doorBounds.min.y > 1.7, 'дверное полотно и обсада закрывают проём');
+  const dockRails = banya.group.getObjectByName('banya-dock-rails');
+  assert.ok(dockRails.children.length >= 3, 'у настила и боковой лестницы есть перила со стойками');
   const { start, along, across, length, top, width } = banya.deckPlan;
+  assert.ok(length < 4.5 && site.z - river.brow(site.x) < 3, 'баня придвинута к берегу, настил стал короче');
   const at = (distance, offset = 0) => start.clone().addScaledVector(along, distance).addScaledVector(across, offset);
   const end = at(length - 0.05), middle = at(length / 2);
   assert.ok(end.y < river.shore(end.x), 'настил выходит к воде');
   assert.ok(top > river.level(end.x), 'настил выше воды');
   assert.equal(banya.deck(middle.x, middle.y), top);
-  assert.equal(banya.deck(...at(length / 2, width / 2 + 0.3).toArray()), -Infinity);
+  assert.equal(banya.deck(...at(length / 2, -width / 2 - 0.3).toArray()), -Infinity);
   assert.ok(banya.blocks(site.x, site.z));
   assert.ok(!banya.blocks(middle.x, middle.y));
   const c = Math.cos(site.angle), s = Math.sin(site.angle), stairZ = -2 - 0.13 - 0.8;

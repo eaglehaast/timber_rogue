@@ -67,20 +67,20 @@ export class Faces {
 
 // Окна дома. walls — как в house.js (along, at); base — высота, от которой считаются низ и верх проёмов;
 // out — плоскость наличника от оси стены наружу (чуть впереди брёвен), проём картинки совпадает с проёмом окна.
-export function buildWindows({ openings, windows: { pattern, paint, tulle }, plainWindows = false }, walls, { base, out }) {
-  const trims = new Faces(), sash = new Faces(), glass = new Faces(), tulles = new Faces();
+export function buildWindows({ openings, windows: { pattern, paint, tulle }, plainWindows = false, curtains = true, sashColor, windowBacking, backingMargin = 0 }, walls, { base, out }) {
+  const trims = new Faces(), sash = new Faces(), glass = new Faces(), tulles = new Faces(), backing = new Faces();
   // Пиксель картинки → место на окне (a вправо от середины проёма, y вверх от его низа) и в атласе.
-  const place = (x, y) => [m(x - (OX0 + OX1) / 2, 0), m(OY1 - y, 1)];
   const texel = (x, y) => [(pattern + x / KIT.px[0]) / COUNT, 1 - y / KIT.px[1]];
   // Силуэт рамы: точки и нормали наружу; обход картинки (y вниз) мог идти в любую сторону — узнаём по площади.
   const flat = KIT.outlines[pattern], outline = [];
   for (let i = 0; i < flat.length; i += 2) outline.push([flat[i], flat[i + 1]]);
   const turn = Math.sign(outline.reduce((sum, [x, y], i) => { const [x2, y2] = outline[(i + 1) % outline.length]; return sum + x * y2 - x2 * y; }, 0));
-  const [w, h] = PANE;
   const lining = new Faces(), edges = new Faces();
   for (const o of openings) {
     if (o.kind !== 'window') continue;
     const wall = walls[o.wall], side = Math.sign(wall.at);
+    const w = o.width ?? PANE[0], h = o.top - o.bottom;
+    const place = (x, y) => [m(x - (OX0 + OX1) / 2, 0) * (w / PANE[0]), m(OY1 - y, 1) * (h / PANE[1])];
     // Середина низа проёма на оси стены; наружу n, вправо s (для того, кто смотрит на стену снаружи), вверх.
     // Точка окна: a — вправо от середины, y — вверх от низа проёма, d — внутрь от плоскости наличника.
     const c = wall.along === 'x' ? [o.at, base + o.bottom, wall.at] : [wall.at, base + o.bottom, o.at];
@@ -107,7 +107,8 @@ export function buildWindows({ openings, windows: { pattern, paint, tulle }, pla
     lining.face([at(w / 2, 0, 0), at(w / 2, h, 0), at(w / 2, h, TULLE), at(w / 2, 0, TULLE)], inward(s));
     lining.face([at(-w / 2, 0, 0), at(w / 2, 0, 0), at(w / 2, 0, TULLE), at(-w / 2, 0, TULLE)], [0, 1, 0]);
     lining.face([at(-w / 2, h, 0), at(w / 2, h, 0), at(w / 2, h, TULLE), at(-w / 2, h, TULLE)], [0, -1, 0]);
-    rect(tulles, -w / 2, w / 2, 0, h, TULLE, [[tulle / TULLES, 0], [(tulle + 1) / TULLES, 0], [(tulle + 1) / TULLES, 1], [tulle / TULLES, 1]]);
+    if (curtains) rect(tulles, -w / 2, w / 2, 0, h, TULLE, [[tulle / TULLES, 0], [(tulle + 1) / TULLES, 0], [(tulle + 1) / TULLES, 1], [tulle / TULLES, 1]]);
+    if (windowBacking !== undefined) rect(backing, -w / 2 - LINING, w / 2 + LINING, -backingMargin, h + backingMargin, TULLE + 0.01);
     rect(glass, -w / 2, w / 2, 0, h, GLASS);
     // Брус переплёта — коробка от a0 до a1 и от y0 до y1; задняя грань не видна.
     const bar = (a0, a1, y0, y1) => {
@@ -125,6 +126,11 @@ export function buildWindows({ openings, windows: { pattern, paint, tulle }, pla
     bar(-M / 2, M / 2, B, h - B);
     bar(-w / 2 + B, w / 2 - B, T * h - M / 2, T * h + M / 2);
   }
-  return new THREE.Group().add(trims.mesh(trimMaterials[paint]), edges.mesh(edgeMaterials[paint]), lining.mesh(liningMaterials[paint]),
-    sash.mesh(sashMaterial), tulles.mesh(tulleMaterial), Object.assign(glass.mesh(glassMaterial), { castShadow: false }));
+  const sashFinish = sashColor === undefined ? sashMaterial : new THREE.MeshLambertMaterial({ color: sashColor });
+  const liningFinish = sashColor === undefined ? liningMaterials[paint] : new THREE.MeshLambertMaterial({ color: new THREE.Color(sashColor).multiplyScalar(0.7) });
+  return new THREE.Group().add(trims.mesh(trimMaterials[paint]), edges.mesh(edgeMaterials[paint]),
+    sash.mesh(sashFinish),
+    lining.mesh(liningFinish),
+    ...(windowBacking === undefined ? [] : [backing.mesh(new THREE.MeshLambertMaterial({ color: windowBacking }))]),
+    ...(curtains ? [tulles.mesh(tulleMaterial)] : []), Object.assign(glass.mesh(glassMaterial), { castShadow: false }));
 }

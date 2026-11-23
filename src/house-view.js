@@ -97,7 +97,7 @@ function rebuild(seed) {
   // Двор — между боковыми заборами, от улицы до реки.
   const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
   const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.shore(x) ? 1 : 0);
-  const grassBounds = (x, z) => Math.abs(x) <= YARD.w / 2 && z <= fence && z >= river.brow(x);
+  const grassBounds = (x, z) => Math.abs(x) <= YARD.w / 2 && z <= fence && z >= river.shore(x) - 0.15;
   const grass = (x, z) => {
     if (inside(x, z, pad, pad.w, pad.d) || inside(x, z, woodPad, woodPad.w, woodPad.d) || banya.blocks(x, z) || banya.deck(x, z) > -Infinity || pier.deck(x, z) > -Infinity || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
     return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * paths.grass(x, z) * (1 - field.cover(x, z));

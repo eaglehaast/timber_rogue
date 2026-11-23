@@ -212,31 +212,32 @@ export function buildHouse(plan) {
   const chinks = new THREE.Mesh(chinkGeometry, chinkMaterial);
   chinks.receiveShadow = true;
 
+  const plinth = plan.plinthHeight ?? PLINTH;
   const top = PLINTH + 2 * R + (courses - 1) * COURSE; // верх боковых стен; фасадные ниже на полбревна
-  const boards = buildBoards(plan, { front: top - COURSE / 2, low: top - COURSE / 2 - plan.knee * COURSE, side: top, plinth: PLINTH, r: R, reach: w / 2 + OVERHANG });
+  const boards = buildBoards(plan, { front: top - COURSE / 2, low: top - COURSE / 2 - plan.knee * COURSE, side: top, plinth, r: R, reach: w / 2 + OVERHANG });
   // Наличник — пластина чуть впереди самых толстых брёвен (радиус до 1,08 R и неровность обвода до 4 %).
   const windows = buildWindows(plan, walls, { base: PLINTH, out: 1.13 * R + 0.005 });
   const door = openings.find((o) => o.kind === 'door');
   const house = new THREE.Group().add(srub, chinks, boards, windows);
   if (!plan.noPorch) house.add(buildPorch(seed, door, walls[door.wall], { base: PLINTH, face: R, tambour: plan.tambour, tulle: plan.windows.tulle, trim: plan.windows.paint }));
   if (plan.plinth === 'brick') {
-    const brick = new THREE.Mesh(brickPlinth(w / 2 + R, d / 2 + R, rnd), plinthBrick);
+    const brick = new THREE.Mesh(brickPlinth(w / 2 + R + (plan.plinthOut ?? 0), d / 2 + R + (plan.plinthOut ?? 0), rnd, plinth, plan.plinthCap), plinthBrick);
     brick.castShadow = brick.receiveShadow = true;
     house.add(brick);
   }
   return house;
 }
 
-// Кирпичный цоколь с полуразмерами hx, hz: четыре стенки от SINK под землёй до верха. Кирпич ложится в метрах
-// обхода — на углах ряды не рвутся; к земле темнее (цвет вершин). Крышки нет: сверху лежат брёвна.
-function brickPlinth(hx, hz, rnd) {
+// Кирпичный цоколь с полуразмерами hx, hz: стенки от SINK под землёй до верха. Кирпич ложится в метрах
+// обхода — на углах ряды не рвутся; к земле темнее (цвет вершин). cap закрывает стык у сруба.
+function brickPlinth(hx, hz, rnd, top = PLINTH, cap = false) {
   const corners = [[-hx, -hz], [hx, -hz], [hx, hz], [-hx, hz]];
   const pos = [], normal = [], uv = [], color = [], index = [];
   let u = rnd() * 10;
   corners.forEach(([ax, az], k) => {
     const [bx, bz] = corners[(k + 1) % 4], length = Math.hypot(bx - ax, bz - az), start = pos.length / 3;
     for (const [x, z, along] of [[ax, az, 0], [bx, bz, length]]) {
-      for (const y of [-SINK, PLINTH]) {
+      for (const y of [-SINK, top]) {
         const damp = y < 0 ? DAMP : 1;
         pos.push(x, y, z); normal.push((bz - az) / length, 0, -(bx - ax) / length); color.push(damp, damp, damp);
         uv.push((u + along) / BRICK_TILE[0], y / BRICK_TILE[1]);
@@ -245,6 +246,14 @@ function brickPlinth(hx, hz, rnd) {
     index.push(start, start + 1, start + 2, start + 1, start + 3, start + 2);
     u += length;
   });
+  if (cap) {
+    const start = pos.length / 3;
+    for (const [x, z] of [[-hx, -hz], [-hx, hz], [hx, hz], [hx, -hz]]) {
+      pos.push(x, top, z); normal.push(0, 1, 0); color.push(0.82, 0.82, 0.82);
+      uv.push(x / BRICK_TILE[0], z / BRICK_TILE[1]);
+    }
+    index.push(start, start + 1, start + 2, start, start + 2, start + 3);
+  }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normal, 3));
