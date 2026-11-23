@@ -5,6 +5,7 @@ import { decal, tiles, soften } from './surface.js';
 import { classifyLimbBody } from './wood-handling.js';
 import { Limb } from './limbs.js';
 import { generator } from './random.js';
+import { pavingMaterial, pavingTexture } from './paving.js';
 
 export { classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './wood-handling.js';
 export const PAVING_POS = new THREE.Vector3(-1.6, 0, -2.1), PAVING_HALF = { x: 6.6, z: 2.15 };
@@ -18,15 +19,12 @@ export const DROP_PAD = { x: 2.1, z: 1.0 };
 // Центр площадки приёмки в локальных координатах хоздвора (root повёрнут на π: x там зеркалится стороной door).
 export const PAD_AT = { x: PILE_POS.x, z: PILE_POS.z + PILE_SIZE.d / 2 + DROP_PAD.z + 0.15 };
 // Картинку плитника грузим сами: makeDropPad вызывается и до списка общих текстур модуля.
-const pavingPhoto = tiles(['assets/textures/yard/timber_yard_paving_01.jpg'])[0];
 // Площадка у поленницы — из той же картинки плитняка, но в два раза мельче: с высоты глаз её край
 // читается по самой кладке — здесь место для сдачи дров, дальше — просто дорожка.
 export function makeDropPad() {
-  const map = pavingPhoto.clone();
+  const map = pavingTexture();
   map.repeat.set(DROP_PAD.x * 2 / 1.0, DROP_PAD.z * 2 / 1.0);
-  const mat = soften(new THREE.MeshLambertMaterial({ map, color: 0xffffff }), {
-    contrast: 0.88, saturation: 0.75, scales: [0.15, 0.5], low: [0.9, 0.88, 0.84], high: [1.05, 1.04, 1.0], cells: [1, 1],
-  });
+  const mat = pavingMaterial(map);
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(DROP_PAD.x * 2, DROP_PAD.z * 2), mat);
   mesh.rotation.x = -Math.PI / 2;
   // Ближе к забору — калитка и подход; полено лежит у лица рамки со стороны двора.
@@ -46,13 +44,12 @@ export function blocksYard(local, piles, fire, radius = BODY_RADIUS) {
     && Math.abs(local.z - pile.pos.z) < PILE_SIZE.d / 2 + radius);
 }
 
-const [ash, flames, paint, heat, ashCrust, pavingTex, fenceBoardMap] = tiles([
+const [ash, flames, paint, heat, ashCrust, fenceBoardMap] = tiles([
   'assets/textures/yard/campfire-ground-ash.webp',
   'assets/textures/yard/timber_yard_flames.png',
   'assets/textures/yard/coals-paint.webp',
   'assets/textures/yard/coals-heat.png',
   'assets/textures/yard/coals-ash.webp',
-  'assets/textures/yard/timber_yard_paving_01.jpg',
   'assets/textures/fence-board-1.jpg',
 ]);
 ash.wrapS = ash.wrapT = flames.wrapS = flames.wrapT = THREE.ClampToEdgeWrapping;
@@ -82,11 +79,9 @@ export function makeBoardBox(sx, sy, sz) {
 
 export function makeYardPaving() {
   const W = PAVING_HALF.x * 2, D = PAVING_HALF.z * 2;
-  const map = pavingTex.clone();
+  const map = pavingTexture();
   map.repeat.set(W / 2.0, D / 2.0);
-  const mat = soften(new THREE.MeshLambertMaterial({ map, color: 0xffffff }), {
-    contrast: 0.88, saturation: 0.75, scales: [0.15, 0.5], low: [0.92, 0.9, 0.86], high: [1.06, 1.05, 1.02], cells: [1, 1],
-  });
+  const mat = pavingMaterial(map);
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(W, D), mat);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.set(PAVING_POS.x, 0.004, PAVING_POS.z);

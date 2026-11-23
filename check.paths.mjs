@@ -1,26 +1,41 @@
 import assert from 'node:assert/strict';
-import { ROUTE_TILE, axisRoute } from './src/route.js';
+import { ROUTE_SPACING, planPathNetwork } from './src/route.js';
 
-function turnCount(points) {
-  let turns = 0, previous = null;
-  for (let i = 1; i < points.length; i++) {
-    const direction = Math.abs(points[i].x - points[i - 1].x) > 1e-6 ? 'x' : 'z';
-    if (previous && previous !== direction) turns++;
-    previous = direction;
-  }
-  return turns;
+function nearPoint(actual, expected) {
+  assert.ok(Math.hypot(actual.x - expected.x, actual.z - expected.z) < 1e-6);
 }
 
-const from = { x: 8, z: 19.5 };
-for (const [target, first] of [[{ x: 3, z: 8 }, 'z'], [{ x: 14, z: 12 }, 'x']]) {
-  const points = axisRoute(from, target, first);
-  assert.deepEqual(points[0], from);
-  assert.deepEqual(points.at(-1), target);
-  assert.equal(turnCount(points), 1);
-  for (let i = 1; i < points.length; i++) {
-    const a = points[i - 1], b = points[i];
-    assert.ok(Math.abs(a.x - b.x) < 1e-6 || Math.abs(a.z - b.z) < 1e-6);
+const yards = [
+  {
+    gate: { x: 10.3, z: 12.3 }, porch: { x: 8, z: 7 }, pad: { x: 18, z: 8 },
+    bath: { x: -10, z: -3 }, house: { x: 2.3, z: 6, w: 8, d: 10 },
+  },
+  {
+    gate: { x: 10.3, z: 12.3 }, porch: { x: 12, z: 7 }, pad: { x: 1, z: 8 },
+    bath: { x: 10, z: -3 }, house: { x: 18.3, z: 6, w: 8, d: 10 },
+  },
+];
+
+for (const yard of yards) {
+  const { junction, routes } = planPathNetwork(yard);
+  assert.equal(routes.length, 4);
+  nearPoint(routes[0].points[0], yard.gate);
+  nearPoint(routes[0].points.at(-1), junction);
+  const destinations = { house: yard.porch, utility: yard.pad, bath: yard.bath };
+  for (const route of routes.slice(1)) {
+    nearPoint(route.points[0], junction);
+    nearPoint(route.points.at(-1), destinations[route.destination]);
+    assert.ok(route.points.length > 3);
+    for (let i = 1; i < route.points.length; i++) {
+      const distance = Math.hypot(route.points[i].x - route.points[i - 1].x, route.points[i].z - route.points[i - 1].z);
+      assert.ok(distance <= ROUTE_SPACING + 0.02);
+    }
+  }
+  const bath = routes.find(({ destination }) => destination === 'bath');
+  for (const point of bath.points) {
+    const insideHouse = Math.abs(point.x - yard.house.x) < yard.house.w / 2 + 0.4
+      && Math.abs(point.z - yard.house.z) < yard.house.d / 2 + 0.4;
+    assert.equal(insideHouse, false);
   }
 }
-assert.equal(ROUTE_TILE, 0.7);
-console.log('path route checks ok');
+console.log('curved path network checks ok');

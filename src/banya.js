@@ -107,7 +107,7 @@ export function buildBanya(site, river, power, house) {
     return Math.abs(p.x) < W / 2 + R + 0.25 && Math.abs(p.z) < D / 2 + R + 0.25;
   };
   const powerLine = buildBanyaPower(base, power, house, localToWorld);
-  return { group, dock, powerLine, deck, blocks, plan, deckPlan };
+  return { group, dock, powerLine, deck, blocks, plan, deckPlan, approach: { x: foot.x, z: foot.y } };
 }
 
 function addDockRails({ railPosts, rails, balusters, top, front, length, stairZ, stairWidth, stairRun, footY, rnd }) {
