@@ -52,6 +52,7 @@ function material(map, paint = true) {
 // трубы и петли, потёртая — то, за что берутся руками: засов, штырь, ручка.
 const maps = (name) => tiles(Array.from({ length: KINDS }, (_, i) => `assets/textures/fence-${name}-${i + 1}.jpg`)).map((m) => material(m));
 const boards = maps('board');
+export const FENCE_BOARD_MATERIAL = boards[0];
 const BLACK = 0, WORN = 1;
 const materials = { board: boards, post: boards, rail: maps('rail'),
   steel: tiles(['assets/textures/gate-steel-black.jpg', 'assets/textures/gate-steel-worn.jpg']).map((m) => material(m, false)) };

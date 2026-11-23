@@ -20,6 +20,7 @@ import { watch, note, beat, pauseWatch, tell } from './watch.js';
 import { seed, random } from './random.js';
 import { wind, gust } from './wind.js';
 import { classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './wood-handling.js';
+import { advanceLadderClimb, buildLadder, findLadderPlacement, ladderClimbPosition } from './ladder.js';
 
 let woodyard = null;
 // Где игрок появляется при выборе «Игра» — задаёт house-view.js: у ворот, с внутренней стороны двора.
@@ -117,17 +118,19 @@ const aimPlane = new THREE.Mesh(
     color: 0xff9a2e, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false,
   }),
 );
-// Инвентарь: две пилы — длинная и короткая — и руки. Пила — вещь: она в руках, на поясе или осталась
-// в дереве (left — её копия там, tree — у какого дерева). Зажатая в пропиле (stuck) не вынимается;
-// свободная — в пне упавшего дерева или на земле, куда выпала из разошедшейся ветки, — её забираешь,
-// подойдя (TAKE) и нажав её цифру. Вид у пил разный (комплекты картинок), чтобы их не путать.
+// Инвентарь: две пилы, руки и приставная лестница. Пила — вещь: она в руках, на поясе или осталась
+// в дереве (left — её копия там, tree — у какого дерева). Зажатую в пропиле (stuck) не вынуть;
+// свободную — в пне упавшего дерева или на земле — забираешь, подойдя (TAKE) и нажав её цифру.
 const kit = [
   { name: 'Длинная пила', bar: 0.7, pack: recall('pack-long', PACKS) },
   { name: 'Короткая пила', bar: 0.3, pack: recall('pack-short', [...PACKS].reverse()) },
   { name: 'Руки' },
+  { name: 'Приставная лестница', ladder: true },
 ];
 const TAKE = 2; // м — с такого расстояния от глаз дотягиваешься до брошенной пилы
 let held = 0;   // что в руках: номер в kit
+const ladderModel = buildLadder();
+let ladderState = null, ladderPreview = null, climbing = null;
 // Руки тянут с силой человека: HAND — сколько тянет, не надрываясь (Н): чурку 27 кг (32 × 45 см) несёшь,
 // вдвое длиннее — волочишь за конец, втрое — уже не сдвинуть (Никита, 2026-11-01). TWIST — сколько запястья держат
 // поворотом (Н·м). GRAB — докуда дотягиваешься от ног вбок (до земли — нагнувшись), HOLD — на каком расстоянии
@@ -227,6 +230,8 @@ const fallen = (tree, i) => !(tree.standing & (1 << i)) || (tree.done && Boolean
 function regrow(rnd = Math.random) {
   releaseSaw();
   if (grasp) letGo();
+  ladderState = ladderPreview = climbing = null;
+  ladderModel.visible = false;
   for (const item of kit) {
     item.left?.removeFromParent();
     Object.assign(item, { left: null, tree: null, kerf: null, body: null, cut: null, stuck: false });
@@ -438,7 +443,8 @@ function ahead(cut) {
 
 // Высота, на которой пила войдёт в кору, если кора по горизонтали в bark от игрока.
 function entryHeight(bark) {
-  return THREE.MathUtils.clamp(local(eyeOf()).y + Math.tan(player.pitch) * bark, 0.05, MAX_ENTRY);
+  const max = climbing ? ZONE_H - VOXEL : MAX_ENTRY;
+  return THREE.MathUtils.clamp(local(eyeOf()).y + Math.tan(player.pitch) * bark, 0.05, max);
 }
 
 // Расстояние по горизонтали до коры там, куда упирается взгляд.
@@ -640,9 +646,13 @@ const sawless = () => kit.every((item) => !item.bar || item.stuck);
 
 // Взять в руки вещь i из инвентаря.
 function arm(i) {
+  if (kit[i]?.ladder && ladderState) {
+    notice('Сначала спустись и убери лестницу руками');
+    return;
+  }
   held = i;
   const { bar, pack } = kit[i];
-  if (bar && grasp) letGo();
+  if ((bar || kit[i].ladder) && grasp) letGo();
   if (bar) dressSaw(sawModel, pack, bar);
   showKit();
 }
@@ -652,6 +662,10 @@ function arm(i) {
 function take(i) {
   const item = kit[i];
   if (!item || i === held) return;
+  if (item.ladder && ladderState) {
+    notice('Лестница приставлена — спустись и убери её руками');
+    return;
+  }
   if (item.left) {
     if (item.stuck) return notice(`${item.name} зажата в пропиле — её не вынуть`);
     const far = item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf());
@@ -680,6 +694,7 @@ kitCells.forEach((button, i) => button.addEventListener('click', () => {
 function showKit() {
   kit.forEach((item, i) => {
     const where = item.left ? (item.stuck ? 'зажата' : `лежит, ${Math.round(item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()))} м`)
+      : item.ladder && ladderState ? 'у дерева'
       : !item.bar && grasp ? `${Math.round(grasp.mass)} кг` : '';
     const text = `${item.bar ? `Пила ${item.bar * 100} см` : item.name}${where ? ` · ${where}` : ''}`;
     if (kitCells[i].textContent !== text) kitCells[i].textContent = text;
@@ -687,6 +702,115 @@ function showKit() {
     kitCells[i].classList.toggle('away', Boolean(item.left));
     if (kitCells[i].getAttribute('aria-pressed') !== String(i === held)) kitCells[i].setAttribute('aria-pressed', i === held);
   });
+}
+
+function ladderNearby() {
+  return ladderState && Math.hypot(player.pos.x - ladderState.base.x, player.pos.z - ladderState.base.z) < 1.4
+    && Math.abs(player.pos.y - ladderState.base.y) < 0.6;
+}
+
+function ladderTargeted() {
+  if (!ladderState || climbing) return false;
+  ladderModel.updateWorldMatrix(true, true);
+  const ray = new THREE.Raycaster(eyeOf(), lookOf(), 0, PICK_RANGE);
+  return ray.intersectObject(ladderModel, true).length > 0;
+}
+
+function placeLadder() {
+  const placement = ladderPreview ?? ladderPlacementPreview();
+  if (!placement) {
+    notice('Подойди к стоящему дереву, чтобы примерить лестницу');
+    return false;
+  }
+  ladderState = placement;
+  poseLadder(placement.base, placement.right, placement.up);
+  arm(2);
+  return true;
+}
+
+function pickUpLadder() {
+  if (held !== 2 || !ladderTargeted()) return false;
+  ladderState = null;
+  arm(3);
+  return true;
+}
+
+function updateClimbPosition() {
+  player.pos.copy(ladderClimbPosition(ladderState, climbing.progress));
+}
+
+function leaveLadder() {
+  if (!climbing) return;
+  if (climbing.progress > 0.12) {
+    notice('Спустись по лестнице до земли, чтобы сойти');
+    return;
+  }
+  player.pos.copy(ladderState.base).addScaledVector(ladderState.forward, -0.55);
+  player.pos.y = ground(player.pos.x, player.pos.z);
+  climbing = null;
+}
+
+function mountLadder() {
+  if (!ladderNearby() || climbing || saw || grasp || mode !== 'free') return false;
+  if (ladderState.tree.fall || ladderState.tree.top || !ladderState.tree.standing) {
+    notice('К дереву, которое уже падает или спилено, не подняться');
+    return false;
+  }
+  climbing = { progress: 0 };
+  player.yaw = yawOf(ladderState.forward);
+  updateClimbPosition();
+  return true;
+}
+
+function climb(input, dt) {
+  if (!climbing) return false;
+  if (ladderState.tree.fall || ladderState.tree.top || !ladderState.tree.standing) {
+    climbing.progress = 0;
+    leaveLadder();
+    return false;
+  }
+  const next = advanceLadderClimb(ladderState, climbing.progress, input.ahead, dt);
+  if (next.leaveAtBottom) {
+    climbing.progress = next.progress;
+    leaveLadder();
+    return false;
+  }
+  climbing.progress = next.progress;
+  updateClimbPosition();
+  return true;
+}
+
+function ladderPlacementPreview() {
+  if (!kit[held]?.ladder || ladderState || climbing) return null;
+  return findLadderPlacement(trees, player.pos, forwardOf(player.yaw), ground);
+}
+
+function poseLadder(position, right, up) {
+  const normal = right.clone().cross(up).normalize();
+  ladderModel.position.copy(position);
+  ladderModel.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, normal));
+}
+
+function carryLadder() {
+  if (ladderState) {
+    ladderPreview = null;
+    ladderModel.visible = true;
+    return;
+  }
+  ladderModel.visible = playing && !fly && kit[held]?.ladder;
+  if (!ladderModel.visible) {
+    ladderPreview = null;
+    return;
+  }
+  ladderPreview = ladderPlacementPreview();
+  if (ladderPreview) {
+    poseLadder(ladderPreview.base, ladderPreview.right, ladderPreview.up);
+    return;
+  }
+  const forward = forwardOf(player.yaw), right = new THREE.Vector3(-forward.z, 0, forward.x);
+  const base = player.pos.clone().addScaledVector(forward, 0.85)
+    .addScaledVector(right, 0.5).addScaledVector(UP, 0.05);
+  poseLadder(base, right.negate(), UP);
 }
 
 // Руками берёшь то, во что упирается взгляд (до PICK_RANGE от глаз): отпил, кусок пня, ветку.
@@ -1732,7 +1856,7 @@ function stepBack() {
 }
 
 function update(dt) {
-  if (!saw) round = nearest();
+  if (!saw) round = climbing?.tree ?? nearest();
   const forward = forwardOf(player.yaw);
   const right = new THREE.Vector3(-forward.z, 0, forward.x);
 
@@ -1740,7 +1864,10 @@ function update(dt) {
   // Ходить можно, только пока пила не приставлена к стволу и камера не летает.
   const input = walkInput(keys, stick);
   const move = new THREE.Vector3();
-  if (mode === 'free' && !fly) move.addScaledVector(forward, input.ahead).addScaledVector(right, input.side);
+  if (!climbing && mode === 'free' && !fly && input.ahead > 0 && !saw && !grasp) mountLadder();
+  if (climbing && !fly) {
+    if (!saw) climb(input, dt);
+  } else if (mode === 'free' && !fly) move.addScaledVector(forward, input.ahead).addScaledVector(right, input.side);
   const moving = move.lengthSq() > 0;
   const speed = moving ? move.length() * walkSpeed(player, keys) * haulSpeed(grasp?.body.wood) : 0;
   if (moving) {
@@ -1748,6 +1875,7 @@ function update(dt) {
     movePlayer(step.x, step.z);
   }
   stepEyes(player, right, speed, dt);
+  carryLadder();
   // Шаг назад от приставленной пилы — уходишь от пропила. Зажатая пила остаётся в стволе, руки свободны.
   if (saw && !fly && input.ahead < -0.2) stepBack();
 
@@ -1791,7 +1919,10 @@ function update(dt) {
   if (touch) {
     touchSaw.hidden = Boolean(fly);
     let label = grasp ? 'Бросить' : 'Взять';
-    if (kit[held].bar) label = canReverseCut() ? 'С другой стороны' : saw ? 'Пилить' : candidate ? 'Приставить пилу' : 'Газ';
+    if (kit[held].ladder) label = ladderPreview ? 'Поставить лестницу' : 'Примерить лестницу';
+    else if (!kit[held].bar && climbing) label = 'Спуститься';
+    else if (!kit[held].bar && ladderNearby()) label = ladderTargeted() ? 'Убрать лестницу' : 'Подняться';
+    else if (kit[held].bar) label = canReverseCut() ? 'С другой стороны' : saw ? 'Пилить' : candidate ? 'Приставить пилу' : 'Газ';
     if (touchSaw.textContent !== label) touchSaw.textContent = label;
     heldSawEl.classList.toggle('running', trigger && !saw);
   }
@@ -2022,6 +2153,13 @@ function hint() {
   if (saw?.chewed && mode === 'aim') return 'Пилу зажёвывает · вынь её (S) или нажми снова';
   if (saw?.blocked) return 'Упёрлась корпусом · поверни пилу или вынь (S)';
   if (sawless()) return 'Обе пилы застряли · R — новые клёны';
+  if (climbing) return 'W/S — подниматься/спускаться · у земли — сойти';
+  if (kit[held].ladder) return ladderPreview
+    ? 'Лестница примерена к стволу · ЛКМ — оставить'
+    : 'Подойди к дереву, чтобы примерить лестницу';
+  if (ladderNearby() && held === 2) return ladderTargeted()
+    ? 'ЛКМ — убрать лестницу в инвентарь · W — подняться'
+    : 'Подойди к лестнице и нажми W, чтобы подняться';
   const near = kit.findIndex((item) => item.left && !item.stuck && item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()) <= TAKE);
   if (near >= 0) return `${kit[near].name} рядом · ${near + 1} — взять`;
   if (kit[held].bar) return '';
@@ -2069,6 +2207,11 @@ addEventListener('keydown', (e) => {
   if (screenMode === 'fly' && e.code === 'KeyI' && !e.repeat) setFlying(!fly);
   if (fly) return;
   if (e.repeat && !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyQ', 'KeyE'].includes(e.code)) return;
+  if (e.code === 'KeyE' && !e.repeat && mode === 'free') {
+    if (climbing) leaveLadder();
+    else mountLadder();
+    return;
+  }
   // Отход от пропила — разовое действие. Даже нажатие короче кадра должно отпустить пилу.
   if (e.code === 'KeyS' && saw) stepBack();
   if (e.code === 'KeyC') player.crouch = !player.crouch;
@@ -2126,6 +2269,24 @@ function changeCutSide() {
 
 function pressSaw() {
   if (!playing || fly) return;
+  if (climbing && touch && !kit[held].bar) {
+    climbing.progress = Math.max(0, climbing.progress - 0.45);
+    if (climbing.progress === 0) leaveLadder();
+    else updateClimbPosition();
+    return;
+  }
+  if (mode === 'free' && !kit[held].bar) {
+    if (kit[held].ladder) {
+      placeLadder();
+      return;
+    }
+    if (held === 2 && pickUpLadder()) return;
+    if (touch && held === 2 && ladderNearby() && !climbing) {
+      mountLadder();
+      return;
+    }
+    if (climbing) return;
+  }
   if (touch && canReverseCut()) {
     changeCutSide();
     return;
@@ -2207,6 +2368,8 @@ function look(dx, dy) {
   } else if (fly) {
     fly.yaw -= dx;
     fly.pitch = THREE.MathUtils.clamp(fly.pitch - dy, -1.5, 1.5);
+  } else if (climbing) {
+    turnHead(player, dx, dy);
   } else if (mode === 'free') {
     turnHead(player, dx, dy);
   } else {
@@ -2219,6 +2382,21 @@ function look(dx, dy) {
 
 function touchWalk(side, ahead) {
   if (fly) return;
+  if (climbing) {
+    if (saw) {
+      if (ahead < 0) stepBack();
+      return;
+    }
+    const progress = climbing.progress + ahead;
+    if (ahead < 0 && progress <= 0) {
+      climbing.progress = 0;
+      leaveLadder();
+    } else {
+      climbing.progress = THREE.MathUtils.clamp(progress, 0, ladderState.maxProgress);
+      updateClimbPosition();
+    }
+    return;
+  }
   if (saw) {
     if (ahead < 0 && -ahead > Math.abs(side)) stepBack();
     return;
@@ -2266,6 +2444,9 @@ function leave() {
   if (saw) stepBack();
   releaseSaw();
   if (grasp) letGo();
+  climbing = null;
+  ladderPreview = null;
+  if (!ladderState) ladderModel.visible = false;
   playing = false;
   if (sawPointer !== null) {
     if (touchSaw.hasPointerCapture(sawPointer)) touchSaw.releasePointerCapture(sawPointer);
@@ -2342,6 +2523,7 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
   walkable = free;
   camera.rotation.order = 'YXZ';
   scene.add(aimPlane, sawModel, chips, arms.group);
+  scene.add(ladderModel);
   woodyard = createWoodyard?.({
     scene,
     withFence: false,
