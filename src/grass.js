@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 import { windUniforms, GUST_GLSL } from './wind.js';
 import { smoothNoise } from './random.js';
-import { groundGeometry, groundPatch, height } from './terrain.js';
+import { groundGeometry, height } from './terrain.js';
 
 // Трава на земле — набор из 20 акварельных плиток по GRASS_TILE метров с общими краями (сетка 5 × 4
 // в одной картинке): каждая клетка земли берёт свою плитку, и узор не повторяется.
@@ -17,28 +17,10 @@ const material = soften(new THREE.MeshLambertMaterial({ map: texture }), {
 
 // Земля — квадрат травы со стороной size метров, выгнутый по рельефу (terrain.js). Раскладка плиток
 // своя у каждого запуска игры и не меняется, пока на делянке растят новые деревья.
-// litter(x, z) — сколько на земле опавшей хвои, 0..1: там вместо травы подстилка, и она в тени сомкнутых крон
-// (тени солнца от карты теней туда не достают): земля темнее на SHADE.
-export function makeGround(size, bounds = null) {
+export function makeGround(size) {
   texture.repeat.set(size / GRASS_TILE, size / GRASS_TILE);
   texture.offset.set(Math.floor(Math.random() * 100), Math.floor(Math.random() * 100));
-  const full = groundGeometry(size);
-  const keep = typeof bounds === 'function'
-    ? bounds
-    : (x, z) => Math.abs(x) <= bounds.w / 2 && Math.abs(z) <= bounds.d / 2;
-  const geometry = bounds
-    ? groundPatch(keep)
-    : full;
-  if (bounds) {
-    const pos = geometry.attributes.position;
-    const uv = new Float32Array(pos.count * 2);
-    for (let i = 0; i < pos.count; i++) {
-      uv[i * 2] = 0.5 + pos.getX(i) / size;
-      uv[i * 2 + 1] = 0.5 - pos.getZ(i) / size;
-    }
-    geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  }
-  const ground = new THREE.Mesh(geometry, material);
+  const ground = new THREE.Mesh(groundGeometry(size), material);
   ground.receiveShadow = true;
   return ground;
 }
