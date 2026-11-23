@@ -36,8 +36,8 @@ const world = await makeWorld(renderer, scene, [RINGS.far]);
 // Дом стоит фасадом к улице у забора, за палисадником в 1,5–2,5 м (Никита, 2026-11-08: фасад прямо в линию забора
 // не нравится). Боком с крыльцом — к воротам, в ASIDE от их середины. Земля под домом выровнена (terrain.js).
 const PALISADE = [1.5, 2.5], ASIDE = 5;
-const MEADOW = YARD.w; // м: травяной квадрат ограничен шириной двора; за забором травы нет
-const GROUND = MEADOW;
+const MEADOW = YARD.w; // ширина участка с вертикальными пучками
+const GROUND = 2 * RINGS.far[1]; // плоская земля до кольца панорамы во всех направлениях
 let house = null, yard = null, layout = null;
 const animated = [];
 const label = document.getElementById('seed');
@@ -92,17 +92,14 @@ function rebuild(seed) {
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
   const banya = buildBanya(banyaSite, river, power, { plan, at });
   house.position.set(at.x, at.y, at.z);
-  // Трава: во дворе густая, за забором — луг пореже, в лесополосе — сплошная и сочная, к краю квадрата MEADOW
-  // сходит на нет; под домом, хоздвором и мостками её нет, на улице — как скажет колея, на поле за рекой — пшеница.
-  // Двор — между боковыми заборами, от улицы до реки.
+  // Вертикальные пучки растут только во дворе, от улицы до реки.
   const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
   const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.shore(x) ? 1 : 0);
-  const grassBounds = (x, z) => Math.abs(x) <= YARD.w / 2 && z <= fence && z >= river.shore(x) - 0.15;
   const grass = (x, z) => {
     if (inside(x, z, pad, pad.w, pad.d) || inside(x, z, woodPad, woodPad.w, woodPad.d) || banya.blocks(x, z) || banya.deck(x, z) > -Infinity || pier.deck(x, z) > -Infinity || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
     return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * paths.grass(x, z) * (1 - field.cover(x, z));
   };
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { bounds: grassBounds, trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), banya.group, banya.dock, banya.powerLine, buildField(field), paths.build());
+  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), banya.group, banya.dock, banya.powerLine, buildField(field), paths.build());
   layout = { at, gas, power, road, pier, pad, river, paths, banya };
   scene.add(house, yard);
   animated.length = 0;
