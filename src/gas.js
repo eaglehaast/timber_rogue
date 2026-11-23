@@ -42,6 +42,7 @@ const MAT = {
   footing: decal(tiles(['assets/textures/gas-footing.webp'])[0]),
   iron: paint(0x1e2022), brass: paint(0x95815c), handle: paint(0xa3261d), seal: paint(0x2f2d29),
 };
+export const gasPostMaterial = MAT.post;
 const FEET = 5; // картинок цемента в ряд
 
 // Где отвод входит в бок дома: глухой бок (без двери), ближнее к улице место между окнами, углами и выпусками

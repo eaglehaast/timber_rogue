@@ -62,6 +62,7 @@ const MAT = {
   rim: paint(0x818d91), glass: paint(0x171f27), lock: paint(0x929b9e), meter: paint(0xc5c8c3),
   led: new THREE.MeshBasicMaterial({ color: 0x5a0a05, toneMapped: false }),
 };
+export const powerWireMaterial = MAT.sip;
 // Ореол огонька — пятно света, чтобы вспышка читалась издали.
 const GLOW = new THREE.SpriteMaterial({ map: halo(), color: 0xff3018, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, toneMapped: false });
 const DOORS = 4, SIDES = 2, BASES = 4, SIGNS = 3;

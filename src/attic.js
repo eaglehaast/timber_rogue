@@ -255,7 +255,7 @@ export function buildBoards(plan, { front, low, side, plinth, r, reach }) {
     { name: 'left', out: [-1, 0, 0], along: [0, 0, 1], half: d / 2, at: w / 2 },
     { name: 'right', out: [1, 0, 0], along: [0, 0, 1], half: d / 2, at: w / 2 },
   ];
-  for (const { name, out, along, half, at } of walls) {
+  for (const { name, out, along, half, at } of plan.noDrip ? [] : walls) {
     const e = new THREE.Vector3(...out), t = new THREE.Vector3(...along);
     const X = e.clone().multiplyScalar(Math.cos(DRIP.slope)).setY(-Math.sin(DRIP.slope));
     const n = e.clone().multiplyScalar(Math.sin(DRIP.slope)).setY(Math.cos(DRIP.slope));
