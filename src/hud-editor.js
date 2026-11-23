@@ -1,5 +1,5 @@
 import { fields, imageLayer } from './hud-layout.js';
-import { addBenchArt, readBenchLayout } from './hud-bench-art.js';
+import { readBenchLayout } from './hud-bench-art.js';
 import { makePreview } from './hud-preview.js';
 
 function openDrafts() {
@@ -15,7 +15,6 @@ export async function startEditor({ base, apply }) {
   const el = id => document.getElementById(id);
   const objectList = el('objects'), artList = el('art'), status = el('status');
   for (const id of ['inspector','editor-bar','editor-help']) el(id).hidden = false;
-  addBenchArt(base);
   let layout = structuredClone(base), selected = 'held-saw', testing = false, drag = null, db;
   const preview = await makePreview(() => layout);
   try {
