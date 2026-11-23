@@ -31,6 +31,8 @@ const { planPower, powerWireMaterial } = await import('./src/power.js');
 const { generator } = await import('./src/random.js');
 const { GATES, WICKET } = await import('./src/fence.js');
 
+assert.equal(planHouse(73, { doorWall: 'right' }).openings.find(({ kind }) => kind === 'door').wall, 'right');
+
 for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const house = planHouse(seed), rnd = generator(seed + 13);
   const door = house.openings.find((opening) => opening.kind === 'door').wall === 'right' ? 1 : -1;

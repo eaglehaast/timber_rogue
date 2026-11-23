@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { tiles, soften } from './surface.js';
 
+export const PAVING_ENTRY_HALF = 0.9;
 const [paving] = tiles(['assets/textures/yard/timber_yard_paving_01.jpg']);
 
 export const pavingTexture = () => paving.clone();
