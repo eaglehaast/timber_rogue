@@ -1,4 +1,5 @@
-import { fields, imageLayer, readLayout } from './hud-layout.js';
+import { fields, imageLayer } from './hud-layout.js';
+import { readBenchLayout } from './hud-bench-art.js';
 import { makePreview } from './hud-preview.js';
 
 function openDrafts() {
@@ -14,8 +15,8 @@ export async function startEditor({ base, apply }) {
   const el = id => document.getElementById(id);
   const objectList = el('objects'), artList = el('art'), status = el('status');
   for (const id of ['inspector','editor-bar','editor-help']) el(id).hidden = false;
-  const preview = makePreview();
   let layout = structuredClone(base), selected = 'held-saw', testing = false, drag = null, db;
+  const preview = await makePreview(() => layout);
   try {
     db = await openDrafts();
     const stored = await new Promise((resolve, reject) => {
@@ -23,7 +24,7 @@ export async function startEditor({ base, apply }) {
       read.onsuccess = () => resolve(read.result);
       read.onerror = () => reject(read.error);
     });
-    if (stored) { layout = readLayout(stored, base); status.textContent = 'Открыт местный черновик.'; }
+    if (stored) { layout = readBenchLayout(stored, base); status.textContent = 'Открыт местный черновик.'; }
   } catch (error) { status.textContent = `Не удалось открыть черновик. ${error.message}`; }
   let pendingSave;
   function announce(message) { pendingSave = null; status.textContent = message; }
@@ -49,21 +50,31 @@ export async function startEditor({ base, apply }) {
     });
     input.addEventListener('change', () => { input.value = layout.elements[selected][key]; save(); });
   }
+  const artState = el('art-state');
   function select(id) {
+    const previousArt = id === selected ? artState.value : 'asset';
     el('hud').querySelector('.selected')?.classList.remove('selected');
     selected = id;
     const item = layout.elements[id];
+    const variants = item.shortAsset ? [
+      ['asset', '70 см · газ отпущен'], ['pressedAsset', '70 см · газ нажат'],
+      ['shortAsset', '30 см · газ отпущен'], ['shortPressedAsset', '30 см · газ нажат'],
+    ]
+      : item.pressedAsset ? [['asset','Отпущен'],['pressedAsset','Нажат']] : [['asset','Рисунок']];
+    artState.replaceChildren(...variants.map(([key, label]) => new Option(label, key)));
+    artState.value = variants.some(([key]) => key === previousArt) ? previousArt : 'asset';
     el(id).classList.add('selected'); objectList.value = id;
     for (const [key, field] of Object.entries(inputs)) field.value = item[key];
     el('visible').checked = item.visible;
     el('comment').value = item.comment;
     el('restore').textContent = base.elements[id] ? 'Сбросить элемент' : 'Убрать слой';
     el('art-controls').hidden = !item.asset;
+    el('art-state-wrap').hidden = variants.length < 2;
     if (item.asset) {
       artList.replaceChildren(...Object.entries(layout.assets).map(([key, art]) => new Option(art.name, key)));
-      artList.value = item.asset;
+      artList.value = item[artState.value];
     }
-    preview.select(id);
+    preview.select(id, artState.value);
   }
   function refresh() {
     for (const node of document.querySelectorAll('[data-image-layer]')) if (!layout.elements[node.id]) node.remove();
@@ -78,7 +89,7 @@ export async function startEditor({ base, apply }) {
     el('help').open = false;
     el('stage').classList.toggle('editing', !on);
     el('try').setAttribute('aria-pressed', on); el('arrange').setAttribute('aria-pressed', !on);
-    el('editor-help').textContent = on ? 'WASD или круг — идти · потяни мышью по полю — осмотреться · кнопка или пробел — газ' : 'Перетаскивай элементы мышью. Стрелки сдвигают выбранный на одну точку, с Shift — на десять.';
+    el('editor-help').textContent = on ? '1 / 2 — сменить пилу · 3 — руки · кнопка или пробел — газ · WASD или круг — идти · потяни мышью по полю — осмотреться' : 'Перетаскивай элементы мышью. Стрелки сдвигают выбранный на одну точку, с Shift — на десять.';
     preview.play(on);
   }
   el('back').addEventListener('click', e => { e.preventDefault(); if (testing) announce('В игре эта кнопка открывает главное меню.'); });
@@ -86,9 +97,10 @@ export async function startEditor({ base, apply }) {
   objectList.addEventListener('change', () => select(objectList.value));
   el('try').addEventListener('click', () => setTesting(true));
   el('arrange').addEventListener('click', () => setTesting(false));
-  el('visible').addEventListener('change', e => { layout.elements[selected].visible = e.target.checked; apply(layout, selected); save(); });
+  el('visible').addEventListener('change', e => { layout.elements[selected].visible = e.target.checked; apply(layout, selected); preview.select(selected, artState.value); save(); });
   el('comment').addEventListener('input', e => { layout.elements[selected].comment = e.target.value; save(); });
-  artList.addEventListener('change', () => { layout.elements[selected].asset = artList.value; apply(layout, selected); save(); });
+  artState.addEventListener('change', () => select(selected));
+  artList.addEventListener('change', () => { layout.elements[selected][artState.value] = artList.value; apply(layout, selected); preview.select(selected, artState.value); save(); });
   el('restore').addEventListener('click', () => {
     if (base.elements[selected]) layout.elements[selected] = { ...base.elements[selected] };
     else delete layout.elements[selected];
@@ -131,7 +143,7 @@ export async function startEditor({ base, apply }) {
     position(x + dx * step, y + dy * step); save();
   });
   async function importArt(e) {
-    const input = e.target, file = input.files[0], id = selected;
+    const input = e.target, file = input.files[0], id = selected, state = artState.value;
     if (!file) return;
     try {
       if (!['image/png','image/jpeg','image/webp'].includes(file.type)) throw new Error('Выбери PNG, JPEG или WebP.');
@@ -145,7 +157,7 @@ export async function startEditor({ base, apply }) {
         const scale = Math.min(1, 280 / img.naturalWidth, 200 / img.naturalHeight);
         selected = `image-${crypto.randomUUID()}`;
         layout.elements[selected] = imageLayer(file.name, key, Math.max(1, Math.round(img.naturalWidth * scale)), Math.max(1, Math.round(img.naturalHeight * scale)), base.viewport);
-      } else layout.elements[id].asset = key;
+      } else layout.elements[id][state] = key;
       refresh(); save();
     } catch (error) { announce(`Рисунок не открыт. ${error.message}`); }
     input.value = '';
@@ -173,7 +185,7 @@ export async function startEditor({ base, apply }) {
   el('import').addEventListener('change', async e => {
     const input = e.target, file = input.files[0];
     if (!file) return;
-    try { const next = readLayout(JSON.parse(await file.text()), base); layout = next; refresh(); save(); }
+    try { const next = readBenchLayout(JSON.parse(await file.text()), base); layout = next; refresh(); save(); }
     catch (error) { announce(`Файл не открыт. ${error.message}`); }
     input.value = '';
   });

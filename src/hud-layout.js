@@ -36,9 +36,9 @@ export async function setupHud() {
       transform: `perspective(700px) rotateZ(${item.rotateZ}deg) rotateY(${item.rotateY}deg) rotateX(${item.rotateX}deg) scale(${item.scaleX / 100}, ${item.scaleY / 100})`,
       zIndex: item.layer, opacity: item.opacity / 100 });
     el.toggleAttribute('data-layout-off', !item.visible);
-    if (item.asset) {
-      const img = el.querySelector('img'), src = layout.assets[item.asset].src;
-      if (img.getAttribute('src') !== src) img.src = src;
+    for (const img of el.querySelectorAll('img')) {
+      const key = item[img.dataset.art ?? 'asset'];
+      if (key && img.getAttribute('src') !== layout.assets[key].src) img.src = layout.assets[key].src;
     }
   }
   return { base, apply };
@@ -62,6 +62,8 @@ export function readLayout(data, base) {
     layout.assets[key] = { name: art.name, src: art.src };
   }
   for (const [id, saved] of Object.entries(data.elements)) {
+    // Старые черновики содержат удалённое боковое окно. Остальные элементы по-прежнему переносим.
+    if (id === 'side') continue;
     if (!Object.hasOwn(base.elements, id)) {
       if (!imageID.test(id) || saved?.kind !== 'image' || typeof saved.name !== 'string' || !Object.hasOwn(layout.assets, saved.asset)
           || ![saved.width, saved.height].every(n => Number.isFinite(n) && n >= 1 && n <= 1600)) throw new Error(`Неизвестный элемент «${id}».`);
@@ -76,10 +78,21 @@ export function readLayout(data, base) {
     if ('visible' in saved && typeof saved.visible !== 'boolean' || 'comment' in saved && typeof saved.comment !== 'string') throw new Error(`Проверь свойства «${item.name}».`);
     if ('visible' in saved) item.visible = saved.visible;
     if ('comment' in saved) item.comment = saved.comment;
-    if (item.asset && saved.asset) {
-      if (!Object.hasOwn(layout.assets, saved.asset)) throw new Error('В расстановке отсутствует выбранный рисунок.');
-      item.asset = saved.asset;
+    for (const key of ['asset', 'pressedAsset', 'shortAsset', 'shortPressedAsset']) {
+      if (!item[key] || !Object.hasOwn(saved, key)) continue;
+      if (!Object.hasOwn(layout.assets, saved[key])) throw new Error('В расстановке отсутствует выбранный рисунок.');
+      item[key] = saved[key];
     }
+    // В первом формате один рисунок в руках показывался с обеими шинами.
+    if (item.shortAsset && !Object.hasOwn(saved, 'shortAsset')) item.shortAsset = item.asset;
   }
   return layout;
+}
+
+export function showAction(button, label, isTrigger, pressed) {
+  button.classList.toggle('saw-trigger', isTrigger);
+  button.classList.toggle('pressed', pressed);
+  if (button.getAttribute('aria-label') === label) return;
+  button.setAttribute('aria-label', label);
+  button.querySelector('.action-label').textContent = isTrigger ? '' : label;
 }

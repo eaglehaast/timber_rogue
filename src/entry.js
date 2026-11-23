@@ -1,4 +1,5 @@
 import { mode, PHONE } from './device.js';
+import { addBenchArt } from './hud-bench-art.js';
 
 if (PHONE && mode !== 'game') {
   location.replace('./#stands');
@@ -10,6 +11,7 @@ if (PHONE && mode !== 'game') {
   try {
     const { setupHud } = await import('./hud-layout.js');
     const hud = await setupHud();
+    addBenchArt(hud.base);
     if (mode === 'hud') {
       document.title = 'Редактор HUD · Timber Rogue';
       const { startEditor } = await import('./hud-editor.js');

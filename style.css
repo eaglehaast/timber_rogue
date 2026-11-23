@@ -18,13 +18,23 @@ body[data-mode="fly"] #stage { width: 100%; height: 100%; aspect-ratio: auto; }
 .hud-object { position: absolute; margin: 0; color: #fff8e8; touch-action: none; transform-origin: center; }
 .hud-object[data-layout-off] { display: none; }
 .hud-art img { width: 100%; height: 100%; display: block; object-fit: contain; object-position: bottom; }
+/* Только старые два рисунка получают поправку под свет двора. Новая живопись из редактора показывает свой цвет. */
+#held-saw img:is([src="assets/hud/saw-1.webp"], [src="assets/hud/saw-2.webp"]) { filter: saturate(.70) brightness(.89) contrast(.95); }
+#held-saw .short-saw, #held-saw.short-bar .long-saw { display: none; }
+#held-saw.short-bar .short-saw { display: block; }
 #kit { display: contents; }
 #kit button, #touch-saw { pointer-events: auto; padding: 4px 8px; line-height: 1.1; font-weight: 600; font-size: 14px; background: #19251edb; border: 1px solid #f2f0d783; text-shadow: 0 1px 2px #0008; }
-#kit button.held, #kit button[aria-pressed="true"] { border-color: #fac784; box-shadow: inset 3px 0 #fac784; }
-#kit button.away { color: #d6cfbe; font-style: italic; }
-#side { box-shadow: 0 0 0 1px #f3eaca99, 0 1px 5px #0004; border-radius: 4px; overflow: hidden; background: #34443b; }
-#side canvas { width: 100%; height: 100%; display: block; }
-#side.big { width: 216px !important; height: 276px !important; margin-left: -102px; }
+#kit button { display: flex; align-items: center; gap: 3px; padding: 3px 5px; background: #25312bf2; border-color: #ccceb16b; }
+#kit button[aria-pressed="true"] { border-color: #e8c985; box-shadow: inset 3px 0 #d8ac65; background: #364038f2; }
+#kit button img { width: 55%; height: 100%; min-width: 0; object-fit: contain; border-radius: 2px; background: linear-gradient(145deg, #ceccad, #a4ad99); }
+#kit .tool-spec { display: grid; gap: 3px; align-content: center; justify-items: center; font-size: 11px; white-space: nowrap; }
+#kit .bar-length { font-size: 13px; line-height: 13px; }
+#kit .bar-length::after { content: ''; display: block; height: 3px; border: solid #d8bb80; border-width: 0 1px 1px; margin-top: 1px; }
+#kit small { font-size: 10px; line-height: 10px; color: #e2d9bf; font-weight: 500; }
+#kit .tool-status { position: absolute; bottom: 2px; left: 3px; right: 3px; font-size: 11px; line-height: 13px; text-align: center; color: #f2d59b; }
+#kit button:has(.tool-status:not(:empty)) { padding-bottom: 16px; }
+#kit button:has(.tool-status:not(:empty)) small { display: none; }
+#kit button.away img { opacity: .58; }
 #hint, #gap, #result, #log { text-shadow: 0 1px 4px #14231a, 0 1px 2px #000; }
 #hint, #result { text-align: center; }
 #log, #gap { font-size: 14px; }
@@ -38,7 +48,15 @@ body[data-mode="fly"] #stage { width: 100%; height: 100%; aspect-ratio: auto; }
 #stick { display: grid; place-items: center; pointer-events: auto; border: 1.5px solid #fff3cfa8; background: #1a27214f; border-radius: 50%; }
 #stick span { width: 44%; height: 44%; border: 1px solid #fff3cfc9; background: #efe8c865; border-radius: 50%; }
 #touch-saw { border-radius: 32px; font-size: 16px; }
-#touch-saw:active, #touch-saw.pressed { background: #9a5a30; }
+#touch-saw:active, #touch-saw.pressed { background: #77653d; }
+#touch-saw img { display: none; pointer-events: none; }
+#touch-saw.saw-trigger { padding: 0; border: 1px solid #ddd7b380; border-radius: 48% 42% 44% 46% / 57% 52% 48% 44%; background: radial-gradient(ellipse at 47% 34%, #60675be8, #303b33e8 68%); box-shadow: inset 0 1px 1px #eee4bd4d, 0 2px 4px #19271d66; }
+#touch-saw.saw-trigger img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+#touch-saw.saw-trigger .trigger-rest { display: block; }
+#touch-saw.saw-trigger.pressed { background: #39473ddf; box-shadow: inset 0 2px 4px #14211790; }
+#touch-saw.saw-trigger.pressed .trigger-rest { display: none; }
+#touch-saw.saw-trigger.pressed .trigger-down { display: block; }
+#touch-saw.saw-trigger .action-label { display: none; }
 #flight, #loading { position: absolute; z-index: 2; }
 #utility { display: contents; }
 #utility a, #help { pointer-events: auto; font-size: 14px; }
@@ -86,6 +104,7 @@ body[data-mode="hud"] #desk { --gutter: clamp(12px, 2.4vw, 36px); grid-template:
 body[data-mode="hud"] #room { margin: 0 var(--gutter); }
 body[data-mode="hud"] #stage { outline: 1px solid var(--line); }
 #inspector { grid-column: 2; grid-row: 2 / 4; border-left: 1px solid var(--line); padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 13px; background: #223027; }
+#inspector > * { flex-shrink: 0; }
 #inspector label { display: grid; gap: 4px; font-size: 13px; }
 #inspector fieldset { margin: 0; padding: 0; border: 0; }
 #inspector legend { margin: 0 0 6px; padding: 0; font-weight: 650; }
@@ -104,7 +123,6 @@ body[data-mode="hud"] #stage { outline: 1px solid var(--line); }
 .editing .hud-object { pointer-events: auto; cursor: move; }
 .editing .hud-object:hover, .editing .hud-object.selected { outline: 2px dashed #ffbd6c; outline-offset: 2px; }
 .editing .hud-object.selected[data-layout-off] { display: block; }
-body[data-mode="hud"] #side::after { content: 'Вид сбоку'; position: absolute; inset: 0; display: grid; place-items: center; font-size: 13px; background: #2a3c3296; }
 #held-saw.running img { animation: saw-run .09s linear infinite alternate; }
 @keyframes saw-run { to { transform: translate(1px, -2px) rotate(.35deg); } }
 @media (max-width: 740px) { body[data-mode="hud"] #desk { height: auto; min-height: 100dvh; grid-template: auto auto auto auto / 1fr; } #editor-bar { flex-wrap: wrap; gap: 8px; } body[data-mode="hud"] #room { height: min(58vw, 460px); margin: 12px; } #inspector { grid-row: 4; grid-column: 1; border: 0; } #editor-help { grid-row: 3; } }
@@ -133,7 +151,7 @@ body[data-mode="fall"] #stage { width: 100%; height: 100%; aspect-ratio: auto; }
 #fell-tree:disabled { opacity: .55; cursor: default; }
 #fall-state,.fall-keys { display: inline-block; margin-top: 7px; font-size: 12px; }
 .fall-keys { float: right; color: #bfcbb9; margin-left: 14px; }
-body[data-mode="fall"] :is(#side,#back,#regrow) { display: none; }
+body[data-mode="fall"] :is(#back,#regrow) { display: none; }
 #fall-stand.sawing :is(.fall-title,.fall-report,.fall-keys,#fall-state,.fall-actions label,#fell-tree,#fall-reset) { display: none; }
 #fall-stand.sawing .fall-dock { top: 12px; bottom: auto; padding: 0; }
 @media (max-width: 620px), (max-height: 480px) {

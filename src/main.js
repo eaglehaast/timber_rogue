@@ -1,3 +1,5 @@
+import { makeCutGuide } from './cut-guide.js';
+import { showAction } from './hud-layout.js';
 import * as THREE from 'three';
 import { TrunkVoxels, trunkShape, VOXEL, dressWood } from './trunk.js';
 import { hitLog, LogCut } from './log-cut.js';
@@ -82,7 +84,6 @@ const depthFillEl = document.getElementById('depthFill');
 const resultEl = document.getElementById('result');
 const logEl = document.getElementById('log');
 const gapEl = document.getElementById('gap');
-const sideEl = document.getElementById('side');
 const kitEl = document.getElementById('kit');
 const heldSawEl = document.getElementById('held-saw');
 const stickEl = document.getElementById('stick');
@@ -101,23 +102,7 @@ const recall = (key, list) => {
   try { return list.find((v) => String(v) === localStorage.getItem(key)) ?? list[0]; } catch { return list[0]; }
 };
 const keep = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
-// Вид сбоку — справа от игрока, на всё дерево: видно, клонится ли ствол к тебе или от тебя.
-// С зажатой ПКМ его можно обвести вокруг ствола, колесом — приблизить. Чем ближе камера,
-// тем ниже она смотрит: от середины дерева к месту, где пилят, — так видно щель.
-const sideCamera = new THREE.PerspectiveCamera(50, 0.75, 0.05, 200);
-const VIEW_FAR = 16, VIEW_NEAR = 0.8, VIEW_Y = 6.5;
-const VIEW_EL_MIN = THREE.MathUtils.degToRad(-10), VIEW_EL_MAX = THREE.MathUtils.degToRad(80);
-const view = { base: 0, az: 0, el: 0, dist: VIEW_FAR };
-let inspecting = false;
-
-// Прицел пилы: полупрозрачная плоскость, по которой пойдёт пропил.
-// Плоскость единичная: под длину шины и толщину ствола её растягивает scale.
-const aimPlane = new THREE.Mesh(
-  new THREE.PlaneGeometry(1, 1),
-  new THREE.MeshBasicMaterial({
-    color: 0xff9a2e, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false,
-  }),
-);
+const aimPlane = makeCutGuide();
 // Инвентарь: две пилы, руки и приставная лестница. Пила — вещь: она в руках, на поясе или осталась
 // в дереве (left — её копия там, tree — у какого дерева). Зажатую в пропиле (stuck) не вынуть;
 // свободную — в пне упавшего дерева или на земле — забираешь, подойдя (TAKE) и нажав её цифру.
@@ -141,18 +126,13 @@ let grasp = null;
 const sawModel = makeSaw(kit[0].pack, kit[0].bar);
 const chips = new Chips();
 const arms = new Arms();
-// Пила, руки и прицел — на своём слое: их видит только взгляд игрока, а вид сбоку показывает
-// одно дерево, иначе мотор заслоняет пропил.
+// Пила и прицел видны только из игровой камеры.
 const TOOLS = 1;
 aimPlane.layers.set(TOOLS);
 for (const tool of [sawModel, arms.group]) tool.traverse((part) => part.layers.set(TOOLS));
 aimPlane.visible = sawModel.visible = arms.group.visible = false;
 sawModel.name = 'saw';
 
-// Направление на земле задаём азимутом: 0 — вдоль +x, против часовой стрелки при взгляде сверху
-// (так же, как поворот rotation.y у объектов).
-const dirOf = (az) => new THREE.Vector3(Math.cos(az), 0, -Math.sin(az));
-const azimuthOf = (v) => Math.atan2(-v.z, v.x);
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 // Куда смотришь — с наклоном взгляда.
 const lookOf = () => new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
@@ -166,6 +146,8 @@ const keys = new Set();
 let mode = 'free';
 let saw = null;
 let under = false;   // ветку пилить снизу вверх, верхней кромкой шины (U)
+const SEAT_HOLD_MS = 160; // короткое касание оставляет время выставить угол
+let cutAfter = 0;
 let trigger = false; // курок пилы — левая кнопка мыши — нажат
 // Деревья делянки и то, с которым сейчас имеем дело: у которого пила, а без пилы — ближайшее.
 // Координаты пропилов, пилы в стволе и всего, что считает физика, — от основания своего дерева (round.base).
@@ -247,6 +229,7 @@ function regrow(rnd = Math.random) {
   under = false;
   noted.until = 0;
   aimPlane.visible = false;
+  releaseSaw();
   chips.clear();
   fallLeaves.clear();
   if (woodyard) {
@@ -652,6 +635,7 @@ function arm(i) {
   }
   held = i;
   const { bar, pack } = kit[i];
+  heldSawEl.classList.toggle('short-bar', i === 1);
   if ((bar || kit[i].ladder) && grasp) letGo();
   if (bar) dressSaw(sawModel, pack, bar);
   showKit();
@@ -685,8 +669,10 @@ function take(i) {
 let noted = { text: '', until: 0 };
 const notice = (text) => { noted = { text, until: performance.now() + 2500 }; };
 
-// Ячейки инвентаря внизу экрана: что в руках, где брошенные пилы.
+// Ячейки инвентаря: что в руках, где брошенные пилы.
 const kitCells = [...kitEl.querySelectorAll('button')];
+const kitLabels = kitCells.map(button => button.getAttribute('aria-label'));
+const kitStatus = kitCells.map(button => button.querySelector('.tool-status'));
 kitCells.forEach((button, i) => button.addEventListener('click', () => {
   if (playing && !fly) take(i);
   button.blur();
@@ -696,9 +682,9 @@ function showKit() {
     const where = item.left ? (item.stuck ? 'зажата' : `лежит, ${Math.round(item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()))} м`)
       : item.ladder && ladderState ? 'у дерева'
       : !item.bar && grasp ? `${Math.round(grasp.mass)} кг` : '';
-    const text = `${item.bar ? `Пила ${item.bar * 100} см` : item.name}${where ? ` · ${where}` : ''}`;
-    if (kitCells[i].textContent !== text) kitCells[i].textContent = text;
-    kitCells[i].classList.toggle('held', i === held);
+    if (kitStatus[i].textContent !== where) kitStatus[i].textContent = where;
+    const label = where ? [kitLabels[i], where].join(', ') : kitLabels[i];
+    if (kitCells[i].getAttribute('aria-label') !== label) kitCells[i].setAttribute('aria-label', label);
     kitCells[i].classList.toggle('away', Boolean(item.left));
     if (kitCells[i].getAttribute('aria-pressed') !== String(i === held)) kitCells[i].setAttribute('aria-pressed', i === held);
   });
@@ -1324,6 +1310,7 @@ function startFall(tip, c, slip = 0, speed = 0) {
 // Дерево пошло — пилу от него убираешь. Пила у другого дерева так и остаётся в руках.
 function dropSaw() {
   if (saw?.tree !== round) return;
+  cutAfter = 0;
   mode = 'free';
   saw = null;
 }
@@ -1879,7 +1866,8 @@ function update(dt) {
   // Шаг назад от приставленной пилы — уходишь от пропила. Зажатая пила остаётся в стволе, руки свободны.
   if (saw && !fly && input.ahead < -0.2) stepBack();
 
-  const candidate = mode === 'free' && kit[held].bar ? sawAt(forward) : null;
+  const candidate = mode === 'free' && !fly && kit[held].bar ? sawAt(forward) : null;
+  if (cutAfter && performance.now() >= cutAfter && mode === 'aim' && trigger) startCut();
   showKit();
 
   if (mode === 'cut' && saw.limb && saw.kerf.closed.length && saw.kerf.onBlade(saw.kerf.closed, basis(saw), barL(), BAR_W)) stopCrosscut();
@@ -1918,21 +1906,22 @@ function update(dt) {
   const shown = saw ?? candidate;
   if (touch) {
     touchSaw.hidden = Boolean(fly);
-    let label = grasp ? 'Бросить' : 'Взять';
+    const reverse = canReverseCut();
+    const isTrigger = Boolean(kit[held].bar) && !reverse;
+    let label = reverse ? 'С другой стороны' : isTrigger ? (shown ? 'Пилить' : 'Газ') : (grasp ? 'Бросить' : 'Взять');
     if (kit[held].ladder) label = ladderPreview ? 'Поставить лестницу' : 'Примерить лестницу';
     else if (!kit[held].bar && climbing) label = 'Спуститься';
     else if (!kit[held].bar && ladderNearby()) label = ladderTargeted() ? 'Убрать лестницу' : 'Подняться';
-    else if (kit[held].bar) label = canReverseCut() ? 'С другой стороны' : saw ? 'Пилить' : candidate ? 'Приставить пилу' : 'Газ';
-    if (touchSaw.textContent !== label) touchSaw.textContent = label;
-    heldSawEl.classList.toggle('running', trigger && !saw);
+    showAction(touchSaw, label, isTrigger, trigger);
+    heldSawEl.classList.toggle('running', trigger && !shown);
   }
-  aimPlane.visible = Boolean(shown) && mode !== 'cut';
-  if (shown) {
-    const r = shown.kerf?.r ?? round.voxels.radius;
+  aimPlane.visible = !fly && Boolean(shown) && mode !== 'cut';
+  if (aimPlane.visible) {
+    const r = shown.kerf?.r ?? shown.tree.voxels.radius;
     const plane = place(shown, r);
     aimPlane.position.copy(plane.position);
     aimPlane.quaternion.copy(plane.quaternion);
-    aimPlane.scale.set(barL(), 2 * r, 1);
+    aimPlane.scale.set(barL(), (shown.under ? -2 : 2) * r, 1);
   }
 
   if (saw?.limb) saw.warningTime = saw.narrow || saw.branchStopped ? (saw.warningTime ?? 0) + dt : 0;
@@ -1946,34 +1935,25 @@ function update(dt) {
     const mm = round.gap;
     gapEl.textContent = `Щель ${mm.toFixed(0)} мм${mm < 9 ? ' — сужается' : mm > 11 ? ' — расширяется' : ''}`;
   }
-  const focus = saw ? local(inWorld(saw).origin).y : round.cuts.at(-1)?.origin.y ?? 1;
-  const target = round.base.clone().addScaledVector(UP, THREE.MathUtils.mapLinear(view.dist, VIEW_NEAR, VIEW_FAR, focus, VIEW_Y));
-  // Вид сбоку стоит справа от линии «ты — ствол», а не от взгляда: крутишь головой — он
-  // неподвижен, обходишь дерево — он плавно идёт следом.
-  const bearing = local(player.pos).setY(0).normalize();
-  view.base += angleDiff(azimuthOf(new THREE.Vector3(bearing.z, 0, -bearing.x)), view.base) * (1 - Math.exp(-3 * dt));
-  const look = dirOf(view.base + view.az).multiplyScalar(Math.cos(view.el)).setY(Math.sin(view.el));
-  sideCamera.position.copy(target).addScaledVector(look, view.dist);
-  sideCamera.lookAt(target);
-
-  // Пилящая пила дрожит, при ходьбе покачивается в руках.
-  const shake = new THREE.Vector3();
-  if (mode === 'cut') {
-    shake.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.006);
-  } else {
-    // В руках пила отстаёт от шага: качается шире головы и с запозданием на четверть шага.
-    shake.copy(right).multiplyScalar(Math.sin(player.bob - 0.8) * player.gait * 0.012).setY(-(Math.cos(player.bob) ** 2) * player.gait * 0.012);
+  if (shown) {
+    // При первом наведении шина сразу совпадает с разметкой, в том числе у лежащей ветки.
+    if (!sawModel.visible || !saw) {
+      const at = place(shown);
+      sawModel.position.copy(at.position);
+      sawModel.quaternion.copy(at.quaternion);
+    } else {
+      const shake = new THREE.Vector3();
+      if (mode === 'cut') shake.set(Math.random() - .5, Math.random() - .5, Math.random() - .5).multiplyScalar(.006);
+      moveSaw(saw, shake, dt);
+    }
   }
-  const [out, down, aside] = SHOTS[shot].hold;
-  const grip = eyeOf().addScaledVector(forward, out).addScaledVector(right, -aside).addScaledVector(UP, -down).add(player.step);
-  moveSaw(shown ?? { edge: local(grip), q: facing(player.yaw) }, shake, dt);
   lamp(sawModel, !!saw && (saw.branchStopped || saw.narrow || saw.pinched || round.squeeze));
   runChain(sawModel, trigger, Boolean(saw?.branchStopped || saw?.pinched || (saw?.chewed && mode === 'aim')), dt);
 
   if (fly) flyCamera(dt, shift);
   else frame(dt);
 
-  updateSawVisibility();
+  updateSawVisibility(shown);
   // При переноске предметов в режиме рук предмет парит перед игроком (без прыгающих 3D-рук в кадре)
   arms.group.visible = false;
   if (woodyard) {
@@ -1986,10 +1966,10 @@ function update(dt) {
   }
 }
 
-// Рисунок виден при ходьбе. Как только пила приставлена, её показывает сцена.
-function updateSawVisibility() {
-  sawModel.visible = playing && Boolean(saw);
-  heldSawEl.hidden = !playing || Boolean(fly || saw) || !kit[held].bar;
+// Наведение показывает модель, но ещё не создаёт пропил и не ограничивает ходьбу.
+function updateSawVisibility(target = saw) {
+  sawModel.visible = playing && !fly && Boolean(target) && Boolean(kit[held].bar);
+  heldSawEl.hidden = !playing || Boolean(fly || target) || !kit[held].bar;
 }
 
 // Все деревья продолжают падать, а куски — двигаться, когда игрок переключается в облёт.
@@ -2185,6 +2165,11 @@ function lockPointer() {
 
 addEventListener('keydown', (e) => {
   if (!playing || e.code === 'KeyF') return;
+  if (e.target === touchSaw && (e.code === 'Space' || e.code === 'Enter')) {
+    e.preventDefault();
+    if (!e.repeat) pressSaw();
+    return;
+  }
   if (!e.repeat) note(e.code);
   keys.add(e.code);
   if (e.code === 'KeyR' && !e.repeat && !fallStand) regrow();
@@ -2240,11 +2225,14 @@ addEventListener('keydown', (e) => {
   };
   if (keySteer[e.code] && mode !== 'free') steer(...keySteer[e.code]);
 });
-addEventListener('keyup', (e) => keys.delete(e.code));
+addEventListener('keyup', (e) => {
+  keys.delete(e.code);
+  if (e.target === touchSaw && (e.code === 'Space' || e.code === 'Enter')) releaseSaw();
+});
+touchSaw.addEventListener('blur', releaseSaw);
 addEventListener('blur', () => {
   keys.clear();
   releaseSaw();
-  setInspecting(false);
 });
 
 function canReverseCut() {
@@ -2265,6 +2253,13 @@ function changeCutSide() {
   }
   unsay('under');
   say('under', under ? 'Пилишь снизу, верхней кромкой шины' : 'Пилишь сверху');
+}
+
+function startCut() {
+  cutAfter = 0;
+  if (saw.pinched || saw.branchStopped) return;
+  if (saw.depth === 0 && !saw.kerf) saw.edge.y = saw.origin.y = (Math.floor(saw.origin.y / VOXEL) + .5) * VOXEL;
+  mode = 'cut';
 }
 
 function pressSaw() {
@@ -2293,15 +2288,14 @@ function pressSaw() {
   }
   if (saw?.branchStopped) return;
   trigger = Boolean(kit[held].bar);
-  if (mode === 'aim' && !saw.pinched) {
-    // В ствол входим по середине слоя кубиков: тогда щель лежит вокруг полотна поровну. У ветки кубиков нет.
-    if (saw.depth === 0 && !saw.kerf) saw.edge.y = saw.origin.y = (Math.floor(saw.origin.y / VOXEL) + 0.5) * VOXEL;
-    mode = 'cut';
+  if (mode === 'aim') {
+    startCut();
   } else if (mode === 'free' && kit[held].bar) {
     saw = sawAt(forwardOf(player.yaw));
     if (saw) {
       round = saw.tree;
       mode = 'aim';
+      cutAfter = performance.now() + SEAT_HOLD_MS;
     }
   } else if (mode === 'free') {
     if (grasp) letGo();
@@ -2310,6 +2304,7 @@ function pressSaw() {
 }
 
 function releaseSaw() {
+  cutAfter = 0;
   trigger = false;
   if (mode === 'cut') mode = 'aim';
 }
@@ -2318,7 +2313,6 @@ canvas.addEventListener('contextmenu', (e) => { if (playing) e.preventDefault();
 canvas.addEventListener('pointerdown', (e) => {
   if (!playing || e.pointerType !== 'mouse') return;
   note(`mouse${e.button} ${mode}`);
-  if (e.button === 2) setInspecting(true);
   if (e.button !== 0) return;
   if (document.pointerLockElement !== canvas) lockPointer();
   pressSaw();
@@ -2327,7 +2321,6 @@ addEventListener('mouseup', (e) => {
   if (!playing) return;
   note(`up${e.button} ${mode}`);
   if (e.button === 0) releaseSaw();
-  if (e.button === 2) setInspecting(false);
 });
 touchSaw.addEventListener('pointerdown', (e) => {
   if (!playing || sawPointer !== null || e.button !== 0) return;
@@ -2343,29 +2336,16 @@ for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
     releaseSaw();
   });
 }
-addEventListener('wheel', (e) => {
-  if (playing) view.dist = THREE.MathUtils.clamp(view.dist * Math.exp(e.deltaY * 0.001), VIEW_NEAR, VIEW_FAR);
-});
-
-// Осмотр: рамка вида сбоку растёт, а мышь вместо взгляда водит камеру вокруг ствола.
-function setInspecting(on) {
-  inspecting = on;
-  sideEl.classList.toggle('big', on);
-}
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement === canvas) return;
   releaseSaw();
-  setInspecting(false);
 });
 document.addEventListener('mousemove', (e) => {
   if (playing && document.pointerLockElement === canvas) look(e.movementX * MOUSE, e.movementY * MOUSE);
 });
 
 function look(dx, dy) {
-  if (inspecting) {
-    view.az -= dx * 2;
-    view.el = THREE.MathUtils.clamp(view.el + dy * 2, VIEW_EL_MIN, VIEW_EL_MAX);
-  } else if (fly) {
+  if (fly) {
     fly.yaw -= dx;
     fly.pitch = THREE.MathUtils.clamp(fly.pitch - dy, -1.5, 1.5);
   } else if (climbing) {
@@ -2454,7 +2434,6 @@ function leave() {
   }
   keys.clear();
   setFlying(false);
-  setInspecting(false);
   if (document.pointerLockElement === canvas) document.exitPointerLock();
   camera.layers.disable(TOOLS);
   aimPlane.visible = arms.group.visible = false;
@@ -2484,32 +2463,6 @@ function tick(now, dt) {
     update(dt);
     beat(now);
   } else updateTrees(dt);
-}
-
-// Снимок маленькой камеры живёт в самом элементе HUD. Его можно повернуть и перекрыть
-// другими элементами. Между снимками основной вид продолжает рисоваться каждый кадр.
-const inset = sideEl.querySelector('canvas'), insetInk = inset.getContext('2d', { alpha: false });
-let nextInset = 0;
-function renderInset(renderer, now) {
-  if (!playing || sideEl.hasAttribute('data-layout-off') || now < nextInset) return;
-  nextInset = now + 100;
-  const ratio = renderer.getPixelRatio();
-  const hudScale = hudEl.getBoundingClientRect().width / hudEl.offsetWidth;
-  const width = Math.max(1, Math.min(canvas.clientWidth, Math.round(sideEl.clientWidth * hudScale)));
-  const height = Math.max(1, Math.min(canvas.clientHeight, Math.round(sideEl.clientHeight * hudScale)));
-  const w = Math.floor(width * ratio), h = Math.floor(height * ratio);
-  if (inset.width !== w || inset.height !== h) { inset.width = w; inset.height = h; }
-  sideCamera.aspect = width / height;
-  sideCamera.updateProjectionMatrix();
-  const shadows = renderer.shadowMap.autoUpdate;
-  renderer.shadowMap.autoUpdate = false;
-  renderer.setScissorTest(true);
-  renderer.setScissor(0, 0, width, height);
-  renderer.setViewport(0, 0, width, height);
-  renderer.render(scene, sideCamera);
-  insetInk.drawImage(canvas, 0, canvas.height - h, w, h, 0, 0, w, h);
-  renderer.setScissorTest(false);
-  renderer.shadowMap.autoUpdate = shadows;
 }
 
 // Стенд владеет сценой, камерой и кадром. Игра добавляет в его двор клёны, пилу, хоздвор (поленницу и костёр) и управление.
@@ -2559,5 +2512,5 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
   // Точка появления игрока при входе в «Игру»: у ворот, с внутренней стороны (house-view.js привязывает её
   // к фактическим воротам забора). yaw = Math.PI — лицом во двор (спиной к улице), чтобы сразу идти вперёд.
   const spawn = () => spawnPoint ?? { x: MAPLES[1].x, z: MAPLES[1].z + 4, yaw: 0 };
-  return { get active() { return playing; }, setSpawn: (p) => { spawnPoint = p; }, spawn, placeWoodyard: woodyard?.placeByGate, regrow, canStand, enter, leave, tick, renderInset, look, touchWalk };
+  return { get active() { return playing; }, setSpawn: (p) => { spawnPoint = p; }, spawn, placeWoodyard: woodyard?.placeByGate, regrow, canStand, enter, leave, tick, look, touchWalk };
 }

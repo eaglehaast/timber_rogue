@@ -65,6 +65,7 @@ export function buildBanya(site, river, power, house) {
   // Лестница повторяет конструкцию крыльца: отдельные проступи, подступёнки и боковые тетивы.
   const stairZ = front - 0.8, stairWidth = 1.1, stairRun = 1.2;
   const foot = localToWorld(W / 2 + stairRun, stairZ);
+  const approachGuide = localToWorld(W / 2 + stairRun + 1.6, stairZ);
   const footY = height(foot.x, foot.y) - base;
   const stairs = new Planks(boardMaterials(TONES.gable), 0.035);
   const treads = Math.max(2, Math.ceil((top - footY) / 0.17)), rise = (top - footY) / treads;
@@ -140,7 +141,10 @@ export function buildBanya(site, river, power, house) {
     return false;
   };
   const powerLine = buildBanyaPower(base, power, house, localToWorld);
-  return { group, dock, powerLine, deck, blocks, plan, deckPlan };
+  return {
+    group, dock, powerLine, deck, blocks, plan, deckPlan,
+    approach: { x: foot.x, z: foot.y }, approachGuide: { x: approachGuide.x, z: approachGuide.y },
+  };
 }
 
 function distanceToRail(x, z, from, to) {

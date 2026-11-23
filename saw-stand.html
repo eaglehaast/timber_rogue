@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Примерка пилы · Timber Rogue</title>
+  <link rel="stylesheet" href="saw-stand.css">
+  <script type="module" src="src/saw-stand.js"></script>
+</head>
+<body>
+  <main>
+    <header><a href="./#stands">← Стенды</a><h1>Примерка пилы</h1></header>
+    <div class="settings">
+      <div role="group" aria-label="Длина шины"><span>Шина</span>
+        <button type="button" data-length="30" aria-pressed="false">30 см</button>
+        <button type="button" data-length="70" aria-pressed="true">70 см</button>
+      </div>
+      <div role="group" aria-label="Вид"><span>Вид</span>
+        <button type="button" data-view="detail" aria-pressed="true">Крупно</button>
+        <button type="button" data-view="yard" aria-pressed="false">Во дворе</button>
+      </div>
+    </div>
+    <div id="stage"><img id="yard-backdrop" alt=""><div id="rig" role="img" aria-label="Пила в руках игрока"></div></div>
+    <div class="controls">
+      <button type="button" id="gas" aria-label="Газ" aria-pressed="false" disabled></button>
+      <p><strong>Удерживай газ</strong>Кнопка или пробел</p>
+      <output id="status">Загрузка…</output>
+    </div>
+  </main>
+</body>
+</html>

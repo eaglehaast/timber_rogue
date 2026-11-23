@@ -21,7 +21,7 @@ globalThis.matchMedia = () => ({ matches: true });
 globalThis.fetch = async (path) => ({ json: async () => JSON.parse(await readFile(path, 'utf8')) });
 
 const { planRiver } = await import('./src/river.js');
-const { shapeGround, groundGeometry, height } = await import('./src/terrain.js');
+const { shapeGround, height } = await import('./src/terrain.js');
 const { makeGround } = await import('./src/grass.js');
 const { planBanya, buildBanya } = await import('./src/banya.js');
 const { planHouse, LOG_MATERIAL } = await import('./src/house.js');
@@ -30,6 +30,8 @@ const { planGas, gasPostMaterial } = await import('./src/gas.js');
 const { planPower, powerWireMaterial } = await import('./src/power.js');
 const { generator } = await import('./src/random.js');
 const { GATES, WICKET } = await import('./src/fence.js');
+
+assert.equal(planHouse(73, { doorWall: 'right' }).openings.find(({ kind }) => kind === 'door').wall, 'right');
 
 for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const house = planHouse(seed), rnd = generator(seed + 13);
@@ -42,21 +44,17 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   atHouse.y = height(atHouse.x, atHouse.z);
   const gas = planGas(house, atHouse, { fence: 12.5, gate: GATES.at });
   const power = planPower(house, atHouse, gas, { fence: 12.5, keep: [WICKET, GATES] });
-  groundGeometry(40);
-  const grassBounds = (x, z) => Math.abs(x) <= 20 && z <= 12.5 && z >= river.shore(x) - 0.15;
-  const grassGround = makeGround(40, grassBounds);
+  const grassGround = makeGround(280);
+  const { position, uv } = grassGround.geometry.attributes;
   assert.ok(grassGround.material.map, 'плоская текстура травы подключена');
-  assert.equal(grassGround.material.vertexColors, false, 'текстура земли не зависит от удалённой цветовой сетки');
+  assert.equal(grassGround.material.vertexColors, false);
   assert.equal(grassGround.geometry.attributes.color, undefined);
-  assert.equal(grassGround.geometry.attributes.uv.count, grassGround.geometry.attributes.position.count);
-  const grassPositions = grassGround.geometry.attributes.position;
-  assert.ok(Math.min(...Array.from({ length: grassPositions.count }, (_, i) => grassPositions.getZ(i))) < -20,
-    'текстурная трава доходит за край заднего двора к реке');
-  for (let i = 0; i < grassPositions.count; i++) {
-    const x = grassPositions.getX(i), z = grassPositions.getZ(i);
-    assert.ok(Math.abs(x) <= 20.2, 'трава не выходит за боковые границы участка');
-    assert.ok(z >= river.shore(x) - 0.4 && z <= 12.7, 'трава доходит до уреза, не выходя за участок');
-  }
+  assert.equal(uv.count, position.count);
+  grassGround.geometry.computeBoundingBox();
+  const { min, max } = grassGround.geometry.boundingBox;
+  assert.deepEqual([min.x, max.x, min.z, max.z], [-140, 140, -140, 140]);
+  const shoreRay = new THREE.Raycaster(new THREE.Vector3(site.x, 10, river.shore(site.x) - 0.15), new THREE.Vector3(0, -1, 0));
+  assert.ok(shoreRay.intersectObject(grassGround).length, 'под настилом у уреза есть земля');
   const banya = buildBanya(site, river, power, { plan: house, at: atHouse });
   const bathWindows = banya.plan.openings.filter((opening) => opening.kind === 'window');
   assert.equal(banya.plan.plinth, 'brick', 'баня стоит на кирпичном цоколе без деревянной обшивки');

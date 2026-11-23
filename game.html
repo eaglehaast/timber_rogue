@@ -20,26 +20,25 @@
     <div id="room"><div id="stage">
       <canvas id="scene" aria-label="Вид от первого лица"></canvas>
       <div id="hud" hidden>
-        <div id="held-saw"><img alt="Руки с пилой" draggable="false"></div>
+        <div id="held-saw"><img class="long-saw" alt="Руки с длинной пилой" draggable="false"><img class="short-saw" data-art="shortAsset" alt="Руки с короткой пилой" draggable="false"></div>
         <div id="kit" role="group" aria-label="Инвентарь">
-          <button id="slot-long" type="button" aria-label="Длинная пила, 70 см">Пила 70 см</button>
-          <button id="slot-short" type="button" aria-label="Короткая пила, 30 см">Пила 30 см</button>
-          <button id="slot-hands" type="button">Руки</button>
-          <button id="slot-ladder" type="button" aria-label="Приставная лестница">Лестница</button>
+          <button id="slot-long" type="button" aria-label="Длинная пила, 70 см"><img alt="" draggable="false"><span class="tool-spec"><b class="bar-length">70 см</b></span><span class="tool-status"></span></button>
+          <button id="slot-short" type="button" aria-label="Короткая пила, 30 см, 45 звеньев"><img alt="" draggable="false"><span class="tool-spec"><b class="bar-length">30 см</b><small>45 зв.</small></span><span class="tool-status"></span></button>
+          <button id="slot-hands" type="button" aria-label="Свободные руки"><img alt="" draggable="false"><span class="tool-spec">Руки</span><span class="tool-status"></span></button>
+          <button id="slot-ladder" type="button" aria-label="Приставная лестница"><span class="tool-spec">Лестница</span><span class="tool-status"></span></button>
         </div>
-        <div id="side" aria-label="Вид на дерево сбоку"><canvas></canvas></div>
         <div id="hint"></div><div id="depth"><div id="depthFill"></div></div><div id="gap" hidden></div>
         <div id="log"></div><div id="result" hidden></div>
         <div id="stick" role="group" aria-label="Движение"><span></span></div>
-        <button id="touch-saw" type="button">Пилить</button>
+        <button id="touch-saw" class="saw-trigger" type="button" aria-label="Газ"><img class="trigger-rest" alt="" draggable="false"><img class="trigger-down" data-art="pressedAsset" alt="" draggable="false"><span class="action-label"></span></button>
         <div id="utility">
           <a id="back" href="./">← Меню</a>
           <details id="help"><summary aria-label="Управление">?</summary>
             <div id="help-body">
               <b>Управление</b>
-              <p class="desktop-only">WASD — ходить, мышь — смотреть. У древесины нажми левую кнопку, затем удерживай её для пропила. S — отойти. Клавиши 1–4 выбирают инструмент. Поднеси лестницу к стволу и нажми левую кнопку, когда она примерится; на лестнице мышью осматривайся, чтобы выбирать ветки. W/S — подняться/спуститься, E — сойти у земли. Переключись на руки и нажми на приставленную лестницу, чтобы убрать её.</p>
-              <p class="touch-only">Левый круг — ходьба. Веди пальцем по двору, чтобы смотреть или поворачивать пилу. Приставь пилу кнопкой и удерживай «Пилить». Если ветку зажимает, нажми «С другой стороны» или потяни круг назад, чтобы вынуть пилу. Поднеси выбранную лестницу к стволу и нажми кнопку, когда она примерится; на лестнице проведи пальцем по двору, чтобы осмотреться, а кругом поднимайся или спускайся.</p>
-              <p class="desktop-only">C — присесть, Shift — бежать, U — сменить сторону реза, L — журнал. Правая кнопка и колесо — вид сбоку. Esc освобождает мышь.</p>
+              <p class="desktop-only">WASD — ходить, мышь — смотреть. Наведи взгляд на древесину. Когда появится объёмная пила, удерживай левую кнопку для пропила. Короткий щелчок фиксирует пилу для настройки угла. S — отойти. Клавиши 1–4 выбирают инструмент. Поднеси лестницу к стволу и нажми левую кнопку, когда она примерится; на лестнице мышью осматривайся, чтобы выбирать ветки. W/S — подняться/спуститься, E — сойти у земли. Переключись на руки и наведи взгляд на лестницу, чтобы убрать её.</p>
+              <p class="touch-only">Левый круг — ходьба. Веди пальцем по двору, чтобы смотреть или поворачивать пилу. У древесины появятся объёмная пила и разметка. Удерживай жёлтый курок для пропила. Короткое касание фиксирует пилу, затем движением пальца можно выставить угол. Если ветку зажимает, нажми «С другой стороны» или потяни круг назад, чтобы вынуть пилу. Поднеси выбранную лестницу к стволу и нажми кнопку, когда она примерится; на лестнице проведи пальцем по двору, чтобы осмотреться, а кругом поднимайся или спускайся.</p>
+              <p class="desktop-only">C — присесть, Shift — бежать, U — сменить сторону реза, L — журнал. Esc освобождает мышь.</p>
               <button id="regrow" type="button">Новые клёны</button>
             </div>
           </details>
@@ -79,6 +78,7 @@
         <label class="check"><input id="visible" type="checkbox"> Показывать в игре</label>
       </fieldset>
       <div id="art-controls" hidden>
+        <label id="art-state-wrap" hidden>Вариант рисунка<select id="art-state"></select></label>
         <label>Рисунок<select id="art"></select></label>
         <label class="file-button">Добавить рисунок<input id="new-art" type="file" accept="image/png,image/webp,image/jpeg"></label>
       </div>
