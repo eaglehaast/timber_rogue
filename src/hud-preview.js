@@ -1,10 +1,12 @@
 import { showAction } from './hud-layout.js';
+import { sawPoses } from './hud-bench-art.js';
+import { makeHeldSaw } from './held-saw.js';
 import * as THREE from 'three';
 import { MOUSE, fieldOfView, makePlayer, forwardOf, turnHead, walkInput, walkSpeed, stepEyes, eyeCamera, bindStick } from './player.js';
 
 // Этот стенд не импортирует двор или физику дерева. Общие с игрой здесь глаза,
 // походка, круг движения и настоящие элементы экранного интерфейса.
-export function makePreview() {
+export async function makePreview(getLayout) {
   const el = id => document.getElementById(id);
   const canvas = el('scene'), renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(fieldOfView(), 800 / 460, .05, 140);
@@ -19,6 +21,12 @@ export function makePreview() {
   const slots = [...el('kit').querySelectorAll('button')];
   const contextual = ['hint','depth','gap','log','result'];
   const action = el('touch-saw'), saw = el('held-saw');
+  const still = new Image(), rig = document.createElement('div');
+  still.alt = 'Пила в руках'; still.draggable = false;
+  rig.style.cssText = 'position:absolute; inset:0; pointer-events:none';
+  rig.setAttribute('aria-hidden', 'true');
+  saw.replaceChildren(still, rig);
+  const motion = await makeHeldSaw(rig);
   el('hint').textContent = 'Падает! Отойди!';
   el('gap').textContent = 'Щель 8 мм';
   el('log').textContent = 'Щель сужается';
@@ -26,27 +34,46 @@ export function makePreview() {
   el('depthFill').style.width = '45%';
   el('hud').classList.add('details');
   el('hud').hidden = false;
-  let playing = false, selected = 'held-saw', slot = 0, pressed = false, actionPointer = null, lookPointer = null, previous = 0;
+  let playing = false, selected = 'held-saw', artState = 'asset', slot = 0;
+  let actionPointer = null, lookPointer = null, previous = 0;
   function show() {
-    saw.hidden = playing && slot === 2;
-    saw.classList.toggle('short-bar', playing && slot === 1);
-    saw.classList.toggle('running', playing && pressed && slot !== 2);
     const hasSaw = !playing || slot !== 2;
+    const pressed = playing ? keys.has('Space') || actionPointer !== null
+      : artState === 'pressedAsset' || artState === 'shortPressedAsset';
+    const short = playing ? slot === 1 : selected === 'held-saw' && (artState === 'shortAsset' || artState === 'shortPressedAsset');
+    const state = short ? (pressed ? 'shortPressedAsset' : 'shortAsset') : (pressed ? 'pressedAsset' : 'asset');
+    const layout = getLayout(), id = layout.elements['held-saw'][state];
+    const animate = playing && hasSaw && id === sawPoses[state] && layout.elements['held-saw'].visible;
+    saw.hidden = !hasSaw; rig.hidden = !animate; still.hidden = animate;
+    still.dataset.art = state;
+    if (animate) {
+      motion.setLength(short ? 30 : 70);
+      motion.setThrottle(pressed);
+    } else {
+      motion.stop();
+      if (hasSaw && still.getAttribute('src') !== layout.assets[id].src) still.src = layout.assets[id].src;
+    }
     showAction(action, hasSaw ? 'Газ' : 'Взять', hasSaw, pressed);
     slots.forEach((el, i) => el.setAttribute('aria-pressed', i === slot));
     for (const id of contextual) el(id).hidden = playing || selected !== id;
   }
-  function take(i) { slot = i; release(); }
-  function release() { pressed = false; actionPointer = null; show(); }
+  function cancelGas() {
+    const captured = actionPointer;
+    actionPointer = null; keys.delete('Space');
+    if (captured !== null && action.hasPointerCapture(captured)) action.releasePointerCapture(captured);
+    motion.stop();
+  }
+  function take(i) { cancelGas(); slot = i; show(); }
   slots.forEach((el, i) => el.addEventListener('click', () => { if (playing) take(i); }));
   action.addEventListener('pointerdown', e => {
     if (!playing || e.button !== 0 || actionPointer !== null) return;
     actionPointer = e.pointerId;
     action.setPointerCapture(e.pointerId);
-    pressed = true;
     show();
   });
-  for (const type of ['pointerup','pointercancel','lostpointercapture']) action.addEventListener(type, e => { if (actionPointer === e.pointerId) release(); });
+  for (const type of ['pointerup','pointercancel','lostpointercapture']) action.addEventListener(type, e => {
+    if (actionPointer === e.pointerId) { actionPointer = null; show(); }
+  });
   canvas.addEventListener('pointerdown', e => {
     if (!playing || e.button !== 0 || lookPointer !== null) return;
     lookPointer = e.pointerId;
@@ -58,14 +85,16 @@ export function makePreview() {
   for (const type of ['pointerup','pointercancel','lostpointercapture']) canvas.addEventListener(type, e => { if (lookPointer === e.pointerId) lookPointer = null; });
   addEventListener('keydown', e => {
     if (!playing || e.target.closest('input,textarea,select') || e.metaKey || e.ctrlKey || e.altKey) return;
-    keys.add(e.code);
-    if (/^Digit[1-3]$/.test(e.code)) take(Number(e.code.at(-1)) - 1);
+    if (!e.repeat) keys.add(e.code);
+    if (/^Digit[1-3]$/.test(e.code) && !e.repeat) take(Number(e.code.at(-1)) - 1);
     if (e.code === 'KeyC' && !e.repeat) player.crouch = !player.crouch;
-    if (e.code === 'Space') { e.preventDefault(); pressed = true; show(); }
+    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) show(); }
   });
-  addEventListener('keyup', e => { keys.delete(e.code); if (e.code === 'Space') release(); });
-  function clear() { keys.clear(); lookPointer = null; release(); }
+  addEventListener('keyup', e => { keys.delete(e.code); if (playing && e.code === 'Space') show(); });
+  function clear() { cancelGas(); keys.clear(); lookPointer = null; show(); }
   addEventListener('blur', clear);
+  addEventListener('pagehide', clear);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clear(); });
   el('inspector').addEventListener('focusin', clear);
 
   function draw() { eyeCamera(camera, player); renderer.render(scene, camera); }
@@ -87,7 +116,7 @@ export function makePreview() {
     draw();
   }).observe(canvas);
   return {
-    select(id) { selected = id; show(); },
+    select(id, state) { selected = id; artState = state; show(); },
     play(on) {
       playing = on; clear(); previous = performance.now();
       renderer.setAnimationLoop(on ? frame : null);
