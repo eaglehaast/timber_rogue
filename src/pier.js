@@ -33,20 +33,21 @@ export function planPier(river, seed) {
   return { seed, start, along, across, top, length, land: LAND + run, deck };
 }
 
-export function buildPier({ seed, start, along, across, top, length, land }) {
+export function buildPier({ seed, start, along, across, top, length, land, width = WIDTH }) {
   const rnd = generator(seed + 97), jitter = (k) => (rnd() - 0.5) * 2 * k;
   const floor = new Planks(boardMaterials(TONES.roof), DECK), frame = new Planks(boardMaterials(TONES.gable), BEAM);
   const up = new THREE.Vector3(0, 1, 0), o = (y) => new THREE.Vector3(start.x, y, start.y);
   const A = new THREE.Vector3(along.x, 0, along.y), C = new THREE.Vector3(across.x, 0, across.y);
   // Настил: доски поперёк мостков, от берега к краю; концы гуляют на пару сантиметров.
   for (let s = 0; s + 0.1 <= length; s += 0.1 + GAP[0] + rnd() * (GAP[1] - GAP[0])) {
-    const a = -WIDTH / 2 + jitter(0.03), b = WIDTH / 2 + jitter(0.03);
+    const a = -width / 2 + jitter(0.03), b = width / 2 + jitter(0.03);
     floor.add([[s, a], [s + 0.1, a], [s + 0.1, b], [s, b]], { o: o(top - DECK), X: A, Y: C }, up, [0, 1], 0.1, rnd);
   }
   // Лаги под краями настила — во всю длину. Сваи под лагами: первая пара — у уреза, последняя — под краем, между ними поровну.
-  const sides = [-1, 1].map((k) => k * (WIDTH / 2 - BEAM));
+  const count = Math.ceil((width - 2 * BEAM) / 1.5);
+  const sides = Array.from({ length: count + 1 }, (_, i) => -width / 2 + BEAM + i * (width - 2 * BEAM) / count);
   for (const c of sides) frame.add([[0, c - BEAM / 2], [length, c - BEAM / 2], [length, c + BEAM / 2], [0, c + BEAM / 2]], { o: o(top - DECK - BEAM), X: A, Y: C }, up, [1, 0], BEAM, rnd);
-  const n = Math.ceil(OVER / SPAN);
+  const n = Math.max(1, Math.ceil((length - land) / SPAN));
   for (let i = 0; i <= n; i++) {
     const s = land + (i / n) * (length - land - BEAM / 2);
     for (const c of sides) {

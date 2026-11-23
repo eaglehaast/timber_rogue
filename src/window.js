@@ -67,7 +67,7 @@ export class Faces {
 
 // Окна дома. walls — как в house.js (along, at); base — высота, от которой считаются низ и верх проёмов;
 // out — плоскость наличника от оси стены наружу (чуть впереди брёвен), проём картинки совпадает с проёмом окна.
-export function buildWindows({ openings, windows: { pattern, paint, tulle } }, walls, { base, out }) {
+export function buildWindows({ openings, windows: { pattern, paint, tulle }, plainWindows = false }, walls, { base, out }) {
   const trims = new Faces(), sash = new Faces(), glass = new Faces(), tulles = new Faces();
   // Пиксель картинки → место на окне (a вправо от середины проёма, y вверх от его низа) и в атласе.
   const place = (x, y) => [m(x - (OX0 + OX1) / 2, 0), m(OY1 - y, 1)];
@@ -90,10 +90,10 @@ export function buildWindows({ openings, windows: { pattern, paint, tulle } }, w
     const rect = (faces, a0, a1, y0, y1, d, uvs) => faces.face([at(a0, y0, d), at(a1, y0, d), at(a1, y1, d), at(a0, y1, d)], n, uvs);
     const corner = (x, y) => [...place(x, y), ...texel(x, y)];
     const [a0, y0, u0, v0] = corner(FX0, FY1), [a1, y1, u1, v1] = corner(FX1, FY0);
-    rect(trims, a0, a1, y0, y1, 0, [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
+    if (!plainWindows) rect(trims, a0, a1, y0, y1, 0, [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
     // Торцы рамы по силуэту: от лица наличника внутрь на THICK. Краска — с пикселя чуть внутри силуэта
     // (на самом краю картинки — контур пером), растянутая по толщине.
-    outline.forEach(([x, y], i) => {
+    if (!plainWindows) outline.forEach(([x, y], i) => {
       const [x2, y2] = outline[(i + 1) % outline.length];
       const len = Math.hypot(x2 - x, y2 - y), nx = (turn * (y2 - y)) / len, ny = (turn * -(x2 - x)) / len; // наружу, в пикселях (y вниз)
       const [pa, py] = place(x, y), [qa, qy] = place(x2, y2);
