@@ -222,6 +222,36 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim:
     posts.mesh(new THREE.MeshLambertMaterial({ map: atlas('newel'), color: repaint('newel', paint), alphaTest: 0.5 })));
 }
 
+// Та же герметичная дверь с обсадой и наличником для отдельного входа бани.
+export function buildDoor(seed, door, wall, { base, face }) {
+  const rnd = generator(seed + 3), paint = PAINTS[Math.floor(rnd() * PAINTS.length)];
+  const side = Math.sign(wall.at), c = wall.along === 'x'
+    ? new THREE.Vector3(door.at, 0, wall.at)
+    : new THREE.Vector3(wall.at, 0, door.at);
+  const n = wall.along === 'x' ? new THREE.Vector3(0, 0, side) : new THREE.Vector3(side, 0, 0);
+  const s = wall.along === 'x' ? new THREE.Vector3(side, 0, 0) : new THREE.Vector3(0, 0, -side);
+  const up = new THREE.Vector3(0, 1, 0), P = (a, q, y) => c.clone().addScaledVector(n, face + q).addScaledVector(s, a).setY(y);
+  const doorHalf = door.width / 2, top = base + door.bottom, dTop = base + door.top;
+  const leaves = new Faces(), [du0, dv0, du1, dv1] = cell('door', Math.floor(rnd() * KIT.door.count)), [iu, iv] = INSET;
+  leaves.face([P(-doorHalf, -DOOR_INSET, top), P(doorHalf, -DOOR_INSET, top),
+    P(doorHalf, -DOOR_INSET, dTop), P(-doorHalf, -DOOR_INSET, dTop)].map((p) => p.toArray()), n.toArray(),
+  [[du0 + iu, dv0 + iv], [du1 - iu, dv0 + iv], [du1 - iu, dv1 - iv], [du0 + iu, dv1 - iv]]);
+  const lining = new Faces(), at = (a, q, y) => P(a, q, y).toArray();
+  lining.face([at(-doorHalf, 0, top), at(-doorHalf, 0, dTop), at(-doorHalf, -DOOR_INSET, dTop), at(-doorHalf, -DOOR_INSET, top)], s.toArray());
+  lining.face([at(doorHalf, 0, top), at(doorHalf, 0, dTop), at(doorHalf, -DOOR_INSET, dTop), at(doorHalf, -DOOR_INSET, top)], s.clone().negate().toArray());
+  lining.face([at(-doorHalf, 0, dTop), at(doorHalf, 0, dTop), at(doorHalf, -DOOR_INSET, dTop), at(-doorHalf, -DOOR_INSET, dTop)], [0, -1, 0]);
+  lining.face([at(-doorHalf, 0, top), at(doorHalf, 0, top), at(doorHalf, -DOOR_INSET, top), at(-doorHalf, -DOOR_INSET, top)], [0, 1, 0]);
+  const painted = new Planks(boardMaterials(WOOD, { color: paint })), trim = { o: P(0, TRIM.out, 0), X: s, Y: up };
+  const edge = doorHalf + TRIM.overlap, rect = (a0, a1, y0, y1) => [[a0, y0], [a1, y0], [a1, y1], [a0, y1]];
+  for (const sign of [-1, 1]) {
+    const a0 = sign > 0 ? edge - TRIM.side : -edge;
+    painted.add(rect(a0, a0 + TRIM.side, top, dTop + TRIM.top), trim, n, [0, 1], TRIM.side, rnd);
+  }
+  painted.add(rect(-edge, edge, dTop, dTop + TRIM.top), { ...trim, o: P(0, TRIM.out + 0.022, 0) }, n, [1, 0], TRIM.top, rnd);
+  return new THREE.Group().add(...painted.meshes(), lining.mesh(new THREE.MeshLambertMaterial({ color: new THREE.Color(...paint).multiplyScalar(0.8) })),
+    leaves.mesh(new THREE.MeshLambertMaterial({ map: atlas('door'), color: repaint('door', DOOR_PAINTS[Math.floor(rnd() * DOOR_PAINTS.length)]) })));
+}
+
 // Столб перил: брус POST × POST от земли до height, грани — картинка столба index (набор house-newel.webp — тело
 // столба с шапкой, без свеса шапки). Низ и шапка картинки — в своём масштабе (по ширине столба), середина тянется
 // по высоте. s, n — оси столба вдоль стены и от неё, base — середина низа.
