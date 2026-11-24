@@ -37,6 +37,7 @@ body[data-mode="fly"] #stage { width: 100%; height: 100%; aspect-ratio: auto; }
 #kit button.away img { opacity: .58; }
 #hint, #gap, #result, #log { text-shadow: 0 1px 4px #14231a, 0 1px 2px #000; }
 #hint, #result { text-align: center; }
+#hud.winch-aim #hint { margin-top: 55px; }
 #log, #gap { font-size: 14px; }
 #hud:not(.details) :is(#log, #gap) { display: none; }
 #log div { animation: fade 6s forwards; }
@@ -57,6 +58,9 @@ body[data-mode="fly"] #stage { width: 100%; height: 100%; aspect-ratio: auto; }
 #touch-saw.saw-trigger.pressed .trigger-rest { display: none; }
 #touch-saw.saw-trigger.pressed .trigger-down { display: block; }
 #touch-saw.saw-trigger .action-label { display: none; }
+#winch-control { position: absolute; z-index: 4; left: 598px; top: 301px; width: 190px; min-height: 48px; padding: 5px 8px; pointer-events: auto; border-color: #e4c78c; background: #27382eef; color: #fff0c9; font-size: 12px; font-weight: 700; text-shadow: 0 1px 2px #000b; }
+#winch-control:hover { background: #3a4b3b; }
+#winch-control:active { background: #77653d; }
 #flight, #loading { position: absolute; z-index: 2; }
 #utility { display: contents; }
 #utility a, #help { pointer-events: auto; font-size: 14px; }

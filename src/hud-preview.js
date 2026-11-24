@@ -37,7 +37,7 @@ export async function makePreview(getLayout) {
   let playing = false, selected = 'held-saw', artState = 'asset', slot = 0;
   let actionPointer = null, lookPointer = null, previous = 0;
   function show() {
-    const hasSaw = !playing || slot !== 2;
+    const hasSaw = !playing || slot < 2;
     const pressed = playing ? keys.has('Space') || actionPointer !== null
       : artState === 'pressedAsset' || artState === 'shortPressedAsset';
     const short = playing ? slot === 1 : selected === 'held-saw' && (artState === 'shortAsset' || artState === 'shortPressedAsset');

@@ -23,6 +23,7 @@ import { seed, random } from './random.js';
 import { wind, gust } from './wind.js';
 import { classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './wood-handling.js';
 import { advanceLadderClimb, buildLadder, findLadderPlacement, ladderClimbPosition } from './ladder.js';
+import { createWinch, findWinchTarget } from './winch.js';
 
 let woodyard = null;
 // Где игрок появляется при выборе «Игра» — задаёт house-view.js: у ворот, с внутренней стороны двора.
@@ -89,8 +90,9 @@ const heldSawEl = document.getElementById('held-saw');
 const stickEl = document.getElementById('stick');
 const stick = bindStick(stickEl);
 const touchSaw = document.getElementById('touch-saw');
+const winchControl = document.getElementById('winch-control');
 
-let scene, camera, ground, groundNormal, walkable;
+let scene, camera, ground, groundNormal, walkable, winch;
 let playing = false, touch = false;
 let resultTimer;
 let sawPointer = null;
@@ -111,6 +113,7 @@ const kit = [
   { name: 'Короткая пила', bar: 0.3, pack: recall('pack-short', [...PACKS].reverse()) },
   { name: 'Руки' },
   { name: 'Приставная лестница', ladder: true },
+  { name: 'Лебёдка', winch: true },
 ];
 const TAKE = 2; // м — с такого расстояния от глаз дотягиваешься до брошенной пилы
 let held = 0;   // что в руках: номер в kit
@@ -212,6 +215,7 @@ const fallen = (tree, i) => !(tree.standing & (1 << i)) || (tree.done && Boolean
 function regrow(rnd = Math.random) {
   releaseSaw();
   if (grasp) letGo();
+  winch?.clear();
   ladderState = ladderPreview = climbing = null;
   ladderModel.visible = false;
   for (const item of kit) {
@@ -636,7 +640,7 @@ function arm(i) {
   held = i;
   const { bar, pack } = kit[i];
   heldSawEl.classList.toggle('short-bar', i === 1);
-  if ((bar || kit[i].ladder) && grasp) letGo();
+  if ((bar || kit[i].ladder || kit[i].winch) && grasp) letGo();
   if (bar) dressSaw(sawModel, pack, bar);
   showKit();
 }
@@ -677,10 +681,16 @@ kitCells.forEach((button, i) => button.addEventListener('click', () => {
   if (playing && !fly) take(i);
   button.blur();
 }));
+winchControl.addEventListener('click', () => {
+  tensionWinch();
+  winchControl.blur();
+});
 function showKit() {
   kit.forEach((item, i) => {
     const where = item.left ? (item.stuck ? 'зажата' : `лежит, ${Math.round(item.left.getWorldPosition(new THREE.Vector3()).distanceTo(eyeOf()))} м`)
       : item.ladder && ladderState ? 'у дерева'
+      : item.winch && winch?.staked ? 'на колу'
+      : item.winch && winch?.tree ? 'привязана'
       : !item.bar && grasp ? `${Math.round(grasp.mass)} кг` : '';
     if (kitStatus[i].textContent !== where) kitStatus[i].textContent = where;
     const label = where ? [kitLabels[i], where].join(', ') : kitLabels[i];
@@ -769,6 +779,69 @@ function climb(input, dt) {
 function ladderPlacementPreview() {
   if (!kit[held]?.ladder || ladderState || climbing) return null;
   return findLadderPlacement(trees, player.pos, forwardOf(player.yaw), ground);
+}
+
+function winchTarget() {
+  return findWinchTarget(trees, eyeOf(), lookOf());
+}
+
+function winchNearby() {
+  return winch?.staked && player.pos.distanceTo(winch.position) < 1.8;
+}
+
+function winchTreeNearby() {
+  return winch?.tree && Math.hypot(player.pos.x - winch.tree.base.x, player.pos.z - winch.tree.base.z) < 2;
+}
+
+function winchAction() {
+  if (!playing || fly || !winch) return;
+  if (!winch.tree) {
+    const target = winchTarget();
+    if (!target) {
+      notice('Наведи прицел на стоящий ствол в пределах досягаемости');
+      return;
+    }
+    if (winch.tie(target.tree, target.point)) notice('Трос привязан · отойди от ствола и вбей кол');
+    return;
+  }
+  if (winchTreeNearby()) {
+    winch.untie();
+    notice('Трос отвязан от дерева');
+    return;
+  }
+  if (winch.staked) return notice('Лебёдка уже на колу · подойди к ней и забери руками');
+  if (climbing) return notice('Спустись с лестницы, чтобы вбить кол');
+  const distance = Math.hypot(player.pos.x - winch.tree.base.x, player.pos.z - winch.tree.base.z);
+  if (distance > 9) return notice('Подойди поближе к привязанному дереву, чтобы вбить кол');
+  const away = new THREE.Vector3(player.pos.x - winch.tree.base.x, 0, player.pos.z - winch.tree.base.z).normalize();
+  const peg = player.pos.clone().addScaledVector(away, 0.45);
+  if (!canStand(peg.x, peg.z)) return notice('Здесь нельзя вбить кол · выбери свободное место');
+  peg.y = ground(peg.x, peg.z);
+  if (winch.plant(peg)) notice('Лебёдка установлена · натягивай отдельной кнопкой');
+}
+
+function tensionWinch() {
+  if (!playing || fly || !winch?.tree || !winch.staked) return;
+  if (winch.ratchet()) notice(`Натяжение лебёдки: ${Math.round((winch.tension / winch.maxTension) * 100)}%`);
+  else notice('Лебёдка натянута до предела');
+}
+
+function winchActionLabel() {
+  if (!winch.tree) return 'Привязать трос';
+  if (winchTreeNearby()) return 'Отвязать трос';
+  if (winch.staked) return 'Лебёдка на колу';
+  if (climbing) return 'Спустись для установки';
+  return 'Вбить кол';
+}
+
+function showWinchControl() {
+  const show = playing && !fly && winch?.tree && winch.staked;
+  winchControl.hidden = !show;
+  if (show) {
+    const label = `Натянуть лебёдку · ${Math.round((winch.tension / winch.maxTension) * 100)}%`;
+    winchControl.textContent = label;
+    winchControl.setAttribute('aria-label', label);
+  }
 }
 
 function poseLadder(position, right, up) {
@@ -1050,8 +1123,11 @@ function stand(dt) {
   const { sec } = round;
   // Наклон ствола — упругий изгиб недопила и то, на сколько он уже осел насовсем (round.give).
   const { give } = round;
+  const winchOffset = sec && winch?.tree === round
+    ? winch.offset(round.root.localToWorld(new THREE.Vector3(sec.x0, (round.voxels.middle + 0.5) * VOXEL, sec.z0)), round.weight)
+    : new THREE.Vector3();
   if (sec) {
-    const c = round.com.clone().add(round.sway).addScaledVector(give.tilt, round.com.y);
+    const c = round.com.clone().add(round.sway).addScaledVector(give.tilt, round.com.y).add(winchOffset);
     round.bent = deflection(sec, c, round.weight, round.com.y, round.split);
     // Упругий наклон больше SHOWN_TILT — недопил потерял устойчивость: дальше дерево поворачивается
     // уже не упруго, а поддаваясь (yieldHinge), туда, куда его клонит.
@@ -1108,9 +1184,9 @@ function stand(dt) {
   }
   const tw = round.twist;
   if (tw && Math.abs(tw.drive) - tw.rub > tw.hold) return startTwist(tw, c);
-  const tip = tipping(sec, c, round.weight, round.tilt);
+  const tip = tipping(sec, c.clone().add(winchOffset), round.weight, round.tilt);
   if (tip.net > 0 || give.speed > 0 || round.buckle) {
-    yieldHinge(sec, tip, c, dt);
+    yieldHinge(sec, tip, c, dt, winchOffset);
     if (round.fall) return;
   }
 
@@ -1171,11 +1247,11 @@ function stand(dt) {
 // оси смыкаются щели, и сжатых волокон становится больше. Вес отпустило (стих ветер) или щели удержали —
 // дерево тормозит и встаёт в новом положении, назад недопил не разгибается. Дошло до разрыва недопила
 // или до того, что сомкнулся вырез подпила, — падает дальше с набранной скоростью.
-function yieldHinge(sec, tip, c, dt) {
+function yieldHinge(sec, tip, c, dt, winchOffset) {
   const { give } = round;
   const u = give.speed > 0 ? give.u : round.buckle ?? tip.u;
   const lean = Math.max(0, round.tilt.dot(u));
-  const t = lever(sec, c, round.weight, u, lean);
+  const t = lever(sec, c.clone().add(winchOffset), round.weight, u, lean);
   const tear = tearAngle(sec, u, round.split);
   // Потерявший устойчивость недопил не держит, пока ствол не сел на щель впереди.
   const seated = lean >= closing(sec, u, sec.x0 * u.x + sec.z0 * u.z, 0);
@@ -1902,6 +1978,9 @@ function update(dt) {
   if (saw?.loose) rest(saw);
   if (grasp) carry(dt);
   updateTrees(dt);
+  showWinchControl();
+  hudEl.classList.toggle('winch-aim', Boolean(kit[held].winch && !winch.tree && !fly));
+  winch?.showTarget(kit[held].winch && !winch.tree && !fly ? winchTarget() : null);
 
   const shown = saw ?? candidate;
   if (touch) {
@@ -1909,7 +1988,9 @@ function update(dt) {
     const reverse = canReverseCut();
     const isTrigger = Boolean(kit[held].bar) && !reverse;
     let label = reverse ? 'С другой стороны' : isTrigger ? (shown ? 'Пилить' : 'Газ') : (grasp ? 'Бросить' : 'Взять');
-    if (kit[held].ladder) label = ladderPreview ? 'Поставить лестницу' : 'Примерить лестницу';
+    if (kit[held].winch) label = winchActionLabel();
+    else if (held === 2 && winchNearby()) label = 'Забрать лебёдку';
+    else if (kit[held].ladder) label = ladderPreview ? 'Поставить лестницу' : 'Примерить лестницу';
     else if (!kit[held].bar && climbing) label = 'Спуститься';
     else if (!kit[held].bar && ladderNearby()) label = ladderTargeted() ? 'Убрать лестницу' : 'Подняться';
     showAction(touchSaw, label, isTrigger, trigger);
@@ -2132,6 +2213,13 @@ function hint() {
   if (saw?.pinched) return 'Зажало · оставь пилу в стволе (S)';
   if (saw?.chewed && mode === 'aim') return 'Пилу зажёвывает · вынь её (S) или нажми снова';
   if (saw?.blocked) return 'Упёрлась корпусом · поверни пилу или вынь (S)';
+  if (kit[held].winch) {
+    if (!winch.tree) return 'Наведи на ствол · отметь точку привязки и нажми действие';
+    if (winchTreeNearby()) return 'Рядом с деревом · нажми действие, чтобы отвязать трос';
+    if (winch.staked) return 'Лебёдка на колу · руки — забрать её';
+    return 'Отойди от дерева · нажми действие, чтобы вбить кол';
+  }
+  if (held === 2 && winchNearby()) return 'Лебёдка рядом · нажми действие, чтобы забрать';
   if (sawless()) return 'Обе пилы застряли · R — новые клёны';
   if (climbing) return 'W/S — подниматься/спускаться · у земли — сойти';
   if (kit[held].ladder) return ladderPreview
@@ -2191,6 +2279,10 @@ addEventListener('keydown', (e) => {
   }
   if (screenMode === 'fly' && e.code === 'KeyI' && !e.repeat) setFlying(!fly);
   if (fly) return;
+  if (e.code === 'KeyT' && !e.repeat) {
+    tensionWinch();
+    return;
+  }
   if (e.repeat && !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'KeyQ', 'KeyE'].includes(e.code)) return;
   if (e.code === 'KeyE' && !e.repeat && mode === 'free') {
     if (climbing) leaveLadder();
@@ -2264,6 +2356,15 @@ function startCut() {
 
 function pressSaw() {
   if (!playing || fly) return;
+  if (mode === 'free' && kit[held].winch) {
+    winchAction();
+    return;
+  }
+  if (mode === 'free' && held === 2 && winchNearby() && !climbing && !grasp) {
+    winch.pickUp();
+    notice('Лебёдка в руках · выбери её в инвентаре');
+    return;
+  }
   if (climbing && touch && !kit[held].bar) {
     climbing.progress = Math.max(0, climbing.progress - 0.45);
     if (climbing.progress === 0) leaveLadder();
@@ -2425,6 +2526,7 @@ function leave() {
   releaseSaw();
   if (grasp) letGo();
   climbing = null;
+  winch?.showTarget(null);
   ladderPreview = null;
   if (!ladderState) ladderModel.visible = false;
   playing = false;
@@ -2463,6 +2565,7 @@ function tick(now, dt) {
     update(dt);
     beat(now);
   } else updateTrees(dt);
+  winch?.update();
 }
 
 // Стенд владеет сценой, камерой и кадром. Игра добавляет в его двор клёны, пилу, хоздвор (поленницу и костёр) и управление.
@@ -2470,6 +2573,7 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
   plots = treePlots;
   fallStand = study;
   scene = yard;
+  winch = createWinch(scene);
   camera = eyes;
   ground = floor;
   groundNormal = normal;
