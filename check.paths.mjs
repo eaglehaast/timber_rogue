@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { fitPavingCenter, ROUTE_SPACING, planPathNetwork } from './src/route.js';
 
 class ImageMock {
@@ -16,6 +17,7 @@ globalThis.document = {
 };
 globalThis.location = { search: '' };
 globalThis.matchMedia = () => ({ matches: true });
+globalThis.fetch = async (path) => ({ json: async () => JSON.parse(await readFile(path, 'utf8')) });
 Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'node', maxTouchPoints: 0 }, configurable: true });
 
 function nearPoint(actual, expected) {
@@ -95,7 +97,7 @@ const paths = planPaths({
   ...yards[0], seed: 71, pavingOrigin: { x: 14.95, z: 4.25 },
 });
 const meshes = paths.build().children;
-assert.equal(meshes.length, 5);
+assert.equal(meshes.length, 7);
 let minY = Infinity, maxY = -Infinity;
 for (const mesh of meshes.slice(0, 4)) {
   assert.equal(mesh.material.transparent, false);
@@ -108,4 +110,26 @@ for (const mesh of meshes.slice(0, 4)) {
   }
 }
 assert.ok(maxY - minY > 0.01, 'path mesh must follow the generated terrain variation');
+const [sides, ends] = meshes.slice(5);
+assert.equal(sides.name, 'path-border-sides');
+assert.equal(ends.name, 'path-border-ends');
+const tops = ends.geometry.attributes.position;
+assert.ok(tops.count > 9 * 20, 'border has posts along the paths');
+assert.equal(tops.count % 9, 0);
+assert.equal(sides.geometry.attributes.position.count, tops.count * 2);
+for (let i = 0; i < tops.count; i += 9) {
+  const x = tops.getX(i), y = tops.getY(i), z = tops.getZ(i);
+  for (let j = 0; j < 9; j++) {
+    assert.ok(y - groundAt(tops.getX(i + j), tops.getZ(i + j)) >= 0.069,
+      'post top must stay above the terrain across its footprint');
+  }
+  assert.ok(Math.hypot(x - paths.junction.x, z - paths.junction.z) >= 1.05);
+  for (const [destination, endpoint, minimum] of [
+    ['gate', yards[0].gate, 0.3], ['house', yards[0].porch, 0.8],
+    ['utility', yards[0].pad, 1.4], ['bath', yards[0].bath, 0.8],
+  ]) {
+    assert.ok(Math.hypot(x - endpoint.x, z - endpoint.z) >= minimum,
+      `border must leave the ${destination} entrance open`);
+  }
+}
 console.log('curved path network checks ok');
