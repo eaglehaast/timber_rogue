@@ -4,6 +4,7 @@ import { groundAt } from './terrain.js';
 import { planPathNetwork } from './route.js';
 import { PAVING_ENTRY_HALF, pavingMaterial, pavingTexture } from './paving.js';
 import { ENDS, END_MATERIAL, LOG_MATERIAL } from './house.js';
+import { exposedPavingEdges, borderPoints, pavingContains } from './paving-contour.js';
 
 // Общая непрерывная сеть мощения; расширяется у ступеней и плавно входит в хозплощадку.
 const PATH = { half: 0.68, lift: 0.015 };
@@ -11,9 +12,18 @@ const CELL = 0.05;                                       // м: клетка р�
 const PAVING_TILE = 2;                                   // м: повтор плитняка на хозплощадке
 
 const stone = pavingMaterial(pavingTexture());
-const woodSide = new THREE.MeshLambertMaterial({ map: LOG_MATERIAL.map, color: 0x997755 });
-const woodEnd = new THREE.MeshLambertMaterial({ map: END_MATERIAL.map, color: 0xb39472 });
-const BORDER = { radius: 0.065, spacing: 0.128, sides: 8 };
+function stainedWood(map) {
+  const material = new THREE.MeshLambertMaterial({ map });
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      float woodLuma = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(woodLuma), 0.7) * vec3(0.82, 0.78, 0.72);`);
+  };
+  material.customProgramCacheKey = () => 'path-border-stain';
+  return material;
+}
+const woodSide = stainedWood(LOG_MATERIAL.map), woodEnd = stainedWood(END_MATERIAL.map);
+const BORDER = { radius: 0.065, spacing: 0.105, sides: 8 };
 
 // Гладкий шум от rnd: s — ячейка, h — шаг сетки.
 const noise = (rnd, h = 1.3) => {
@@ -21,17 +31,17 @@ const noise = (rnd, h = 1.3) => {
   return (s) => w(s / h, 7.3);
 };
 
-function ribbon(points, destination, surface, textureOrigin, seed) {
+function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, bathWidth) {
   const lengths = [0];
   for (let i = 1; i < points.length; i++) {
     lengths.push(lengths[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].z - points[i - 1].z));
   }
   const total = lengths.at(-1);
-  const terminalHalf = { gate: 0.78, house: 0.9, utility: PAVING_ENTRY_HALF, bath: 0.68 }[destination];
+  const terminalHalf = { gate: 0.78, house: porchWidth / 2, utility: PAVING_ENTRY_HALF, bath: bathWidth / 2 }[destination];
   const routeSeed = [...destination].reduce((sum, char) => sum + char.charCodeAt(0), seed);
   const edgeNoise = noise(generator(routeSeed + 160), 1.1);
   const smooth = (t) => t * t * (3 - 2 * t);
-  const columns = 17, positions = [], uvs = [], indices = [], edges = [[], []], widths = [];
+  const columns = 17, positions = [], uvs = [], indices = [];
   for (let i = 0; i < points.length; i++) {
     const before = points[Math.max(0, i - 1)], after = points[Math.min(points.length - 1, i + 1)];
     const tangent = new THREE.Vector2(after.x - before.x, after.z - before.z).normalize();
@@ -42,10 +52,6 @@ function ribbon(points, destination, surface, textureOrigin, seed) {
     const flare = Math.max(startFlare, endFlare);
     const half = THREE.MathUtils.lerp(PATH.half, terminalHalf, flare)
       + (edgeNoise(lengths[i]) - 0.5) * 0.12 * (1 - flare);
-    widths.push(half);
-    for (const [side, sign] of [-1, 1].entries()) {
-      edges[side].push({ x: points[i].x + normal.x * half * sign, z: points[i].z + normal.y * half * sign });
-    }
     for (let j = 0; j < columns; j++) {
       const offset = half * (2 * j / (columns - 1) - 1);
       const x = points[i].x + normal.x * offset, z = points[i].z + normal.y * offset;
@@ -61,32 +67,39 @@ function ribbon(points, destination, surface, textureOrigin, seed) {
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
-  return { geometry, edges, widths };
+  return geometry;
 }
 
-// Бордюр следует фактической кромке ленты, но не закрывает соседние пути и примыкания.
-function border(paths, junction, seed) {
-  const posts = [];
-  for (const path of paths) for (const edge of path.edges) {
-    const total = edge.slice(1).reduce((sum, p, i) => sum + Math.hypot(p.x - edge[i].x, p.z - edge[i].z), 0);
-    let remaining = 0.25, travelled = 0;
-    for (let i = 1; i < edge.length; i++) {
-      const a = edge[i - 1], b = edge[i], length = Math.hypot(b.x - a.x, b.z - a.z);
-      while (remaining <= length) {
-        const t = remaining / length, x = THREE.MathUtils.lerp(a.x, b.x, t), z = THREE.MathUtils.lerp(a.z, b.z, t);
-        const clearance = path.destination === 'utility' ? 1.4 : path.destination === 'gate' ? 0.3 : 0.8;
-        const endDistance = path.destination === 'gate' ? travelled + remaining : total - travelled - remaining;
-        const open = endDistance < clearance
-          || Math.hypot(x - junction.x, z - junction.z) < 1.05
-          || paths.some((other) => other !== path && other.points.some((p, k) =>
-            Math.hypot(x - p.x, z - p.z) < other.widths[k] + BORDER.radius + 0.08));
-        if (!open) posts.push({ x, z });
-        remaining += BORDER.spacing;
-      }
-      remaining -= length;
-      travelled += length;
+// Бордюр идёт по общей внешней границе всех лент и площадки, а не вдоль внутренних швов.
+function border(paths, junction, pad, pavingOutline, seed) {
+  const segments = (points) => points.slice(1).map((p, i) => [points[i], p]);
+  const shapes = paths.flatMap(({ geometry }) => {
+    const position = geometry.attributes.position, index = geometry.index, triangles = [];
+    for (let i = 0; i < index.count; i += 3) {
+      const ids = [index.getX(i), index.getX(i + 1), index.getX(i + 2)];
+      const polygon = ids.map((id) => ({ x: position.getX(id), z: position.getZ(id) }));
+      const edges = polygon.map((p, j) => [p, polygon[(j + 1) % 3]]).filter((_, j) => {
+        const a = ids[j], b = ids[(j + 1) % 3];
+        return !(Math.floor(a / 17) === Math.floor(b / 17)
+          && (a < 17 || a >= position.count - 17));
+      });
+      triangles.push({ polygon, edges });
     }
-  }
+    return triangles;
+  });
+  const circle = Array.from({ length: 32 }, (_, i) => ({
+    x: junction.x + 0.92 * Math.cos(i * Math.PI / 16),
+    z: junction.z + 0.92 * Math.sin(i * Math.PI / 16),
+  }));
+  shapes.push({ polygon: circle, edges: segments([...circle, circle[0]]) });
+  const outline = pavingOutline;
+  const padEdges = segments(outline).filter(([a, b]) =>
+    !(Math.abs(a.x - pad.x) < 1e-5 && Math.abs(b.x - pad.x) < 1e-5
+      && Math.abs(a.z - pad.z) <= PAVING_ENTRY_HALF + 1e-5 && Math.abs(b.z - pad.z) <= PAVING_ENTRY_HALF + 1e-5));
+  shapes.push({ polygon: outline, edges: padEdges });
+  const covered = pavingContains(shapes);
+  const posts = borderPoints(exposedPavingEdges(shapes), BORDER.spacing).filter(({ x, z }) =>
+    ![[0.08, 0], [-0.08, 0], [0, 0.08], [0, -0.08]].every(([dx, dz]) => covered(x + dx, z + dz)));
   const rnd = generator(seed + 4817);
   const side = { p: [], n: [], uv: [], index: [] }, top = { p: [], n: [], uv: [], index: [] };
   for (const { x, z } of posts) {
@@ -131,7 +144,7 @@ function border(paths, junction, seed) {
 }
 
 // Строить после shapeGround: единый ствол от ворот расходится к дому, бане и хозплощадке.
-export function planPaths({ seed, gate, porch, porchApproach, pad, padApproach, pavingOrigin = pad, bath, bathApproach, house }) {
+export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, padApproach, pavingOrigin = pad, pavingOutline, bath, bathApproach, bathWidth, house }) {
   const surface = (x, z) => groundAt(x, z) + PATH.lift;
   const near = (x, z, p, r) => Math.hypot(x - p.x, z - p.z) < r;
   const network = planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house });
@@ -181,7 +194,9 @@ export function planPaths({ seed, gate, porch, porchApproach, pad, padApproach, 
     trodden: (x, z) => (near(x, z, porch, 1.0) || near(x, z, pad, 0.8) || near(x, z, bath, 0.8) ? 0 : s(at(x, z), 0.15, 0.8)),
     build() {
       const group = new THREE.Group();
-      const ribbons = paths.map((path) => ({ ...path, ...ribbon(path.points, path.destination, surface, pavingOrigin, seed) }));
+      const ribbons = paths.map((path) => ({
+        ...path, geometry: ribbon(path.points, path.destination, surface, pavingOrigin, seed, porchWidth, bathWidth),
+      }));
       ribbons.forEach(({ geometry }) => {
         const mesh = new THREE.Mesh(geometry, stone);
         mesh.receiveShadow = true;
@@ -200,7 +215,7 @@ export function planPaths({ seed, gate, porch, porchApproach, pad, padApproach, 
       }
       junction.geometry.computeVertexNormals();
       group.add(junction);
-      group.add(...border(ribbons, network.junction, seed));
+      group.add(...border(ribbons, network.junction, pad, pavingOutline, seed));
       return group;
     },
   };

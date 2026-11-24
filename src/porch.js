@@ -17,6 +17,7 @@ import { KIT, atlas, cell, repaint, strip } from './kit.js';
 const LANDINGS = { open: [1.8, 1.1], tambour: [2.4, 1.8] };
 export const porchWidth = (tambour) => LANDINGS[tambour ? 'tambour' : 'open'][0];
 const STAIR = { width: 1.6, run: 0.3, rise: 0.18 }; // ширина, проступь, желаемая высота ступени
+export const porchStairWidth = (tambour) => tambour ? porchWidth(true) : STAIR.width;
 const BOARD_W = 0.1, GAP = 0.006;              // доска и щель между досками
 const SIDE = { thick: 0.022, above: 0.05 };    // обшивка боков лестницы: толщина, выше носков ступеней на
 const POST = 0.11, RAIL = { height: 0.9, size: 0.06, both: 0.12 }; // столб; перила, доля крылец с перилами с двух сторон
@@ -85,7 +86,7 @@ export function buildPorch(seed, door, wall, { base, face, tambour, tulle, trim:
   row(worn, plane(P(0, 0, top - 0.022), s, n), up, -W, W, 0, L, true);
 
   // Лестница: ступени от площадки наружу, проступь из досок, подступёнки из двух досок.
-  const steps = Math.max(2, Math.round(top / STAIR.rise)), rise = top / steps, w = tambour ? W : STAIR.width / 2, run = STAIR.run;
+  const steps = Math.max(2, Math.round(top / STAIR.rise)), rise = top / steps, w = porchStairWidth(tambour) / 2, run = STAIR.run;
   for (let k = 1; k <= steps; k++) {
     const q = L + (k - 1) * run, y = top - k * rise;
     if (k < steps) row(worn, plane(P(0, q, y - 0.022), s, n), up, -w, w, 0, run, true);
