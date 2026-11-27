@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { planHouse, buildHouse, R, PLINTH } from './house.js';
+import { porchStairWidth } from './porch.js';
 import { generator } from './random.js';
 import { makeFence, YARD, GATES, WICKET } from './fence.js';
 import { planGas, buildGas } from './gas.js';
@@ -17,7 +18,7 @@ import { blow, stepWind } from './wind.js';
 import { EYE, forwardOf } from './player.js';
 import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
-import { createWoodyard, PAVING_HALF, yardPavingContains } from './campfire.js';
+import { createWoodyard, PAVING_HALF, yardPavingContains, yardPavingOutline } from './campfire.js';
 import { fitPavingCenter } from './route.js';
 import { planPaths } from './paths.js';
 
@@ -88,9 +89,9 @@ function rebuild(seed) {
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
   const banya = buildBanya(banyaSite, river, power, { plan, at });
   const paths = planPaths({
-    seed, gate: { x: GATES.at, z: fence - 0.18 }, porch, porchApproach, pad: padNear, padApproach,
-    pavingOrigin: woodPad,
-    bath: banya.approach, bathApproach: banya.approachGuide,
+    seed, gate: { x: GATES.at, z: fence - 0.18 }, porch, porchApproach, porchWidth: porchStairWidth(plan.tambour), pad: padNear, padApproach,
+    pavingOrigin: woodPad, pavingOutline: yardPavingOutline.map((p) => ({ x: p.x + woodPad.x, z: p.z + woodPad.z })),
+    bath: banya.approach, bathApproach: banya.approachGuide, bathWidth: banya.approachWidth,
     house: { x: pad.x, z: pad.z, w: pad.w, d: pad.d },
   });
   house.position.set(at.x, at.y, at.z);

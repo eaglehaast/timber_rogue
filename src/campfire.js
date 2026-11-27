@@ -49,7 +49,7 @@ function makeYardPavingShape() {
 }
 
 const yardPavingShape = makeYardPavingShape();
-const yardPavingOutline = yardPavingShape.extractPoints(16).shape.map((point) => ({ x: point.y, z: point.x }));
+export const yardPavingOutline = yardPavingShape.extractPoints(16).shape.map((point) => ({ x: point.y, z: point.x }));
 export function yardPavingContains(x, z) {
   let inside = false;
   for (let i = 0, j = yardPavingOutline.length - 1; i < yardPavingOutline.length; j = i++) {

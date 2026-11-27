@@ -41,11 +41,12 @@ export function planPathNetwork({ gate, porch, porchApproach, pad, padApproach, 
     pad: padApproach ?? { x: pad.x, z: pad.z + 1.2 },
     bath: bathApproach ?? midpoint(bath, bathBack, 1.2),
   };
+  const houseBend = Math.min(0.65, 0.2 * Math.hypot(junction.x - approach.porch.x, junction.z - approach.porch.z));
   return {
     junction,
     routes: [
       { destination: 'gate', points: curvedRoute([gate, midpoint(gate, junction, 0.35), junction]) },
-      { destination: 'house', points: curvedRoute([junction, midpoint(junction, porch, 0.65), approach.porch, porch]) },
+      { destination: 'house', points: curvedRoute([junction, midpoint(junction, approach.porch, houseBend), approach.porch, porch]) },
       { destination: 'utility', points: curvedRoute([junction, midpoint(junction, pad, houseSide * 0.9), approach.pad, pad]) },
       { destination: 'bath', points: curvedRoute([junction, bathSide, bathBack, approach.bath, bath]) },
     ],

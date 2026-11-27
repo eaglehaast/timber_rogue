@@ -143,7 +143,7 @@ export function buildBanya(site, river, power, house) {
   const powerLine = buildBanyaPower(base, power, house, localToWorld);
   return {
     group, dock, powerLine, deck, blocks, plan, deckPlan,
-    approach: { x: foot.x, z: foot.y }, approachGuide: { x: approachGuide.x, z: approachGuide.y },
+    approach: { x: foot.x, z: foot.y }, approachGuide: { x: approachGuide.x, z: approachGuide.y }, approachWidth: stairWidth,
   };
 }
 
