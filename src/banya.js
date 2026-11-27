@@ -62,32 +62,59 @@ export function buildBanya(site, river, power, house) {
   // Бревенчатые стойки и продольные балки поддерживают продолжение скатов над верандой.
   const supportZ = front - length + 0.05, eaveY = roofShape.ridge - (W / 2) * Math.tan(roofShape.pitch) - 0.12;
   const roofSupports = buildRoofSupports(supportZ, roofStartZ, W / 2, top, eaveY);
-  // Лестница повторяет конструкцию крыльца: отдельные проступи, подступёнки и боковые тетивы.
-  const stairZ = front - 0.8, stairWidth = 1.1, stairRun = 1.2;
-  const foot = localToWorld(W / 2 + stairRun, stairZ);
-  const approachGuide = localToWorld(W / 2 + stairRun + 1.6, stairZ);
-  const footY = height(foot.x, foot.y) - base;
+  // Боковая площадка огибает сруб и выводит лестницу на сухую сторону, вдоль стены.
+  const sideOuter = W / 2 + 1.65, sideBack = 0.9, sideFront = front - 1.3;
+  const stairX = W / 2 + 0.93, stairWidth = 1.1, stairRun = 1.2;
+  const foot = localToWorld(stairX, sideBack + stairRun);
+  const approachGuide = localToWorld(stairX, sideBack + stairRun + 1.6);
+  let footY = -Infinity;
+  for (let dx = -stairWidth / 2; dx <= stairWidth / 2 + 0.001; dx += 0.11) {
+    for (let dz = 0; dz <= stairRun + 0.001; dz += 0.12) {
+      const p = localToWorld(stairX + dx, sideBack + dz);
+      footY = Math.max(footY, height(p.x, p.y) - base);
+    }
+  }
+  footY += 0.02;
+  const sideFloor = new Planks(boardMaterials(TONES.roof), 0.035);
+  for (let x = W / 2; x < sideOuter - 0.001; x += 0.14) {
+    const end = Math.min(x + 0.13, sideOuter);
+    sideFloor.add([[x, sideFront], [end, sideFront], [end, sideBack], [x, sideBack]],
+      { o: new THREE.Vector3(0, top - 0.035, 0), X: new THREE.Vector3(1, 0, 0), Y: new THREE.Vector3(0, 0, 1) },
+      UP, [0, 1], 0.13, rnd);
+  }
+  const sideFrame = new Planks(boardMaterials(TONES.gable), 0.1);
+  for (const x of [W / 2 + 0.1, sideOuter - 0.1]) {
+    sideFrame.add([[x - 0.05, sideFront], [x + 0.05, sideFront], [x + 0.05, sideBack], [x - 0.05, sideBack]],
+      { o: new THREE.Vector3(0, top - 0.135, 0), X: new THREE.Vector3(1, 0, 0), Y: new THREE.Vector3(0, 0, 1) },
+      UP, [0, 1], 0.1, rnd);
+    for (const z of [sideFront + 0.1, (sideFront + sideBack) / 2, sideBack - 0.1]) {
+      const p = localToWorld(x, z), bottom = height(p.x, p.y) - base - 0.15;
+      sideFrame.add([[x - 0.05, bottom], [x + 0.05, bottom], [x + 0.05, top - 0.135], [x - 0.05, top - 0.135]],
+        { o: new THREE.Vector3(0, 0, z - 0.05), X: new THREE.Vector3(1, 0, 0), Y: UP },
+        new THREE.Vector3(0, 0, 1), [0, 1], 0.1, rnd);
+    }
+  }
   const stairs = new Planks(boardMaterials(TONES.gable), 0.035);
-  const treads = Math.max(2, Math.ceil((top - footY) / 0.17)), rise = (top - footY) / treads;
-  const z0 = stairZ - stairWidth / 2, z1 = stairZ + stairWidth / 2;
+  const risers = Math.max(2, Math.ceil((top - footY) / 0.17)), treads = risers - 1, rise = (top - footY) / risers;
+  const x0 = stairX - stairWidth / 2, x1 = stairX + stairWidth / 2;
   const stairFrame = { o: new THREE.Vector3(0, 0, 0), X: new THREE.Vector3(1, 0, 0), Y: new THREE.Vector3(0, 0, 1) };
   for (let i = 0; i < treads; i++) {
-    const a = W / 2 + i * stairRun / treads, b = W / 2 + (i + 1) * stairRun / treads;
+    const a = sideBack + i * stairRun / treads, b = sideBack + (i + 1) * stairRun / treads;
     const treadY = top - (i + 1) * rise;
-    stairs.add([[a, z0], [b, z0], [b, z1], [a, z1]],
-      { ...stairFrame, o: new THREE.Vector3(0, treadY - 0.035, 0) }, UP, [1, 0], stairRun / treads, rnd);
+    stairs.add([[x0, a], [x1, a], [x1, b], [x0, b]],
+      { ...stairFrame, o: new THREE.Vector3(0, treadY - 0.035, 0) }, UP, [0, 1], stairRun / treads, rnd);
     const upperY = top - i * rise;
-    stairs.add([[z0, treadY], [z1, treadY], [z1, upperY], [z0, upperY]],
-      { o: new THREE.Vector3(a, 0, 0), X: new THREE.Vector3(0, 0, 1), Y: UP },
-      new THREE.Vector3(1, 0, 0), [1, 0], stairWidth, rnd);
+    stairs.add([[x0, treadY], [x1, treadY], [x1, upperY], [x0, upperY]],
+      { o: new THREE.Vector3(0, 0, a), X: new THREE.Vector3(1, 0, 0), Y: UP },
+      new THREE.Vector3(0, 0, 1), [1, 0], stairWidth, rnd);
   }
   const stringers = new Planks(boardMaterials(TONES.gable), 0.055);
   for (const sign of [-1, 1]) {
-    const z = stairZ + sign * (stairWidth / 2 - 0.025);
-    stringers.add([[W / 2 - 0.04, top - 0.08], [W / 2 + stairRun + 0.04, footY - 0.08],
-      [W / 2 + stairRun + 0.04, footY - 0.2], [W / 2 - 0.04, top - 0.2]],
-    { o: new THREE.Vector3(0, 0, z), X: new THREE.Vector3(1, 0, 0), Y: UP },
-    new THREE.Vector3(0, 0, sign), [1, 0], stairRun, rnd);
+    const x = stairX + sign * (stairWidth / 2 - 0.025);
+    stringers.add([[sideBack - 0.04, top - 0.08], [sideBack + stairRun + 0.04, footY - 0.08],
+      [sideBack + stairRun + 0.04, footY - 0.2], [sideBack - 0.04, top - 0.2]],
+    { o: new THREE.Vector3(x, 0, 0), X: new THREE.Vector3(0, 0, 1), Y: UP },
+    new THREE.Vector3(sign, 0, 0), [1, 0], stairRun, rnd);
   }
   const stairEnd = front - length;
   const railSegments = [];
@@ -101,15 +128,18 @@ export function buildBanya(site, river, power, house) {
     });
   };
   rail(-W / 2, 0, -W / 2, length, new THREE.Vector3(-1, 0, 0));
-  const stairD0 = 0.8 - stairWidth / 2, stairD1 = 0.8 + stairWidth / 2;
-  rail(W / 2, 0, W / 2, stairD0, new THREE.Vector3(1, 0, 0));
-  rail(W / 2, stairD1, W / 2, length, new THREE.Vector3(1, 0, 0));
+  const openingEnd = Math.min(1.3, length);
+  rail(W / 2, openingEnd, W / 2, length, new THREE.Vector3(1, 0, 0));
+  rail(W / 2, openingEnd, sideOuter, openingEnd, new THREE.Vector3(0, 0, -1));
+  rail(sideOuter, openingEnd, sideOuter, front - sideBack, new THREE.Vector3(1, 0, 0));
+  rail(W / 2, front - sideBack, x0, front - sideBack, new THREE.Vector3(0, 0, 1));
+  rail(x1, front - sideBack, sideOuter, front - sideBack, new THREE.Vector3(0, 0, 1));
   rail(-W / 2, length, W / 2, length, new THREE.Vector3(0, 0, -1));
   for (const sign of [-1, 1]) {
-    const z = stairZ + sign * (stairWidth / 2 - 0.025);
-    const from = new THREE.Vector3(W / 2, top, z), to = new THREE.Vector3(W / 2 + stairRun, footY, z);
+    const x = stairX + sign * (stairWidth / 2 - 0.025);
+    const from = new THREE.Vector3(x, top, sideBack), to = new THREE.Vector3(x, footY, sideBack + stairRun);
     const segmentLength = stairRun;
-    railSegments.push({ from, to, normal: new THREE.Vector3(0, 0, sign), postAt: [0, segmentLength / 2, segmentLength], spacing: 0.2 });
+    railSegments.push({ from, to, normal: new THREE.Vector3(sign, 0, 0), postAt: [0, segmentLength / 2, segmentLength], spacing: 0.2 });
   }
   const railing = buildRailSegments(seed + 211, railSegments);
   railing.name = 'banya-dock-rails';
@@ -120,12 +150,15 @@ export function buildBanya(site, river, power, house) {
   const staircase = new THREE.Group().add(...stairs.meshes(), ...stringers.meshes());
   staircase.name = 'banya-stairs';
   houseDoor.name = 'banya-door';
-  group.add(...boards.meshes(), staircase, roofExtension, rafters, roofSupports, railing, bench, houseDoor);
+  const sideLanding = new THREE.Group().add(...sideFloor.meshes(), ...sideFrame.meshes());
+  sideLanding.name = 'banya-side-landing';
+  group.add(...boards.meshes(), sideLanding, staircase, roofExtension, rafters, roofSupports, railing, bench, houseDoor);
   const deck = (px, pz) => {
     const p = worldToLocal(px, pz), distance = front - p.z;
     if (Math.abs(p.x) <= W / 2 && distance >= 0 && distance <= length) return deckTop;
-    if (p.x >= W / 2 && p.x <= W / 2 + stairRun && Math.abs(p.z - stairZ) <= stairWidth / 2) {
-      const step = Math.min(treads, Math.floor((p.x - W / 2) / stairRun * treads) + 1);
+    if (p.x >= W / 2 && p.x <= sideOuter && p.z >= sideFront && p.z <= sideBack) return deckTop;
+    if (p.z >= sideBack && p.z <= sideBack + stairRun && Math.abs(p.x - stairX) <= stairWidth / 2) {
+      const step = Math.min(treads, Math.floor((p.z - sideBack) / stairRun * treads) + 1);
       return base + top - step * rise;
     }
     return -Infinity;

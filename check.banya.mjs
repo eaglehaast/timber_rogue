@@ -21,7 +21,7 @@ globalThis.matchMedia = () => ({ matches: true });
 globalThis.fetch = async (path) => ({ json: async () => JSON.parse(await readFile(path, 'utf8')) });
 
 const { planRiver } = await import('./src/river.js');
-const { shapeGround, height } = await import('./src/terrain.js');
+const { shapeGround, height, groundAt } = await import('./src/terrain.js');
 const { makeGround } = await import('./src/grass.js');
 const { planBanya, buildBanya } = await import('./src/banya.js');
 const { planHouse, LOG_MATERIAL } = await import('./src/house.js');
@@ -30,6 +30,8 @@ const { planGas, gasPostMaterial } = await import('./src/gas.js');
 const { planPower, powerWireMaterial } = await import('./src/power.js');
 const { generator } = await import('./src/random.js');
 const { GATES, WICKET } = await import('./src/fence.js');
+const { planPaths } = await import('./src/paths.js');
+const { yardPavingOutline } = await import('./src/campfire.js');
 
 assert.equal(planHouse(73, { doorWall: 'right' }).openings.find(({ kind }) => kind === 'door').wall, 'right');
 
@@ -97,12 +99,50 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   assert.equal(banya.deck(...at(length / 2, -width / 2 - 0.3).toArray()), -Infinity);
   assert.ok(banya.blocks(site.x, site.z));
   assert.ok(!banya.blocks(middle.x, middle.y));
-  const stairZ = -2 - 0.13 - 0.8;
-  const stairPoint = (x) => [site.x + c * x + s * stairZ, site.z - s * x + c * stairZ];
-  const stairs = [2.05, 2.25, 2.45, 2.65, 2.85, 3.05].map((x) => banya.deck(...stairPoint(x)));
-  assert.ok(stairs.every(Number.isFinite));
-  assert.ok(stairs.every((y, i) => i === 0 || y <= stairs[i - 1]));
-  assert.ok(!banya.blocks(...stairPoint(2.6)), 'перила не перекрывают проход по лестнице');
+  assert.ok(banya.group.getObjectByName('banya-side-landing').children.length > 0, 'боковая площадка построена');
+  for (let x = 1.8; x <= 2.9; x += 0.1) {
+    assert.ok(!banya.blocks(...worldAtLocal(x, -2.63)), 'проход с основного настила на боковую площадку открыт');
+  }
+  for (let z = -2.63; z <= 2.1; z += 0.06) {
+    const point = worldAtLocal(2.93, z), y = banya.deck(...point);
+    assert.ok(Number.isFinite(y), 'площадка и лестница соединены');
+    assert.ok(!banya.blocks(...point), `проход вдоль бани открыт: seed ${seed}, z ${z}`);
+  }
+  let previous = top;
+  for (let z = 0.91; z < 2.1; z += 0.03) {
+    const center = banya.deck(...worldAtLocal(2.93, z));
+    assert.ok(center <= previous + 1e-6 && previous - center < 0.2, 'ступени идут вниз с нормальной высотой подступёнка');
+    previous = center;
+    for (let x = 2.385; x <= 3.475; x += 0.055) {
+      const point = worldAtLocal(x, z), y = banya.deck(...point);
+      assert.ok(y > groundAt(...point) + 0.035, `ступень над всей поверхностью земли: seed ${seed}, ${x}, ${z}`);
+    }
+  }
+  const approach = worldAtLocal(2.93, 2.1), guide = worldAtLocal(2.93, 3.7);
+  assert.ok(Math.hypot(banya.approach.x - approach[0], banya.approach.z - approach[1]) < 1e-6);
+  assert.ok(Math.hypot(banya.approachGuide.x - guide[0], banya.approachGuide.z - guide[1]) < 1e-6);
+  const pavingOrigin = { x: 14.95, z: 4.25 };
+  const paths = planPaths({
+    seed, gate: { x: GATES.at, z: 12.32 }, porch: { x: -1.5, z: 7 }, porchApproach: { x: 0.1, z: 7 },
+    porchWidth: 1.8, pad: { x: 10.35, z: 4.25 }, padApproach: { x: 9.15, z: 4.25 }, pavingOrigin,
+    pavingOutline: yardPavingOutline.map((p) => ({ x: p.x + pavingOrigin.x, z: p.z + pavingOrigin.z })),
+    bath: banya.approach, bathApproach: banya.approachGuide, bathWidth: banya.approachWidth,
+    house: { ...atHouse, w: house.w + 1, d: house.d + 1 },
+  }).build();
+  const path = paths.children[3].geometry.attributes.position;
+  for (let i = 0; i < path.count; i++) {
+    const x = path.getX(i), z = path.getZ(i);
+    assert.ok(z > river.brow(x) + 0.15, `тропа остаётся на сухом берегу: seed ${seed}, ${x}, ${z}`);
+    if (i % 17 === 8) assert.ok(!banya.blocks(x, z), `тропа к бане не упирается в сруб или перила: seed ${seed}`);
+  }
+  const tops = paths.getObjectByName('path-border-ends').geometry.attributes.position;
+  for (const index of [path.count - 17, path.count - 1]) {
+    const x = path.getX(index), z = path.getZ(index);
+    assert.ok(Array.from({ length: tops.count / 9 }, (_, i) => i * 9)
+      .some((i) => Math.hypot(x - tops.getX(i), z - tops.getZ(i)) < 0.08),
+    `бордюр доходит до края ступеней: seed ${seed}`);
+  }
+  paths.traverse((o) => o.geometry?.dispose());
   assert.ok(banya.blocks(...worldAtLocal(-2, -2 - 0.13 - length / 2)), 'перила боковой стороны блокируют проход насквозь');
   assert.ok(banya.blocks(...worldAtLocal(-1.1, -2 - 0.13 - 0.78)), 'лавка препятствует проходу сквозь основание');
   const posts = banya.powerLine.children.filter((mesh) => mesh.material === gasPostMaterial);
