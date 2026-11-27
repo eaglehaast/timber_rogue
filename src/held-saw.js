@@ -29,21 +29,35 @@ export async function makeHeldSaw(container, onState = () => {}) {
   blade.append(chain); container.replaceChildren(blade, pose);
   const brush = pose.getContext('2d'), ink = chain.getContext('2d');
   brush.drawImage(grip, 0, 0);
-  let length, pressed = false, speed = 0, phase = 0, lastTile = -1, clock = 0, previous = 0;
+  let track, length, pressed = false, speed = 0, phase = 0, lastTile = -1, clock = 0, previous = 0;
 
   function drawFinger() {
     brush.clearRect(finger.x, finger.y, finger.width, finger.height);
     brush.drawImage(pressed ? down : rest, finger.x, finger.y);
   }
   function drawChain() {
-    // По восемь фаз для резкой и размытой цепи. Перерисовываем только сменившийся кадр.
-    const tile = (speed > .2 ? 8 : 0) + Math.floor(phase * 8);
-    if (tile === lastTile) return;
-    lastTile = tile;
+    // В масштабе игрового экрана мелкие детали рисунка усредняются. Более крупные
+    // тёмные звенья и светлые грани идут от корпуса по верху, огибают нос и возвращаются снизу.
+    const step = Math.floor(phase * 16);
+    if (step === lastTile) return;
+    lastTile = step;
+    const tile = step >> 1;
     const width = chain.width;
     ink.clearRect(0, 0, width, bladeHeight);
     ink.drawImage(artwork[length].links, (tile % 4) * width, Math.floor(tile / 4) * bladeHeight,
       width, bladeHeight, 0, 0, width, bladeHeight);
+    const offset = -step * 48 / 16;
+    ink.lineCap = 'round';
+    ink.lineWidth = 7;
+    ink.strokeStyle = '#302e30';
+    ink.setLineDash([17, 31]);
+    ink.lineDashOffset = offset;
+    ink.stroke(track);
+    ink.lineWidth = 4;
+    ink.strokeStyle = '#d9cbb2';
+    ink.setLineDash([9, 39]);
+    ink.lineDashOffset = offset - 2;
+    ink.stroke(track);
   }
   function report() {
     const state = pressed ? 'running' : speed > 0 ? 'coasting' : 'idle';
@@ -57,7 +71,7 @@ export async function makeHeldSaw(container, onState = () => {}) {
     const before = speed;
     const movingTime = pressed ? dt : Math.min(dt, before * coastSeconds);
     if (!pressed) speed = Math.max(0, before - dt / coastSeconds);
-    phase = (phase + 2.65 * movingTime * (before + speed) / 2) % 1;
+    phase = (phase + Math.min(.23, 1.85 * movingTime * (before + speed) / 2)) % 1;
     drawChain(); report();
     clock = speed > 0 ? requestAnimationFrame(tick) : 0;
   }
@@ -80,6 +94,12 @@ export async function makeHeldSaw(container, onState = () => {}) {
       backgroundImage: 'url("' + artwork[cm].plate.src + '")',
     });
     chain.width = width; chain.height = bladeHeight;
+    // Координаты осевой линии цепи в нарисованной шине. За корпусом контур скрыт рукоятью.
+    track = new Path2D();
+    track.moveTo(width, 8);
+    track.lineTo(30, 8);
+    track.arc(30, 32, 24, -Math.PI / 2, -3 * Math.PI / 2, true);
+    track.lineTo(width, 56);
     phase = 0; lastTile = -1; drawChain(); drawFinger();
     container.dataset.length = String(cm);
   }
