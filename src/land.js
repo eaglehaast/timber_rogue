@@ -30,8 +30,9 @@ const FELL = { lying: 0.5, kinds: [0, 1, 2, 3, 4, 5], log: [[1, 1.2], [1.8, 2.4]
 // Подрост — молодые берёзки (последние виды KINDS) около рядов: по одной на per м² полосы, до reach м от ряда.
 const UNDER = { kinds: [8, 9, 10], per: 8, reach: 2.2 };
 
-// Дальние участки лесополосы собираются из рисунков; рядом остаются объёмные деревья.
-const BELT_CHUNK = 20, BELT_DISTANCE = 60;
+// Вся полоса напротив доступного игроку двора остаётся объёмной. Рисунки за ней
+// продолжают лесополосу по краям и заполняют просветы; камера их не переключает.
+const BELT_CHUNK = 20, VOLUME_END = 60;
 const beltMaps = tiles(['assets/textures/birch-belt-01.png', 'assets/textures/birch-belt-02.png']);
 const beltMaterials = beltMaps.map((map) => {
   map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
@@ -41,22 +42,17 @@ const beltGeometry = new THREE.PlaneGeometry(26, 19.5);
 
 function plantBelt(trees) {
   const group = new THREE.Group(), chunks = Map.groupBy(trees, (tree) => Math.floor(tree.x / BELT_CHUNK));
-  for (const [chunk, part] of chunks) {
-    const x = (chunk + 0.5) * BELT_CHUNK, z = (BELT.from + BELT.to) / 2;
+  group.add(plantBirches(trees.filter((tree) => Math.abs(tree.x) < VOLUME_END)));
+  for (const chunk of chunks.keys()) {
+    const x = (chunk + 0.5) * BELT_CHUNK, z = BELT.to + 4;
     const variant = ((chunk % 4) + 4) % 4;
-    const near = plantBirches(part);
-    near.position.set(-x, 0, -z);
     const far = new THREE.Mesh(beltGeometry, beltMaterials[[0, 1, 1, 0][variant]]);
     const scale = [0.96, 1, 1.04, 0.99][variant];
     far.scale.set(variant < 2 ? scale : -scale, scale, 1);
-    far.position.z = [-0.7, 0.5, -0.3, 0.7][variant];
+    far.position.set(x, 0, z + [-0.7, 0.5, -0.3, 0.7][variant]);
     // Стволы в рисунках заканчиваются примерно на 92% высоты холста.
-    far.position.y = height(x, z + far.position.z) + 19.5 * 0.42 * scale;
-    const detail = new THREE.LOD();
-    detail.position.set(x, 0, z);
-    detail.addLevel(near, 0);
-    detail.addLevel(far, BELT_DISTANCE, 0.1);
-    group.add(detail);
+    far.position.y = height(x, far.position.z) + 19.5 * 0.42 * scale;
+    group.add(far);
   }
   return group;
 }
