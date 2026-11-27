@@ -1,4 +1,5 @@
 import { makeCutGuide } from './cut-guide.js';
+import { makeHeldSaw } from './held-saw.js';
 import { showAction } from './hud-layout.js';
 import * as THREE from 'three';
 import { TrunkVoxels, trunkShape, VOXEL, dressWood } from './trunk.js';
@@ -87,6 +88,7 @@ const logEl = document.getElementById('log');
 const gapEl = document.getElementById('gap');
 const kitEl = document.getElementById('kit');
 const heldSawEl = document.getElementById('held-saw');
+const heldSawMotion = await makeHeldSaw(heldSawEl);
 const stickEl = document.getElementById('stick');
 const stick = bindStick(stickEl);
 const touchSaw = document.getElementById('touch-saw');
@@ -639,7 +641,7 @@ function arm(i) {
   }
   held = i;
   const { bar, pack } = kit[i];
-  heldSawEl.classList.toggle('short-bar', i === 1);
+  if (bar) heldSawMotion.setLength(Math.round(bar * 100));
   if ((bar || kit[i].ladder || kit[i].winch) && grasp) letGo();
   if (bar) dressSaw(sawModel, pack, bar);
   showKit();
@@ -2008,7 +2010,6 @@ function update(dt) {
     else if (!kit[held].bar && climbing) label = 'Спуститься';
     else if (!kit[held].bar && ladderNearby()) label = ladderTargeted() ? 'Убрать лестницу' : 'Подняться';
     showAction(touchSaw, label, isTrigger, trigger);
-    heldSawEl.classList.toggle('running', trigger && !shown);
   }
   aimPlane.visible = !fly && Boolean(shown) && mode !== 'cut';
   if (aimPlane.visible) {
@@ -2064,7 +2065,10 @@ function update(dt) {
 // Наведение показывает модель, но ещё не создаёт пропил и не ограничивает ходьбу.
 function updateSawVisibility(target = saw) {
   sawModel.visible = playing && !fly && Boolean(target) && Boolean(kit[held].bar);
-  heldSawEl.hidden = !playing || Boolean(fly || target) || !kit[held].bar;
+  const hidden = !playing || Boolean(fly || target) || !kit[held].bar;
+  if (hidden && !heldSawEl.hidden) heldSawMotion.stop();
+  heldSawEl.hidden = hidden;
+  if (!hidden) heldSawMotion.setThrottle(trigger);
 }
 
 // Все деревья продолжают падать, а куски — двигаться, когда игрок переключается в облёт.
@@ -2337,6 +2341,7 @@ addEventListener('keyup', (e) => {
 });
 touchSaw.addEventListener('blur', releaseSaw);
 addEventListener('blur', () => {
+  heldSawMotion.stop();
   keys.clear();
   releaseSaw();
 });

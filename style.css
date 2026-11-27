@@ -20,8 +20,6 @@ body[data-mode="fly"] #stage { width: 100%; height: 100%; aspect-ratio: auto; }
 .hud-art img { width: 100%; height: 100%; display: block; object-fit: contain; object-position: bottom; }
 /* Только старые два рисунка получают поправку под свет двора. Новая живопись из редактора показывает свой цвет. */
 #held-saw img:is([src="assets/hud/saw-1.webp"], [src="assets/hud/saw-2.webp"]) { filter: saturate(.70) brightness(.89) contrast(.95); }
-#held-saw .short-saw, #held-saw.short-bar .long-saw { display: none; }
-#held-saw.short-bar .short-saw { display: block; }
 #kit { display: contents; }
 #kit button, #touch-saw { pointer-events: auto; padding: 4px 8px; line-height: 1.1; font-weight: 600; font-size: 14px; background: #19251edb; border: 1px solid #f2f0d783; text-shadow: 0 1px 2px #0008; }
 #kit button { display: flex; align-items: center; gap: 3px; padding: 3px 5px; background: #25312bf2; border-color: #ccceb16b; }
@@ -127,8 +125,6 @@ body[data-mode="hud"] #stage { outline: 1px solid var(--line); }
 .editing .hud-object { pointer-events: auto; cursor: move; }
 .editing .hud-object:hover, .editing .hud-object.selected { outline: 2px dashed #ffbd6c; outline-offset: 2px; }
 .editing .hud-object.selected[data-layout-off] { display: block; }
-#held-saw.running img { animation: saw-run .09s linear infinite alternate; }
-@keyframes saw-run { to { transform: translate(1px, -2px) rotate(.35deg); } }
 @media (max-width: 740px) { body[data-mode="hud"] #desk { height: auto; min-height: 100dvh; grid-template: auto auto auto auto / 1fr; } #editor-bar { flex-wrap: wrap; gap: 8px; } body[data-mode="hud"] #room { height: min(58vw, 460px); margin: 12px; } #inspector { grid-row: 4; grid-column: 1; border: 0; } #editor-help { grid-row: 3; } }
 
 body[data-mode="fall"] #stage { width: 100%; height: 100%; aspect-ratio: auto; }
