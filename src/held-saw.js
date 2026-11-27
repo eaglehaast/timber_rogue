@@ -4,6 +4,8 @@ const blades = {
   70: { width: 505, x: 25.641623, y: 6.742953, matrix: [.622353507, .38367313, -.058333333, .958333333] },
 };
 const bladeHeight = 64, poseWidth = 900, poseHeight = 600, coastSeconds = .5;
+// Два соседних зуба проходят за один период рисунка. На полном газу видны длинные блики.
+const pitch = 96, cyclesPerSecond = 8.5, steps = 32;
 const finger = { x: 617, y: 351, width: 81, height: 87 };
 
 async function picture(name) {
@@ -29,7 +31,7 @@ export async function makeHeldSaw(container, onState = () => {}) {
   blade.append(chain); container.replaceChildren(blade, pose);
   const brush = pose.getContext('2d'), ink = chain.getContext('2d');
   brush.drawImage(grip, 0, 0);
-  let track, length, pressed = false, speed = 0, phase = 0, lastTile = -1, clock = 0, previous = 0;
+  let track, length, pressed = false, speed = 0, phase = 0, lastFrame = -1, clock = 0, previous = 0;
 
   function drawFinger() {
     brush.clearRect(finger.x, finger.y, finger.width, finger.height);
@@ -38,24 +40,26 @@ export async function makeHeldSaw(container, onState = () => {}) {
   function drawChain() {
     // В масштабе игрового экрана мелкие детали рисунка усредняются. Более крупные
     // тёмные звенья и светлые грани идут от корпуса по верху, огибают нос и возвращаются снизу.
-    const step = Math.floor(phase * 16);
-    if (step === lastTile) return;
-    lastTile = step;
-    const tile = step >> 1;
+    const step = Math.floor(phase * steps);
+    const fast = speed > .3;
+    const frame = step + (fast ? steps : 0);
+    if (frame === lastFrame) return;
+    lastFrame = frame;
+    const tile = Math.floor(step / 2) % 8 + (fast ? 8 : 0);
     const width = chain.width;
     ink.clearRect(0, 0, width, bladeHeight);
     ink.drawImage(artwork[length].links, (tile % 4) * width, Math.floor(tile / 4) * bladeHeight,
       width, bladeHeight, 0, 0, width, bladeHeight);
-    const offset = -step * 48 / 16;
+    const offset = -step * pitch / steps;
     ink.lineCap = 'round';
     ink.lineWidth = 7;
-    ink.strokeStyle = '#302e30';
-    ink.setLineDash([17, 31]);
+    ink.strokeStyle = fast ? '#494547' : '#302e30';
+    ink.setLineDash(fast ? [68, 28] : [17, 31]);
     ink.lineDashOffset = offset;
     ink.stroke(track);
-    ink.lineWidth = 4;
-    ink.strokeStyle = '#d9cbb2';
-    ink.setLineDash([9, 39]);
+    ink.lineWidth = fast ? 3.5 : 4;
+    ink.strokeStyle = fast ? '#c6bcaa' : '#d9cbb2';
+    ink.setLineDash(fast ? [34, 12, 10, 40] : [9, 39]);
     ink.lineDashOffset = offset - 2;
     ink.stroke(track);
   }
@@ -71,7 +75,9 @@ export async function makeHeldSaw(container, onState = () => {}) {
     const before = speed;
     const movingTime = pressed ? dt : Math.min(dt, before * coastSeconds);
     if (!pressed) speed = Math.max(0, before - dt / coastSeconds);
-    phase = (phase + Math.min(.23, 1.85 * movingTime * (before + speed) / 2)) % 1;
+    // При редких кадрах держим видимый блик ближе следующего повторения, чтобы ход не читался задом наперёд.
+    const travel = cyclesPerSecond * movingTime * (before + speed) / 2;
+    phase = (phase + Math.min(.38, travel)) % 1;
     drawChain(); report();
     clock = speed > 0 ? requestAnimationFrame(tick) : 0;
   }
@@ -100,7 +106,7 @@ export async function makeHeldSaw(container, onState = () => {}) {
     track.lineTo(30, 8);
     track.arc(30, 32, 24, -Math.PI / 2, -3 * Math.PI / 2, true);
     track.lineTo(width, 56);
-    phase = 0; lastTile = -1; drawChain(); drawFinger();
+    phase = 0; lastFrame = -1; drawChain(); drawFinger();
     container.dataset.length = String(cm);
   }
   function setThrottle(value) {
