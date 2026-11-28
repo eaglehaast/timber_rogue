@@ -2,7 +2,7 @@ import { makeCutGuide } from './cut-guide.js';
 import { makeHeldSaw } from './held-saw.js';
 import { showAction } from './hud-layout.js';
 import * as THREE from 'three';
-import { TrunkVoxels, trunkShape, VOXEL, dressWood } from './trunk.js';
+import { TrunkVoxels, PlainTrunk, trunkShape, VOXEL, dressWood } from './trunk.js';
 import { hitLog, LogCut } from './log-cut.js';
 import { section, leaning, kerfGap, torn, slope, FRICTION, SLIDING } from './physics.js';
 import { EYE, MOUSE, FOV_MIN, FOV_MAX, fieldOfView, makePlayer, forwardOf, turnHead, walkInput, walkSpeed, stepEyes, eyeCamera, bindStick } from './player.js';
@@ -46,8 +46,9 @@ function maplePlots(count) {
   if (plots.length < n) throw new Error(`?maples=${n}: поместилось только ${plots.length}`);
   return plots.slice(0, n);
 }
-// Сколько стоят клёны: заполнение кубиков, сетка ствола, рост кроны (мс) — для стенда и замеров.
-export const mapleCost = { fill: 0, remesh: 0, grow: 0, trees: 0 };
+// Сколько стоят клёны (мс) — для стенда и замеров: форма ствола, его нетронутая сетка, рост кроны;
+// carve — кубики стволов, которые начали пилить, carved — у скольких деревьев они сейчас есть.
+export const mapleCost = { shape: 0, plain: 0, grow: 0, trees: 0, carve: 0, carved: 0 };
 let plots = MAPLES, fallStand, fallLeaves;
 const TREE_H = 12;
 const BODY_RADIUS = 0.35;
@@ -183,11 +184,10 @@ const barL = () => sawModel.userData.bar;
 // Крона каждого ствола и каждая его нижняя ветвь — ветки (limbs.js), от них можно отпиливать.
 // Крона качается на своём сгибе bend — над осью ствола у верха зоны. Торец ветки — те же кольца, что на срезе,
 // стенки раскола — те же рваные волокна, что у отщепа.
-function growTree(voxels) {
-  const { shape } = voxels;
+function growTree(shape, bark) {
   const { skeleton, crowns } = growMaple(shape, ZONE_H, TREE_H, ZONE_H - 0.03);
-  const wood = voxels.skin[1];
-  const skin = [dressLimbs(voxels.skin[0]), new THREE.MeshLambertMaterial({ map: wood.map }), new THREE.MeshLambertMaterial({ map: wood.userData.fibres })];
+  const wood = bark[1];
+  const skin = [dressLimbs(bark[0]), new THREE.MeshLambertMaterial({ map: wood.map }), new THREE.MeshLambertMaterial({ map: wood.userData.fibres })];
   const grow = ({ parts, cards, cloud }, stem) => Object.assign(new Limb(parts, cards, { skin, cloud, zone: ZONE_H }), { stem }).dress();
   const stems = crowns.map((c, i) => {
     const bend = new THREE.Group();
@@ -241,8 +241,8 @@ function regrow(rnd = Math.random) {
   for (const tree of trees) {
     tree.root.removeFromParent();
     tree.root.traverse((object) => object.geometry?.dispose());
-    for (const material of [...tree.voxels.skin, ...tree.skin]) material.dispose();
-    tree.voxels.skin[0].map.dispose();
+    for (const material of [...tree.bark, ...tree.skin]) material.dispose();
+    tree.bark[0].map.dispose();
   }
   saw = null;
   mode = 'free';
@@ -270,38 +270,70 @@ function newRound(slot, treeSeed) {
 
   seed(treeSeed);
   const t0 = performance.now();
-  const voxels = new TrunkVoxels(trunkShape(r, ZONE_H, random() * Math.PI * 2), ZONE_H, [dressBark(), dressWood()]);
+  const shape = trunkShape(r, ZONE_H, random() * Math.PI * 2), bark = [dressBark(), dressWood()];
   const t1 = performance.now();
-  voxels.remesh();
+  const plain = new PlainTrunk(shape, ZONE_H, bark[0]);
   const t2 = performance.now();
-  const tree = growTree(voxels);
-  mapleCost.fill += t1 - t0;
-  mapleCost.remesh += t2 - t1;
+  const tree = growTree(shape, bark);
+  mapleCost.shape += t1 - t0;
+  mapleCost.plain += t2 - t1;
   mapleCost.grow += performance.now() - t2;
   mapleCost.trees++;
 
   const root = new THREE.Group();
   root.name = 'maple';
   root.position.set(x, ground(x, z), z);
-  voxels.standing = true;
   // Кроны сначала стоят на месте, а над пропилом их потом переносят с сохранением положения (attach).
-  root.add(voxels.group, ...tree.stems.flatMap((s) => [s.bend, ...s.lows.filter(l => !l.crownBranch).map(l => l.limb.group)]));
+  root.add(plain.group, ...tree.stems.flatMap((s) => [s.bend, ...s.lows.filter(l => !l.crownBranch).map(l => l.limb.group)]));
   scene.add(root);
   // Отпилы — твёрдые тела у этого дерева: лежат на земле, на пне, на ветках и друг на друге.
   const world = new World(root, ground, groundNormal);
-  world.fix(root, { solids: [voxels] });
   for (const s of tree.stems) for (const limb of [s.crown, ...s.lows.map((l) => l.limb)]) limb.set = world.fix(limb.group, { capsules: limb.shape });
 
   round = trees[slot] = {
-    slot, base: root.position, root, voxels, world, ...tree,
+    slot, base: root.position, root, shape, bark, plain, voxels: plain, world, ...tree,
     seed: treeSeed, shedStems: 0,
     time: 0,
     stumps: [], // на какой высоте спилен ствол (по номеру ствола)
     cuts: [],
   };
+  // Ствол для тел — тот, что сейчас у дерева: нетронутый или кубики, когда его начали пилить.
+  const tree0 = round;
+  world.fix(root, {
+    solids: [{ box: plain.box, get version() { return tree0.voxels.version; }, press: (p, r, reach) => tree0.voxels.press(p, r, reach) }],
+  });
   standUp((1 << tree.stems.length) - 1);
   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
 
+}
+
+// Кубики ствола дерева tree: заводятся, когда его впервые пилят, вместо нетронутой сетки коры.
+// До тех пор tree.voxels — PlainTrunk: прицел, лебёдка, лестница и тела спрашивают его так же, как кубики.
+function carveable(tree) {
+  if (tree.voxels instanceof TrunkVoxels) return tree.voxels;
+  if (tree.voxels !== tree.plain) throw new Error(`carveable: у дерева ${tree.slot} ствол ни кубики, ни нетронутый`);
+  const t0 = performance.now();
+  const voxels = new TrunkVoxels(tree.shape, ZONE_H, tree.bark);
+  Object.assign(voxels, { standing: true, body: tree.body });
+  voxels.remesh();
+  tree.plain.group.removeFromParent();
+  tree.root.add(voxels.group);
+  tree.upper.add(voxels.lift);
+  tree.voxels = voxels;
+  mapleCost.carved++;
+  mapleCost.carve += performance.now() - t0;
+  return voxels;
+}
+
+// Кубики, которых пила так и не тронула (version 0), снова меняем на нетронутую сетку: дерево отошло из-под пилы.
+function uncarve(tree) {
+  const voxels = tree.voxels;
+  voxels.group.removeFromParent();
+  voxels.lift.removeFromParent();
+  for (const o of [voxels.group, voxels.lift]) o.traverse((m) => m.geometry?.dispose());
+  tree.root.add(tree.plain.group);
+  tree.voxels = tree.plain;
+  mapleCost.carved--;
 }
 
 // Стоят стволы standing (маска по номерам): их ещё не валили, и пилить можно заново. Верх над пропилом
@@ -309,7 +341,7 @@ function newRound(slot, treeSeed) {
 function standUp(standing) {
   const upper = new THREE.Group();
   round.root.add(upper);
-  upper.add(round.voxels.lift);
+  if (round.voxels instanceof TrunkVoxels) upper.add(round.voxels.lift);
   Object.assign(round, {
     upper, standing, body: 0,
     sway: new THREE.Vector3(), gap: null,
@@ -606,7 +638,7 @@ function inWorld(cut) {
 
 // Цепь выпиливает полосу от from до кромки по ходу пилы, а выпиленное летит щепками.
 function bite(from) {
-  const volume = (saw.kerf ?? round.voxels).carve(basis(saw), from, 0, barL());
+  const volume = (saw.kerf ?? carveable(round)).carve(basis(saw), from, 0, barL());
   if (volume) spray(saw, volume);
 }
 
@@ -1069,7 +1101,7 @@ function fallSaw(item) {
 
 // В каком стволе пропил cut (у двойного дерева их два): ближайший к нему на его высоте.
 function stemOf(cut) {
-  const { stems } = round.voxels.shape;
+  const { stems } = round.shape;
   const off = (stem) => stem.center(cut.origin.y).setY(0).distanceTo(cut.origin.clone().setY(0));
   return stems.indexOf(stems.reduce((a, b) => (off(b) < off(a) ? b : a)));
 }
@@ -1690,8 +1722,8 @@ function canStand(x, z) {
   if (!walkable(x, z)) return false;
   if (woodyard && !woodyard.canWalk(x, z)) return false;
   const floor = ground(x, z);
-  for (const { base, voxels, stumps } of trees) {
-    const { mid, reach, stems } = voxels.shape;
+  for (const { base, shape, stumps } of trees) {
+    const { mid, reach, stems } = shape;
     const dx = x - base.x, dz = z - base.z;
     if (Math.abs(dx - mid.x) > reach.x + BODY_RADIUS || Math.abs(dz - mid.z) > reach.z + BODY_RADIUS) continue;
     const feet = floor - base.y;
@@ -1806,7 +1838,7 @@ function update(dt) {
   }
   aimPlane.visible = !fly && Boolean(shown) && mode !== 'cut';
   if (aimPlane.visible) {
-    const r = shown.kerf?.r ?? shown.tree.voxels.radius;
+    const r = shown.kerf?.r ?? shown.tree.shape.radius;
     const plane = place(shown, r);
     aimPlane.position.copy(plane.position);
     aimPlane.quaternion.copy(plane.quaternion);
@@ -1873,6 +1905,7 @@ function updateTrees(dt) {
     round = tree;
     round.gap = null;
     round.squeeze = false;
+    if (tree !== here && tree.voxels instanceof TrunkVoxels && tree.voxels.version === 0) uncarve(tree);
     if (!round.top) stand(dt);
     else if (round.slide) slideTop(dt);
     if (round.fall && !round.done) {
@@ -2414,7 +2447,7 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
     study.fell = direction => {
       if (!round || round.top) return;
       const y = 0.705, side = UP.clone().cross(direction);
-      round.voxels.carve({ origin: new THREE.Vector3(0, y, 0), along: direction, side, normal: UP }, -2, 2, 4);
+      carveable(round).carve({ origin: new THREE.Vector3(0, y, 0), along: direction, side, normal: UP }, -2, 2, 4);
       round.voxels.remesh();
       round.sec = section(round.voxels);
       lift();
@@ -2437,7 +2470,7 @@ function cost() {
   let voxels = 0, geometry = 0, meshes = 0;
   const seen = new Set();
   for (const tree of trees) {
-    voxels += arrays(tree.voxels);
+    if (tree.voxels instanceof TrunkVoxels) voxels += arrays(tree.voxels);
     tree.root.traverse((o) => {
       if (!o.isMesh || !o.geometry) return;
       meshes++;
