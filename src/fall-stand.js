@@ -51,7 +51,6 @@ export async function startFallStand() {
   const target = view.focus.clone(), direction = new THREE.Vector3(1, 0, 0);
   let stage = 'ready', afterHit = -1, follow = 0, samples = null, maxBodies = 0, seeFall = false, broken = 0;
   const study = {
-    get artistic() { return $('fall-mode').value === 'art'; },
     onFall(u, separation) {
       direction.copy(u);
       stage = 'falling';
@@ -104,7 +103,6 @@ export async function startFallStand() {
   }
   action.addEventListener('click', start);
   $('fall-reset').addEventListener('click', reset);
-  $('fall-mode').addEventListener('change', reset);
   manual.addEventListener('click', () => {
     if (game.active) { observe(); return; }
     const down = stage === 'down';
@@ -152,7 +150,7 @@ export async function startFallStand() {
   function saveResult() {
     samples.frames.sort((a, b) => a - b);
     const p95 = samples.frames[Math.ceil(samples.frames.length * 0.95) - 1];
-    const row = $(study.artistic ? 'fall-art-result' : 'fall-old-result');
+    const row = $('fall-result');
     while (row.cells.length > 1) row.deleteCell(1);
     for (const value of [samples.separation.toFixed(1) + ' мс', samples.peak.toFixed(1) + ' мс', p95.toFixed(1) + ' мс', maxBodies]) row.insertCell().textContent = value;
     samples = null;

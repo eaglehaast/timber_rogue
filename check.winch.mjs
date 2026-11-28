@@ -13,7 +13,7 @@ globalThis.location = { search: '' };
 globalThis.matchMedia = () => ({ matches: true });
 Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'node', maxTouchPoints: 0 }, configurable: true });
 const { createWinch, findWinchTarget, WINCH_MAX, WINCH_STEP } = await import('./src/winch.js');
-const { lever } = await import('./src/physics.js');
+const { leaning } = await import('./src/physics.js');
 
 const scene = new THREE.Scene();
 const root = new THREE.Group();
@@ -39,11 +39,14 @@ assert.ok(winch.moment(pivot, axis) > 0, 'натянутый трос добав
 const offset = winch.offset(pivot, 10000);
 assert.ok(offset.x > 0, 'усилие сдвигает расчётный момент к колу');
 assert.ok(Math.abs(offset.x * 10000 - winch.moment(pivot, axis)) < 1e-6, 'смещение соответствует моменту троса');
-const sec = { all: [{ x: -0.02, z: 0, gap: 0, open: 0 }, { x: 0.02, z: 0, gap: 0, open: 0 }] };
-const against = new THREE.Vector3(-1, 0, 0);
-const original = lever(sec, new THREE.Vector3(-0.1, 0, 0), 10000, against, 0);
-const pulled = lever(sec, new THREE.Vector3(-0.1, 0, 0).add(offset), 10000, against, 0);
-assert.ok(pulled.pull < original.pull, 'лебёдка уменьшает момент в противоположную сторону');
+// Недопил посередине, дерево клонится от кола (вес в −x). Натянутая лебёдка уводит направление падения к колу.
+const fibre = (x, z, gap = 0) => ({ x, z, gap });
+const sec = { all: [fibre(-0.02, 0), fibre(0.02, 0), fibre(-0.06, 0, 1), fibre(0.06, 0, 1)] };
+sec.intact = sec.all.filter((f) => !f.gap);
+const original = leaning(sec, new THREE.Vector3(-0.1, 0, 0), 0.1);
+const pulled = leaning(sec, new THREE.Vector3(-0.1, 0, 0).add(offset), 0.1);
+assert.ok(original.u.x < 0, 'без лебёдки дерево падает туда, куда клонится');
+assert.ok(pulled.u.x > 0, 'лебёдка уводит направление падения к колу');
 assert.equal(pegGroup.visible, true, 'после установки кола появляется видимый корпус лебёдки');
 assert.ok(pegGroup.children[3].rotation.x > 0, 'ручной барабан поворачивается при натяжении');
 
