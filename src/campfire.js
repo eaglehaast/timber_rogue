@@ -36,14 +36,13 @@ export function makeDropPad() {
 function makeYardPavingShape() {
   const x = PAVING_HALF.x, z = PAVING_HALF.z;
   const shape = new THREE.Shape();
-  shape.moveTo(-PAVING_ENTRY_HALF, -z);
-  shape.bezierCurveTo(-x * 0.36, -z, -x * 0.75, -z * 0.9, -x * 0.88, -z * 0.56);
-  shape.bezierCurveTo(-x, -z * 0.3, -x, z * 0.35, -x * 0.82, z * 0.66);
-  shape.bezierCurveTo(-x * 0.65, z, -x * 0.24, z * 0.94, 0, z * 0.84);
-  shape.bezierCurveTo(x * 0.28, z * 0.96, x * 0.68, z, x * 0.86, z * 0.62);
-  shape.bezierCurveTo(x, z * 0.3, x, -z * 0.36, x * 0.83, -z * 0.68);
-  shape.bezierCurveTo(x * 0.65, -z * 0.96, x * 0.28, -z, PAVING_ENTRY_HALF, -z);
+  shape.moveTo(-x, -z);
   shape.lineTo(-PAVING_ENTRY_HALF, -z);
+  shape.lineTo(PAVING_ENTRY_HALF, -z);
+  shape.lineTo(x, -z);
+  shape.lineTo(x, z);
+  shape.lineTo(-x, z);
+  shape.lineTo(-x, -z);
   shape.closePath();
   return shape;
 }

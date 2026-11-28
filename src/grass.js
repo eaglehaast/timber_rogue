@@ -108,7 +108,7 @@ export const noise = smoothNoise(Math.random);
 // Где траву топчут (между колеями), trodden близко к 1: куртин высокой там нет, растёт низкая.
 // Где трава сочная (lush близко к 1), она сплошная и ровная: куртин почти нет, пучок зеленее.
 // top — какую долю роста пучка оставить сверху: верхушки торчат из сплошной массы (колосья над полем), низ не рисуем.
-export function makeTufts({ material, cols, rows, aspect, heights, rank, turning }, count, size, density, { trodden = () => 0, lush = () => 0, top = 1 } = {}) {
+export function makeTufts({ material, cols, rows, aspect, heights, rank, turning }, count, size, density, { trodden = () => 0, lush = () => 0, top = 1, exclude = () => false } = {}) {
   const pos = [], uv = [], index = [], side = [], lift = [], green = [];
   for (let n = 0; n < count; n++) {
     const x = (Math.random() - 0.5) * size, z = (Math.random() - 0.5) * size;
@@ -121,6 +121,7 @@ export function makeTufts({ material, cols, rows, aspect, heights, rank, turning
     const u0 = (cell % cols) / cols, v1 = 1 - Math.floor(cell / cols) / rows, u1 = u0 + 1 / cols, v0 = v1 - top / rows;
     // Где топчут, пучок примят: ниже до трети роста.
     const h = (low + Math.random() * (high - low)) * (1 - 0.65 * trodden(x, z)), w = h * aspect, turn = Math.random() * Math.PI, y = height(x, z), g = lush(x, z);
+    if (exclude(x, z, w / 2 + h * 0.78)) continue;
     const cards = turning ? [[0, 0]] : [turn, turn + Math.PI / 2].map((a) => [Math.cos(a) * w / 2, Math.sin(a) * w / 2]);
     for (const [dx, dz] of cards) {
       const k = pos.length / 3;

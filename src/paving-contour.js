@@ -48,6 +48,22 @@ export function pavingContains(shapes) {
   return (x, z) => nearby({ x, z }, { x, z }).some((i) => contains(shapes[i].polygon, { x, z }));
 }
 
+// Пересекается ли круг с мощением, включая его край.
+export function pavingIntersects(shapes) {
+  const { outlines, nearby } = indexPaving(shapes);
+  return (x, z, radius = 0) => {
+    const point = { x, z };
+    return nearby({ x: x - radius, z: z - radius }, { x: x + radius, z: z + radius }).some((i) => {
+      if (contains(shapes[i].polygon, point)) return true;
+      return outlines[i].segments.some(([a, b]) => {
+        const dx = b.x - a.x, dz = b.z - a.z, length2 = dx * dx + dz * dz;
+        const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / length2));
+        return (x - a.x - t * dx) ** 2 + (z - a.z - t * dz) ** 2 <= radius * radius;
+      });
+    });
+  };
+}
+
 export function exposedPavingEdges(shapes) {
   const { outlines, nearby } = indexPaving(shapes);
   const result = [], seen = new Set();

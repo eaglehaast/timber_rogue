@@ -2,6 +2,30 @@ import * as THREE from 'three';
 
 export const ROUTE_SPACING = 0.12;
 
+// Сохраняем исходные делянки, сдвигая только те, что пересекают мощение.
+export function fitTreePlots(plots, pathBlocked, siteBlocked) {
+  const result = plots.map((plot) => ({ ...plot }));
+  for (let i = 0; i < result.length; i++) {
+    const original = plots[i], radius = 2 * original.r + 0.5;
+    if (!pathBlocked(original.x, original.z, radius)) continue;
+    let found = null;
+    for (let distance = 0.25; distance <= 40 && !found; distance += 0.25) {
+      const count = Math.ceil(2 * Math.PI * distance / 0.25);
+      for (let n = 0; n < count; n++) {
+        const angle = n * 2 * Math.PI / count;
+        const x = original.x + distance * Math.cos(angle), z = original.z + distance * Math.sin(angle);
+        if (pathBlocked(x, z, radius) || siteBlocked(x, z, radius)
+          || result.some((other, j) => j !== i && Math.hypot(x - other.x, z - other.z) < radius + 2 * other.r + 0.5)) continue;
+        found = { ...original, x, z };
+        break;
+      }
+    }
+    if (!found) throw new Error('Не удалось разместить дерево вдали от тропы');
+    result[i] = found;
+  }
+  return result;
+}
+
 export function fitPavingCenter(center, halfWidth, yardHalfWidth, margin = 0) {
   const limit = yardHalfWidth - halfWidth - margin;
   if (limit < 0) throw new RangeError('Paving footprint does not fit inside the yard');
