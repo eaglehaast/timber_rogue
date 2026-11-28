@@ -24,7 +24,7 @@ const { planRiver } = await import('./src/river.js');
 const { shapeGround, height, groundAt } = await import('./src/terrain.js');
 const { makeGround } = await import('./src/grass.js');
 const { planBanya, buildBanya } = await import('./src/banya.js');
-const { planHouse, LOG_MATERIAL } = await import('./src/house.js');
+const { planHouse, buildHouse, LOG_MATERIAL, END_MATERIAL } = await import('./src/house.js');
 const { PANE } = await import('./src/window.js');
 const { planGas, gasPostMaterial } = await import('./src/gas.js');
 const { planPower, powerWireMaterial } = await import('./src/power.js');
@@ -58,6 +58,20 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const shoreRay = new THREE.Raycaster(new THREE.Vector3(site.x, 10, river.shore(site.x) - 0.15), new THREE.Vector3(0, -1, 0));
   assert.ok(shoreRay.intersectObject(grassGround).length, 'под настилом у уреза есть земля');
   const banya = buildBanya(site, river, power, { plan: house, at: atHouse });
+  const banyaLogs = banya.group.children[0].material;
+  assert.ok(banyaLogs[0] !== LOG_MATERIAL && banyaLogs[1] !== END_MATERIAL
+    && banyaLogs[0].map === LOG_MATERIAL.map && banyaLogs[1].map === END_MATERIAL.map
+    && banyaLogs[0].color.r > LOG_MATERIAL.color.r && banyaLogs[1].color.r > END_MATERIAL.color.r,
+  'сруб бани светлее, но использует те же текстуры и не меняет материал дома');
+  assert.equal(banyaLogs[0].customProgramCacheKey(), LOG_MATERIAL.customProgramCacheKey(),
+    'осветлённые брёвна сохраняют обработку текстуры сруба');
+  const home = buildHouse(house);
+  assert.equal(home.children[0].material[0], LOG_MATERIAL, 'дом сохраняет прежний материал брёвен');
+  const banyaGable = banya.group.children[2].children[0].material[0];
+  const homeGable = home.children[2].children[0].material[0];
+  assert.ok(banyaGable !== homeGable && banyaGable.map === homeGable.map
+    && banyaGable.color.r > homeGable.color.r, 'фронтон бани светлее без изменения фронтонов дома');
+  home.traverse((part) => part.geometry?.dispose());
   const bathWindows = banya.plan.openings.filter((opening) => opening.kind === 'window');
   assert.equal(banya.plan.plinth, 'brick', 'баня стоит на кирпичном цоколе без деревянной обшивки');
   assert.equal(banya.plan.curtains, false, 'в банных окнах нет занавесок');

@@ -171,7 +171,7 @@ export function buildBoards(plan, { front, low, side, plinth, r, reach }) {
   // они уходят под свес, а не сквозь него. Запас — на неровность брёвен (сбег, толщина, обвод).
   const clear = 0.25 * r;
   const ridge = Math.max(side + clear + (w / 2) * tan, front + clear + (reach + 0.05) * tan);
-  const gable = new Planks(materials.gable), roof = new Planks(materials.roof);
+  const gable = new Planks(plan.gableTone ? boardMaterials(plan.gableTone) : materials.gable), roof = new Planks(materials.roof);
   // Отлив крашен в цвет наличников: лишний цвет у цоколя не нужен (Никита, 2026-11-07).
   const drip = new Planks(boardMaterials(TONES.roof, { color: trimColor(PAINTS[plan.windows.paint]) }));
 
