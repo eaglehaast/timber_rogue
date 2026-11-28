@@ -24,6 +24,7 @@ function stainedWood(map) {
 }
 const woodSide = stainedWood(LOG_MATERIAL.map), woodEnd = stainedWood(END_MATERIAL.map);
 const BORDER = { radius: 0.065, spacing: 0.105, sides: 8 };
+const rectangle = ({ x0, x1, z0, z1 }) => [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];
 
 // Гладкий шум от rnd: s — ячейка, h — шаг сетки.
 const noise = (rnd, h = 1.3) => {
@@ -47,7 +48,7 @@ function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, b
     const tangent = new THREE.Vector2(after.x - before.x, after.z - before.z).normalize();
     const normal = new THREE.Vector2(-tangent.y, tangent.x);
     const distToEnd = total - lengths[i];
-    const startFlare = destination === 'gate' || destination.startsWith('pier') || destination === 'outhouse' ? 0 : smooth(THREE.MathUtils.clamp(1 - lengths[i] / 1.3, 0, 1));
+    const startFlare = destination === 'gate' || destination.startsWith('pier') || destination === 'outhouse' || destination === 'shed' ? 0 : smooth(THREE.MathUtils.clamp(1 - lengths[i] / 1.3, 0, 1));
     const endFlare = smooth(THREE.MathUtils.clamp(1 - distToEnd / 1.8, 0, 1));
     const flare = Math.max(startFlare, endFlare);
     const half = THREE.MathUtils.lerp(PATH.half, terminalHalf, flare)
@@ -74,7 +75,7 @@ function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, b
 }
 
 // Бордюр идёт по общей внешней границе всех лент и площадки, а не вдоль внутренних швов.
-function border(paths, junction, pad, pavingOutline, forecourt, seed) {
+function border(paths, junction, pad, pavingOutline, forecourt, shedApron, seed) {
   const segments = (points) => points.slice(1).map((p, i) => [points[i], p]);
   const shapes = paths.flatMap(({ geometry }) => {
     const position = geometry.attributes.position, index = geometry.index, triangles = [];
@@ -101,10 +102,10 @@ function border(paths, junction, pad, pavingOutline, forecourt, seed) {
       && Math.abs(a.z - pad.z) <= PAVING_ENTRY_HALF + 1e-5 && Math.abs(b.z - pad.z) <= PAVING_ENTRY_HALF + 1e-5));
   shapes.push({ polygon: outline, edges: padEdges });
   if (forecourt) {
-    const { x0, x1, z0, z1 } = forecourt;
-    const polygon = [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];
+    const polygon = rectangle(forecourt);
     shapes.push({ polygon, edges: [[polygon[0], polygon[1]], [polygon[1], polygon[2]]] });
   }
+  if (shedApron) shapes.push({ polygon: rectangle(shedApron), edges: shedApron.edges });
   const covered = pavingContains(shapes);
   const posts = borderPoints(exposedPavingEdges(shapes), BORDER.spacing).filter(({ x, z }) =>
     ![[0.08, 0], [-0.08, 0], [0, 0.08], [0, -0.08]].every(([dx, dz]) => covered(x + dx, z + dz)));
@@ -152,7 +153,7 @@ function border(paths, junction, pad, pavingOutline, forecourt, seed) {
 }
 
 // Строить после shapeGround: единый ствол от ворот расходится к дому, бане и хозплощадке.
-export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, padApproach, pavingOrigin = pad, pavingOutline, bath, bathApproach, bathWidth, house, pier, pierApproach, pierWidth, pierEntrySurface, utilityPierStart, forecourt, outhouse, outhouseApproach, outhouseStart, outhouseWidth, shed, shedApproach, shedWidth }) {
+export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, padApproach, pavingOrigin = pad, pavingOutline, bath, bathApproach, bathWidth, house, pier, pierApproach, pierWidth, pierEntrySurface, utilityPierStart, forecourt, outhouse, outhouseApproach, outhouseStart, outhouseWidth, shed, shedApproach, shedWidth, shedApron }) {
   if (pier && (!pierApproach || !utilityPierStart || !Number.isFinite(pierWidth) || !Number.isFinite(pierEntrySurface))) {
     throw new TypeError('Для тропы к причалу нужны подход, начало, ширина и высота стыка');
   }
@@ -161,8 +162,8 @@ export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, p
   if (outhouse && (!outhouseApproach || !outhouseStart || !Number.isFinite(outhouseWidth))) {
     throw new TypeError('Для тропы к туалету нужны подход, начало и ширина входа');
   }
-  if (shed && (!shedApproach || !Number.isFinite(shedWidth))) {
-    throw new TypeError('Для тропы к сараю нужны направление подхода и ширина входа');
+  if (shed && (!shedApproach || !Number.isFinite(shedWidth) || !shedApron?.edges)) {
+    throw new TypeError('Для тропы к сараю нужны направление подхода, ширина устья и площадка перед фасадом');
   }
   const network = planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house, pier, pierApproach, utilityPierStart, outhouse, outhouseApproach, outhouseStart, shed, shedApproach });
   const paths = network.routes.map(({ points, destination }) => ({
@@ -182,10 +183,7 @@ export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, p
     x: network.junction.x + 0.92 * Math.cos(i * Math.PI / 16),
     z: network.junction.z + 0.92 * Math.sin(i * Math.PI / 16),
   })) }, { polygon: pavingOutline });
-  if (forecourt) {
-    const { x0, x1, z0, z1 } = forecourt;
-    footprints.push({ polygon: [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }] });
-  }
+  for (const slab of [forecourt, shedApron]) if (slab) footprints.push({ polygon: rectangle(slab) });
   const intersects = pavingIntersects(footprints);
   // Растр протоптанного вокруг троп: в колее шагов (у оси) трава не растёт вовсе, у края — низкая.
   const all = paths.flatMap((p) => p.points);
@@ -254,8 +252,8 @@ export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, p
       }
       junction.geometry.computeVertexNormals();
       group.add(junction);
-      if (forecourt) {
-        const { x0, x1, z0, z1 } = forecourt;
+      // Прямоугольная плита мощения повторяет рельеф и лежит чуть выше лент, чтобы стык с ними не мерцал.
+      const slab = ({ x0, x1, z0, z1 }, name) => {
         const geometry = new THREE.PlaneGeometry(x1 - x0, z1 - z0,
           Math.ceil((x1 - x0) / 0.12), Math.ceil((z1 - z0) / 0.12)).rotateX(-Math.PI / 2);
         const pos = geometry.attributes.position, uv = geometry.attributes.uv;
@@ -266,11 +264,13 @@ export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, p
         }
         geometry.computeVertexNormals();
         const mesh = new THREE.Mesh(geometry, stone);
-        mesh.name = 'house-forecourt';
+        mesh.name = name;
         mesh.receiveShadow = true;
-        group.add(mesh);
-      }
-      group.add(...border(ribbons, network.junction, pad, pavingOutline, forecourt, seed));
+        return mesh;
+      };
+      if (forecourt) group.add(slab(forecourt, 'house-forecourt'));
+      if (shedApron) group.add(slab(shedApron, 'shed-apron'));
+      group.add(...border(ribbons, network.junction, pad, pavingOutline, forecourt, shedApron, seed));
       return group;
     },
   };

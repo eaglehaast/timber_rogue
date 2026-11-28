@@ -404,9 +404,7 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
       pierWidth: pier.width, pierEntrySurface: pier.entrySurface,
       utilityPierStart: { x: pavingOrigin.x, z: pavingOrigin.z - 5.4 },
     } : {}),
-    shed: { x: shed.x + shed.w / 2, z: shed.z + 1.65 },
-    shedApproach: { x: shed.x + shed.w / 2 + 1.6, z: shed.z + 1.65 },
-    shedWidth: 1.5,
+    shed: shed.approach, shedApproach: shed.approachGuide, shedWidth: shed.approachWidth, shedApron: shed.apron,
     house: { ...atHouse, w: house.w + 1, d: house.d + 1 },
   });
   const paths = pathPlan.build();
@@ -414,17 +412,30 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const bathRoute = pathPlan.paths.find(({ destination }) => destination === 'bath');
   assert.ok(bathRoute.points.some((p) => Math.hypot(p.x - shedRoute.points[0].x, p.z - shedRoute.points[0].z) < 1e-8),
     `тропа к сараю стыкуется с тропой к бане: seed ${seed}`);
-  const shedExit = { x: shed.x + shed.w / 2, z: shed.z + 1.65 };
-  assert.ok(Math.hypot(shedRoute.points.at(-1).x - shedExit.x, shedRoute.points.at(-1).z - shedExit.z) < 1e-8);
-  const shedIntrusions = shedRoute.points.slice(0, -1).filter((p) => onShedFloor(shed, p.x, p.z));
+  const shedEntry = shedRoute.points.at(-1);
+  assert.ok(Math.hypot(shedEntry.x - shed.approach.x, shedEntry.z - shed.approach.z) < 1e-8);
+  const shedIntrusions = shedRoute.points.filter((p) => onShedFloor(shed, p.x, p.z));
   assert.ok(!shedIntrusions.length, `тропа не проходит сквозь сарай: seed ${seed}: ${JSON.stringify(shedIntrusions.slice(-5))}`);
-  assert.ok(!shedBlocks(shed, shedExit.x, shedExit.z, 0.35), `вход под навес свободен: seed ${seed}`);
+  assert.ok(!shedBlocks(shed, shedEntry.x, shedEntry.z, 0.35), `устье тропы у сарая свободно: seed ${seed}`);
   const shedRouteIndex = pathPlan.paths.indexOf(shedRoute);
   const shedVertices = paths.children[shedRouteIndex].geometry.attributes.position;
   const shedEnd = shedVertices.count - 17;
   assert.ok(Math.abs(Math.hypot(shedVertices.getX(shedEnd) - shedVertices.getX(shedEnd + 16),
-    shedVertices.getZ(shedEnd) - shedVertices.getZ(shedEnd + 16)) - 1.5) < 1e-5,
-  `тропа подходит к открытому пролёту полной шириной: seed ${seed}`);
+    shedVertices.getZ(shedEnd) - shedVertices.getZ(shedEnd + 16)) - shed.approachWidth) < 1e-5,
+  `тропа расширяется у площадки сарая: seed ${seed}`);
+  assert.ok(shed.apron.x1 - shed.wall >= (shed.gate.z1 - shed.gate.z0) / 2, 'створки ворот распахиваются над площадкой');
+  const stone = paths.children[0].material, down = new THREE.Vector3(0, -1, 0);
+  for (const [opening, { z0, z1 }] of [['ворота', shed.gate], ['открытый пролёт', shed.bay]]) {
+    for (let z = z0; z <= z1; z += 0.05) for (const x of [shed.wall + 0.02, shed.wall + 1.1]) {
+      const hit = new THREE.Raycaster(new THREE.Vector3(x, 50, z), down).intersectObject(paths, true)[0];
+      assert.ok(hit?.object.material === stone, `перед фасадом сарая (${opening}) лежит мощение: seed ${seed}, ${x}, ${z}`);
+    }
+  }
+  const shedPosts = paths.getObjectByName('path-border-sides').geometry.attributes.position;
+  for (let i = 0; i < shedPosts.count; i++) {
+    assert.ok(!onShedFloor(shed, shedPosts.getX(i), shedPosts.getZ(i)),
+      `бордюр не заходит в сарай: seed ${seed}, ${shedPosts.getX(i)}, ${shedPosts.getZ(i)}`);
+  }
   assert.ok(pier.start.x > 0 && Math.abs(entry.x) + pier.width / 2 < 20,
     'причал внутри участка у противоположного забора');
   assert.ok(Math.abs(pier.top - groundAt(pier.start.x, pier.start.y)) < 0.2,

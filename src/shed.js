@@ -9,6 +9,7 @@ import { merge } from './surface.js';
 const HX = 1.3, HZ = 2.65, BAY = 0.8, POST = 0.12, FLOOR = 0.075;
 const EAVE = 2.10, PITCH = Math.PI / 11, ridge = EAVE + HX * Math.tan(PITCH);
 const rackFront = -0.53, rackEnd = HZ - 0.18;
+const DOOR_A = -1.96, DOOR_B = 0.12, APRON = 1.5;
 const timber = boardMaterials(new THREE.Color(0.40, 0.31, 0.22));
 const fadedGreen = boardMaterials(new THREE.Color(0.19, 0.30, 0.25));
 const iron = new THREE.MeshLambertMaterial({ color: 0x484441 });
@@ -18,8 +19,19 @@ const front = (x) => ({ o: new THREE.Vector3(x, 0, 0), X: Z, Y });
 const end = (z) => ({ o: new THREE.Vector3(0, 0, z), X, Y });
 const level = (y) => ({ o: new THREE.Vector3(0, y, 0), X, Y: Z });
 
+// Мощёная площадка вдоль фасада: от косяка ворот до торца открытого пролёта, створки распахиваются над ней.
+// Бордюр идёт по трём открытым сторонам; у стены его нет, у ворот он отступает от обшивки.
 export function planShed(yardWidth) {
-  return { x: -yardWidth / 2 + 3.6, z: -11, w: 2 * HX, d: 2 * HZ };
+  const x = -yardWidth / 2 + 3.6, z = -11, wall = x + HX;
+  const gate = { z0: z + DOOR_A, z1: z + DOOR_B }, bay = { z0: z + BAY, z1: z + HZ };
+  const apron = { x0: wall, x1: wall + APRON, z0: gate.z0 - 0.3, z1: bay.z1 + 0.1 };
+  const corners = [{ x: wall + 0.1, z: apron.z0 }, { x: apron.x1, z: apron.z0 }, { x: apron.x1, z: apron.z1 }, { x: wall, z: apron.z1 }];
+  apron.edges = corners.slice(1).map((p, i) => [corners[i], p]);
+  const mouth = (apron.z0 + apron.z1) / 2;
+  return {
+    x, z, w: 2 * HX, d: 2 * HZ, wall, gate, bay, apron,
+    approach: { x: apron.x1 - 0.15, z: mouth }, approachGuide: { x: apron.x1 + 1.4, z: mouth }, approachWidth: 2.5,
+  };
 }
 
 export function onShedFloor(site, x, z, margin = 0) {
@@ -55,7 +67,7 @@ export function buildShed(site, seed) {
     const count = Math.ceil((b - a) / width), step = (b - a) / count;
     for (let i = 0; i < count; i++) add(a + i * step, a + (i + 1) * step - 0.003);
   };
-  const doorA = -1.96, doorB = 0.12, mid = (doorA + doorB) / 2, doorTop = 1.94;
+  const doorA = DOOR_A, doorB = DOOR_B, mid = (doorA + doorB) / 2, doorTop = 1.94;
   const wall = front(HX), back = front(-HX), backNormal = X.clone().negate();
   for (const [a, b, low] of [[-HZ, doorA, 0], [doorA, doorB, doorTop], [doorB, BAY, 0]]) {
     boards(a, b, 0.16, (l, r) => plank(wall, X, l, r, low, EAVE, true, 0.025));

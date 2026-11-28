@@ -105,9 +105,7 @@ function rebuild(seed) {
       forecourt,
       outhouse: outhouse.approach, outhouseApproach: outhouse.approachGuide, outhouseWidth: outhouse.approachWidth,
       outhouseStart: { x: woodPad.x, z: woodPad.z - PAVING_HALF.x + 1.2 },
-      shed: { x: shed.x + shed.w / 2, z: shed.z + 1.65 },
-      shedApproach: { x: shed.x + shed.w / 2 + 1.6, z: shed.z + 1.65 },
-      shedWidth: 1.5,
+      shed: shed.approach, shedApproach: shed.approachGuide, shedWidth: shed.approachWidth, shedApron: shed.apron,
     });
   };
   let pier = planPier(river, seed), paths = makePaths(pier);
