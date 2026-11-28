@@ -10,6 +10,8 @@ import { planLand, buildLand } from './land.js';
 import { planRiver, buildRiver } from './river.js';
 import { planPier, buildPier } from './pier.js';
 import { planBanya, buildBanya } from './banya.js';
+import { planOuthouse, buildOuthouse, outhouseBlocks } from './outhouse.js';
+import { planShed, buildShed, onShedFloor, shedBlocks, shedDeck } from './shed.js';
 import { planField, buildField } from './field.js';
 import { shapeGround, height, normal } from './terrain.js';
 import { makeWorld, makeMeadow, RINGS } from './world.js';
@@ -68,7 +70,9 @@ function rebuild(seed) {
     w: PAVING_HALF.z * 2 + 0.8, d: PAVING_HALF.x * 2 + 0.8,
   };
   const banyaSite = planBanya(seed, river, -door);
-  const shape = (trees) => shapeGround(seed, [pad, woodPad, banyaSite.pad, ...trees], YARD.w, YARD.d,
+  const outhouse = planOuthouse({ seed, yardWidth: YARD.w, street: fence, river });
+  const shed = planShed(YARD.w);
+  const shape = (trees) => shapeGround(seed, [pad, woodPad, banyaSite.pad, outhouse.pad, shed, ...trees], YARD.w, YARD.d,
     { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
   perf.measure('terrain', () => shape(MAPLES));
   // Узлы сети привязаны к нижней ступени крыльца, краю плитняка у поленницы и нижней ступени бани.
@@ -99,6 +103,9 @@ function rebuild(seed) {
       utilityPierStart: { x: woodPad.x, z: woodPad.z - PAVING_HALF.x + 1.2 },
       house: { x: pad.x, z: pad.z, w: pad.w, d: pad.d },
       forecourt,
+      outhouse: outhouse.approach, outhouseApproach: outhouse.approachGuide, outhouseWidth: outhouse.approachWidth,
+      outhouseStart: { x: woodPad.x, z: woodPad.z - PAVING_HALF.x + 1.2 },
+      shed: shed.approach, shedApproach: shed.approachGuide, shedWidth: shed.approachWidth, shedApron: shed.apron,
     });
   };
   let pier = planPier(river, seed), paths = makePaths(pier);
@@ -107,7 +114,8 @@ function rebuild(seed) {
     Math.abs(x) + r >= YARD.w / 2 || z + r >= fence || z - r <= river.brow(x) + 0.5
     || inside(x, z, pad, pad.w + 2 * r, pad.d + 2 * r)
     || inside(x, z, woodPad, woodPad.w + 2 * r, woodPad.d + 2 * r)
-    || inside(x, z, banyaSite.pad, banyaSite.pad.w + 2 * r + 3.3, banyaSite.pad.d + 2 * r + 3.3));
+    || inside(x, z, banyaSite.pad, banyaSite.pad.w + 2 * r + 3.3, banyaSite.pad.d + 2 * r + 3.3)
+    || outhouseBlocks(outhouse, x, z, r) || onShedFloor(shed, x, z, r));
   treePlots.splice(0, treePlots.length, ...fitted);
   if (fitted.some((tree, i) => tree.x !== MAPLES[i].x || tree.z !== MAPLES[i].z)) {
     perf.measure('terrain', () => shape(treePlots));
@@ -125,22 +133,23 @@ function rebuild(seed) {
   const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.shore(x) ? 1 : 0);
   const grass = (x, z) => {
     if (inside(x, z, pad, pad.w, pad.d) || yardPavingContains(x - woodPad.x, z - woodPad.z)
-      || banya.blocks(x, z) || banya.deck(x, z) > -Infinity || pier.deck(x, z) > -Infinity
+      || banya.blocks(x, z) || banya.deck(x, z) > -Infinity || pier.deck(x, z) > -Infinity || outhouseBlocks(outhouse, x, z, 0.25)
       || treePlots.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
     return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * paths.grass(x, z) * (1 - field.cover(x, z));
   };
   const meadow = perf.measure('meadow', () => makeMeadow(grass, MEADOW, GROUND,
     { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush,
-      exclude: paths.blocks }));
+      exclude: (x, z, radius) => paths.blocks(x, z, radius) || outhouseBlocks(outhouse, x, z, radius)
+        || onShedFloor(shed, x, z, radius + 0.1) }));
   yard = perf.measure('yard', () => new THREE.Group().add(meadow,
     perf.measure('fence', () => makeFence({ open: river.shore })),
     ...perf.measure('utilities', () => [buildGas(gas), buildPower(power)]),
     perf.measure('road', () => buildRoad(road)),
     perf.measure('land', () => buildLand(land)),
     ...perf.measure('river', () => [buildRiver(river, MEADOW), buildPier(pier)]),
-    banya.group, banya.dock, banya.powerLine,
+    banya.group, banya.dock, banya.powerLine, buildOuthouse(outhouse), buildShed(shed, seed),
     perf.measure('field', () => buildField(field)), perf.measure('paths', () => paths.build())));
-  layout = { at, gas, power, road, pier, pad, river, paths, banya, treePlots, forecourt };
+  layout = { at, gas, power, road, pier, pad, river, paths, banya, treePlots, forecourt, outhouse, shed };
   scene.add(house, yard);
   animated.length = 0;
   for (const group of [house, yard]) group.traverse(part => { if (part.tick) animated.push(part); });
@@ -158,13 +167,14 @@ function rebuild(seed) {
 // Камера на сфере вокруг точки над серединой дома: yaw — вокруг, pitch — вверх, dist — расстояние.
 const view = { yaw: 0.7, pitch: 0.24, dist: 21, target: new THREE.Vector3() };
 // Земля или настил мостков. Пешком за боковой и передний заборы не выйти, в реку тоже.
-const ground = (x, z) => Math.max(height(x, z), layout.pier.deck(x, z), layout.banya.deck(x, z));
-const groundNormal = (x, z, out) => Math.max(layout.pier.deck(x, z), layout.banya.deck(x, z)) >= height(x, z) ? out.set(0, 1, 0) : normal(x, z, out);
+const deck = (x, z) => Math.max(layout.pier.deck(x, z), layout.banya.deck(x, z), shedDeck(layout.shed, x, z));
+const ground = (x, z) => Math.max(height(x, z), deck(x, z));
+const groundNormal = (x, z, out) => deck(x, z) >= height(x, z) ? out.set(0, 1, 0) : normal(x, z, out);
 function walkable(x, z) {
-  const { pad, pier, river, banya } = layout;
+  const { pad, pier, river, banya, outhouse } = layout;
   if (Math.abs(x) > YARD.w / 2 - 0.4 || z > YARD.d / 2 - 0.4) return false;
   if (Math.abs(x - pad.x) < pad.w / 2 + 0.35 && Math.abs(z - pad.z) < pad.d / 2 + 0.35) return false;
-  if (banya.blocks(x, z)) return false;
+  if (banya.blocks(x, z) || outhouseBlocks(outhouse, x, z, 0.35) || shedBlocks(layout.shed, x, z, 0.35)) return false;
   return pier.deck(x, z) > -Infinity || banya.deck(x, z) > -Infinity || (z >= river.shore(x) && height(x, z) >= river.level(x));
 }
 const game = attachGame({ scene, camera, ground, groundNormal, walkable, createWoodyard, treePlots });

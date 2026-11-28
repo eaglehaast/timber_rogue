@@ -24,6 +24,7 @@ function stainedWood(map) {
 }
 const woodSide = stainedWood(LOG_MATERIAL.map), woodEnd = stainedWood(END_MATERIAL.map);
 const BORDER = { radius: 0.065, spacing: 0.105, sides: 8 };
+const rectangle = ({ x0, x1, z0, z1 }) => [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];
 
 // Гладкий шум от rnd: s — ячейка, h — шаг сетки.
 const noise = (rnd, h = 1.3) => {
@@ -31,13 +32,13 @@ const noise = (rnd, h = 1.3) => {
   return (s) => w(s / h, 7.3);
 };
 
-function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, bathWidth, pierWidth, pierEntrySurface) {
+function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, bathWidth, pierWidth, pierEntrySurface, outhouseWidth, shedWidth) {
   const lengths = [0];
   for (let i = 1; i < points.length; i++) {
     lengths.push(lengths[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].z - points[i - 1].z));
   }
   const total = lengths.at(-1);
-  const terminalHalf = { gate: 0.78, house: porchWidth / 2, utility: PAVING_ENTRY_HALF, bath: bathWidth / 2, pier: pierWidth / 2, 'pier-link': PATH.half }[destination];
+  const terminalHalf = { gate: 0.78, house: porchWidth / 2, utility: PAVING_ENTRY_HALF, bath: bathWidth / 2, pier: pierWidth / 2, 'pier-link': PATH.half, outhouse: outhouseWidth / 2, shed: shedWidth / 2 }[destination];
   const routeSeed = [...destination].reduce((sum, char) => sum + char.charCodeAt(0), seed);
   const edgeNoise = noise(generator(routeSeed + 160), 1.1);
   const smooth = (t) => t * t * (3 - 2 * t);
@@ -47,7 +48,7 @@ function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, b
     const tangent = new THREE.Vector2(after.x - before.x, after.z - before.z).normalize();
     const normal = new THREE.Vector2(-tangent.y, tangent.x);
     const distToEnd = total - lengths[i];
-    const startFlare = destination === 'gate' || destination.startsWith('pier') ? 0 : smooth(THREE.MathUtils.clamp(1 - lengths[i] / 1.3, 0, 1));
+    const startFlare = destination === 'gate' || destination.startsWith('pier') || destination === 'outhouse' || destination === 'shed' ? 0 : smooth(THREE.MathUtils.clamp(1 - lengths[i] / 1.3, 0, 1));
     const endFlare = smooth(THREE.MathUtils.clamp(1 - distToEnd / 1.8, 0, 1));
     const flare = Math.max(startFlare, endFlare);
     const half = THREE.MathUtils.lerp(PATH.half, terminalHalf, flare)
@@ -74,7 +75,7 @@ function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, b
 }
 
 // Бордюр идёт по общей внешней границе всех лент и площадки, а не вдоль внутренних швов.
-function border(paths, junction, pad, pavingOutline, forecourt, seed) {
+function border(paths, junction, pad, pavingOutline, forecourt, shedApron, seed) {
   const segments = (points) => points.slice(1).map((p, i) => [points[i], p]);
   const shapes = paths.flatMap(({ geometry }) => {
     const position = geometry.attributes.position, index = geometry.index, triangles = [];
@@ -101,10 +102,10 @@ function border(paths, junction, pad, pavingOutline, forecourt, seed) {
       && Math.abs(a.z - pad.z) <= PAVING_ENTRY_HALF + 1e-5 && Math.abs(b.z - pad.z) <= PAVING_ENTRY_HALF + 1e-5));
   shapes.push({ polygon: outline, edges: padEdges });
   if (forecourt) {
-    const { x0, x1, z0, z1 } = forecourt;
-    const polygon = [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];
+    const polygon = rectangle(forecourt);
     shapes.push({ polygon, edges: [[polygon[0], polygon[1]], [polygon[1], polygon[2]]] });
   }
+  if (shedApron) shapes.push({ polygon: rectangle(shedApron), edges: shedApron.edges });
   const covered = pavingContains(shapes);
   const posts = borderPoints(exposedPavingEdges(shapes), BORDER.spacing).filter(({ x, z }) =>
     ![[0.08, 0], [-0.08, 0], [0, 0.08], [0, -0.08]].every(([dx, dz]) => covered(x + dx, z + dz)));
@@ -152,18 +153,24 @@ function border(paths, junction, pad, pavingOutline, forecourt, seed) {
 }
 
 // Строить после shapeGround: единый ствол от ворот расходится к дому, бане и хозплощадке.
-export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, padApproach, pavingOrigin = pad, pavingOutline, bath, bathApproach, bathWidth, house, pier, pierApproach, pierWidth, pierEntrySurface, utilityPierStart, forecourt }) {
+export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, padApproach, pavingOrigin = pad, pavingOutline, bath, bathApproach, bathWidth, house, pier, pierApproach, pierWidth, pierEntrySurface, utilityPierStart, forecourt, outhouse, outhouseApproach, outhouseStart, outhouseWidth, shed, shedApproach, shedWidth, shedApron }) {
   if (pier && (!pierApproach || !utilityPierStart || !Number.isFinite(pierWidth) || !Number.isFinite(pierEntrySurface))) {
     throw new TypeError('Для тропы к причалу нужны подход, начало, ширина и высота стыка');
   }
   const surface = (x, z) => groundAt(x, z) + PATH.lift;
   const near = (x, z, p, r) => Math.hypot(x - p.x, z - p.z) < r;
-  const network = planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house, pier, pierApproach, utilityPierStart });
+  if (outhouse && (!outhouseApproach || !outhouseStart || !Number.isFinite(outhouseWidth))) {
+    throw new TypeError('Для тропы к туалету нужны подход, начало и ширина входа');
+  }
+  if (shed && (!shedApproach || !Number.isFinite(shedWidth) || !shedApron?.edges)) {
+    throw new TypeError('Для тропы к сараю нужны направление подхода, ширина устья и площадка перед фасадом');
+  }
+  const network = planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house, pier, pierApproach, utilityPierStart, outhouse, outhouseApproach, outhouseStart, shed, shedApproach });
   const paths = network.routes.map(({ points, destination }) => ({
     destination, points,
   }));
   const footprints = paths.flatMap(({ points, destination }) => {
-    const geometry = ribbon(points, destination, () => 0, pavingOrigin, seed, porchWidth, bathWidth, pierWidth, pierEntrySurface);
+    const geometry = ribbon(points, destination, () => 0, pavingOrigin, seed, porchWidth, bathWidth, pierWidth, pierEntrySurface, outhouseWidth, shedWidth);
     const pos = geometry.attributes.position, polygons = [];
     for (let i = 17; i < pos.count; i += 17) {
       const polygon = [i - 17, i - 1, i + 16, i].map((k) => ({ x: pos.getX(k), z: pos.getZ(k) }));
@@ -176,10 +183,7 @@ export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, p
     x: network.junction.x + 0.92 * Math.cos(i * Math.PI / 16),
     z: network.junction.z + 0.92 * Math.sin(i * Math.PI / 16),
   })) }, { polygon: pavingOutline });
-  if (forecourt) {
-    const { x0, x1, z0, z1 } = forecourt;
-    footprints.push({ polygon: [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }] });
-  }
+  for (const slab of [forecourt, shedApron]) if (slab) footprints.push({ polygon: rectangle(slab) });
   const intersects = pavingIntersects(footprints);
   // Растр протоптанного вокруг троп: в колее шагов (у оси) трава не растёт вовсе, у края — низкая.
   const all = paths.flatMap((p) => p.points);
@@ -218,15 +222,17 @@ export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, p
     // Трава: на самой тропе её нет, по рваному краю — режется шумом, между расходящимися тропами — остаётся.
     grass: (x, z) => {
       const d = at(x, z);
-      if (near(x, z, porch, 1.1) || near(x, z, pad, 0.9) || near(x, z, bath, 0.9)) return 1;
+      if (near(x, z, porch, 1.1) || near(x, z, pad, 0.9) || near(x, z, bath, 0.9)
+        || (shed && near(x, z, shed, 1.0))) return 1;
       return 1 - s(d, 0.55, 0.95) * (0.6 + 0.4 * wearNoise(x + z));
     },
     // Топтанье: высокая трава на тропе не растёт, у края — низкая (там, где d чуть меньше единицы, — куртины).
-    trodden: (x, z) => (near(x, z, porch, 1.0) || near(x, z, pad, 0.8) || near(x, z, bath, 0.8) ? 0 : s(at(x, z), 0.15, 0.8)),
+    trodden: (x, z) => (near(x, z, porch, 1.0) || near(x, z, pad, 0.8) || near(x, z, bath, 0.8)
+      || (shed && near(x, z, shed, 0.8)) ? 0 : s(at(x, z), 0.15, 0.8)),
     build() {
       const group = new THREE.Group();
       const ribbons = paths.map((path) => ({
-        ...path, geometry: ribbon(path.points, path.destination, surface, pavingOrigin, seed, porchWidth, bathWidth, pierWidth, pierEntrySurface),
+        ...path, geometry: ribbon(path.points, path.destination, surface, pavingOrigin, seed, porchWidth, bathWidth, pierWidth, pierEntrySurface, outhouseWidth, shedWidth),
       }));
       ribbons.forEach(({ geometry }) => {
         const mesh = new THREE.Mesh(geometry, stone);
@@ -246,8 +252,8 @@ export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, p
       }
       junction.geometry.computeVertexNormals();
       group.add(junction);
-      if (forecourt) {
-        const { x0, x1, z0, z1 } = forecourt;
+      // Прямоугольная плита мощения повторяет рельеф и лежит чуть выше лент, чтобы стык с ними не мерцал.
+      const slab = ({ x0, x1, z0, z1 }, name) => {
         const geometry = new THREE.PlaneGeometry(x1 - x0, z1 - z0,
           Math.ceil((x1 - x0) / 0.12), Math.ceil((z1 - z0) / 0.12)).rotateX(-Math.PI / 2);
         const pos = geometry.attributes.position, uv = geometry.attributes.uv;
@@ -258,11 +264,13 @@ export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, p
         }
         geometry.computeVertexNormals();
         const mesh = new THREE.Mesh(geometry, stone);
-        mesh.name = 'house-forecourt';
+        mesh.name = name;
         mesh.receiveShadow = true;
-        group.add(mesh);
-      }
-      group.add(...border(ribbons, network.junction, pad, pavingOutline, forecourt, seed));
+        return mesh;
+      };
+      if (forecourt) group.add(slab(forecourt, 'house-forecourt'));
+      if (shedApron) group.add(slab(shedApron, 'shed-apron'));
+      group.add(...border(ribbons, network.junction, pad, pavingOutline, forecourt, shedApron, seed));
       return group;
     },
   };

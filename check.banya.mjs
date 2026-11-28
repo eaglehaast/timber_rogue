@@ -34,6 +34,8 @@ const { planPaths } = await import('./src/paths.js');
 const { yardPavingOutline, yardPavingContains } = await import('./src/campfire.js');
 const { buildRailSegments } = await import('./src/porch.js');
 const { planPier, buildPier } = await import('./src/pier.js');
+const { planOuthouse, buildOuthouse, outhouseBlocks } = await import('./src/outhouse.js');
+const { planShed, buildShed, shedBlocks, shedDeck, onShedFloor } = await import('./src/shed.js');
 
 assert.equal(planHouse(73, { doorWall: 'right' }).openings.find(({ kind }) => kind === 'door').wall, 'right');
 
@@ -51,8 +53,48 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const side = -door, front = 1.5 + rnd();
   const atHouse = { x: GATES.at - door * (house.w / 2 + 5), z: 12.5 - front - house.d / 2 };
   const river = planRiver({ seed, back: -12.5 });
+  const outhouse = planOuthouse({ seed, yardWidth: 40, street: 12.5, river });
+  assert.ok(12.5 - (outhouse.z + outhouse.pad.d / 2) >= 10);
+  for (const x of [outhouse.x - outhouse.pad.w / 2, outhouse.x, outhouse.x + outhouse.pad.w / 2]) {
+    assert.ok(outhouse.z - outhouse.pad.d / 2 - river.shore(x) >= 10);
+  }
+  assert.ok(outhouse.x + outhouse.pad.w / 2 < 20 && outhouse.x > 15);
+  assert.ok(outhouseBlocks(outhouse, outhouse.x, outhouse.z, 0.35));
+  assert.ok(!outhouseBlocks(outhouse, outhouse.approach.x - 0.5, outhouse.z, 0.35));
   const site = planBanya(seed, river, side);
-  shapeGround(seed, [site.pad, { ...atHouse, w: house.w + 1, d: house.d + 1 }], 40, 25, { dug: river.dug, calm: river.calm, rows: river.rows });
+  const shed = planShed(40);
+  shapeGround(seed, [site.pad, outhouse.pad, shed, { ...atHouse, w: house.w + 1, d: house.d + 1 }], 40, 25, { dug: river.dug, calm: river.calm, rows: river.rows });
+  const barn = buildShed(shed, seed);
+  const bounds = new THREE.Box3().setFromObject(barn), size = bounds.getSize(new THREE.Vector3());
+  assert.ok(size.y < 2.7 && size.z > 2 * size.y && bounds.min.x > -19.5, 'низкий вытянутый сарай не упирается свесом в забор');
+  for (const x of [bounds.min.x, bounds.max.x]) assert.ok(bounds.min.z > river.brow(x) + 1);
+  const bayZ = shed.z + 1.65;
+  for (let x = bounds.max.x + 0.5; x > shed.x; x -= 0.1) assert.ok(!shedBlocks(shed, x, bayZ, 0.35), 'под навес можно войти со двора');
+  assert.ok(shedBlocks(shed, shed.x - 0.8, bayZ, 0.35) && shedBlocks(shed, shed.x, shed.z, 0.35),
+    'закрытая часть и штабель досок не пропускают игрока');
+  const bayRay = new THREE.Raycaster(new THREE.Vector3(shed.x + 0.3, barn.position.y + 1.7, bayZ), new THREE.Vector3(0, -1, 0));
+  assert.ok(Math.abs(bayRay.intersectObject(barn)[0].point.y - shedDeck(shed, shed.x + 0.3, bayZ)) < 1e-5,
+    'в открытом пролёте игрок стоит на видимой доске');
+  const hut = buildOuthouse(outhouse);
+  assert.ok(hut.getObjectByName('outhouse-closed-door'));
+  assert.ok(hut.getObjectByName('outhouse-transom'));
+  const hutDoorBounds = new THREE.Box3().setFromObject(hut.getObjectByName('outhouse-closed-door'));
+  assert.ok(hutDoorBounds.max.y - hutDoorBounds.min.y > 1.8);
+  assert.ok(hutDoorBounds.max.z - hutDoorBounds.min.z < 0.85);
+  hut.updateMatrixWorld(true);
+  const frontRay = new THREE.Raycaster(new THREE.Vector3(outhouse.x - 3, height(outhouse.x, outhouse.z) + 1, outhouse.z),
+    new THREE.Vector3(1, 0, 0));
+  assert.ok(frontRay.intersectObject(hut.getObjectByName('outhouse-closed-door'), true).length,
+    'closed door covers the entrance');
+  const windowRay = new THREE.Raycaster(new THREE.Vector3(outhouse.x - 3,
+    height(outhouse.x, outhouse.z) + 2.18, outhouse.z), new THREE.Vector3(1, 0, 0));
+  const glass = hut.getObjectByName('outhouse-window-glass');
+  assert.ok(glass.material.transparent && windowRay.intersectObject(glass).length,
+    'small glazed window is above the door');
+  const sill = hut.getObjectByName('outhouse-threshold');
+  const sillRay = new THREE.Raycaster(new THREE.Vector3(outhouse.x - 3,
+    height(outhouse.x, outhouse.z) + 0.04, outhouse.z), new THREE.Vector3(1, 0, 0));
+  assert.ok(sillRay.intersectObject(sill, true).length, 'threshold closes the gap beneath the door');
   atHouse.y = height(atHouse.x, atHouse.z);
   const gas = planGas(house, atHouse, { fence: 12.5, gate: GATES.at });
   const power = planPower(house, atHouse, gas, { fence: 12.5, keep: [WICKET, GATES] });
@@ -362,9 +404,38 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
       pierWidth: pier.width, pierEntrySurface: pier.entrySurface,
       utilityPierStart: { x: pavingOrigin.x, z: pavingOrigin.z - 5.4 },
     } : {}),
+    shed: shed.approach, shedApproach: shed.approachGuide, shedWidth: shed.approachWidth, shedApron: shed.apron,
     house: { ...atHouse, w: house.w + 1, d: house.d + 1 },
   });
   const paths = pathPlan.build();
+  const shedRoute = pathPlan.paths.find(({ destination }) => destination === 'shed');
+  const bathRoute = pathPlan.paths.find(({ destination }) => destination === 'bath');
+  assert.ok(bathRoute.points.some((p) => Math.hypot(p.x - shedRoute.points[0].x, p.z - shedRoute.points[0].z) < 1e-8),
+    `тропа к сараю стыкуется с тропой к бане: seed ${seed}`);
+  const shedEntry = shedRoute.points.at(-1);
+  assert.ok(Math.hypot(shedEntry.x - shed.approach.x, shedEntry.z - shed.approach.z) < 1e-8);
+  const shedIntrusions = shedRoute.points.filter((p) => onShedFloor(shed, p.x, p.z));
+  assert.ok(!shedIntrusions.length, `тропа не проходит сквозь сарай: seed ${seed}: ${JSON.stringify(shedIntrusions.slice(-5))}`);
+  assert.ok(!shedBlocks(shed, shedEntry.x, shedEntry.z, 0.35), `устье тропы у сарая свободно: seed ${seed}`);
+  const shedRouteIndex = pathPlan.paths.indexOf(shedRoute);
+  const shedVertices = paths.children[shedRouteIndex].geometry.attributes.position;
+  const shedEnd = shedVertices.count - 17;
+  assert.ok(Math.abs(Math.hypot(shedVertices.getX(shedEnd) - shedVertices.getX(shedEnd + 16),
+    shedVertices.getZ(shedEnd) - shedVertices.getZ(shedEnd + 16)) - shed.approachWidth) < 1e-5,
+  `тропа расширяется у площадки сарая: seed ${seed}`);
+  assert.ok(shed.apron.x1 - shed.wall >= (shed.gate.z1 - shed.gate.z0) / 2, 'створки ворот распахиваются над площадкой');
+  const stone = paths.children[0].material, down = new THREE.Vector3(0, -1, 0);
+  for (const [opening, { z0, z1 }] of [['ворота', shed.gate], ['открытый пролёт', shed.bay]]) {
+    for (let z = z0; z <= z1; z += 0.05) for (const x of [shed.wall + 0.02, shed.wall + 1.1]) {
+      const hit = new THREE.Raycaster(new THREE.Vector3(x, 50, z), down).intersectObject(paths, true)[0];
+      assert.ok(hit?.object.material === stone, `перед фасадом сарая (${opening}) лежит мощение: seed ${seed}, ${x}, ${z}`);
+    }
+  }
+  const shedPosts = paths.getObjectByName('path-border-sides').geometry.attributes.position;
+  for (let i = 0; i < shedPosts.count; i++) {
+    assert.ok(!onShedFloor(shed, shedPosts.getX(i), shedPosts.getZ(i)),
+      `бордюр не заходит в сарай: seed ${seed}, ${shedPosts.getX(i)}, ${shedPosts.getZ(i)}`);
+  }
   assert.ok(pier.start.x > 0 && Math.abs(entry.x) + pier.width / 2 < 20,
     'причал внутри участка у противоположного забора');
   assert.ok(Math.abs(pier.top - groundAt(pier.start.x, pier.start.y)) < 0.2,

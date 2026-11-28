@@ -45,7 +45,7 @@ export function curvedRoute(anchors, spacing = ROUTE_SPACING) {
   return curve.getSpacedPoints(count).map(({ x, z }) => ({ x, z }));
 }
 
-export function planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house, pier, pierApproach, utilityPierStart }) {
+export function planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house, pier, pierApproach, utilityPierStart, outhouse, outhouseApproach, outhouseStart, shed, shedApproach }) {
   const lerp = (a, b, t) => a + (b - a) * t;
   const targetX = (porch.x + pad.x + bath.x) / 3;
   const junction = { x: lerp(gate.x, targetX, 0.26), z: gate.z - 4.4 };
@@ -77,6 +77,16 @@ export function planPathNetwork({ gate, porch, porchApproach, pad, padApproach, 
       { destination: 'pier', points: curvedRoute([utilityPierStart, midpoint(utilityPierStart, pierApproach, 0.25), pierApproach, pier]) },
       { destination: 'pier-link', points: curvedRoute([approach.bath, midpoint(approach.bath, pierApproach, 0.35), pierApproach]) },
     );
+  }
+  if (outhouse) {
+    routes.push({ destination: 'outhouse', points: curvedRoute([outhouseStart, outhouseApproach, outhouse]) });
+  }
+  if (shed) {
+    const bathRoute = routes.find(({ destination }) => destination === 'bath');
+    // Ветвь к сараю точно стыкуется с дорожкой бани, рядом с которой она отходит.
+    const shedStart = bathRoute.points.reduce((nearest, point) =>
+      Math.hypot(point.x + 2, point.z + 6) < Math.hypot(nearest.x + 2, nearest.z + 6) ? point : nearest);
+    routes.push({ destination: 'shed', points: curvedRoute([shedStart, shedApproach, shed]) });
   }
   return {
     junction,
