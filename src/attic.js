@@ -99,7 +99,7 @@ export class Planks {
 
   // Доска по многоугольнику poly в плоскости frame = { o, X, Y } (точка a, b — это o + a·X + b·Y), лицом к n.
   // along — направление волокон в этой плоскости, width — ширина доски поперёк него, rnd — случайность раскладки.
-  add(poly, { o, X, Y }, n, along, width, rnd) {
+  add(poly, { o, X, Y }, n, along, width, rnd, thick = this.thick) {
     const kind = this.kinds[Math.floor(rnd() * KINDS)], shift = rnd(), row = Math.floor(rnd() * ENDS);
     const s = ([a, b]) => a * along[0] + b * along[1];             // вдоль волокон
     const t = ([a, b]) => b * along[0] - a * along[1];             // поперёк
@@ -107,7 +107,7 @@ export class Planks {
     const at = ([a, b], h) => o.clone().addScaledVector(X, a).addScaledVector(Y, b).addScaledVector(n, h);
     const grain = (p) => [(t(p) - t0) / width, s(p) / BOARD_SPAN + shift];
     // Лицо и тыл — веером от первой вершины.
-    const T = this.thick;
+    const T = thick;
     for (const [h, side] of [[T, 1], [0, -1]]) {
       for (let i = 1; i + 1 < poly.length; i++) {
         triangle(kind.face, [poly[0], poly[i], poly[i + 1]].map((p) => [at(p, h), grain(p)]), n.clone().multiplyScalar(side));

@@ -205,6 +205,17 @@ const fitted = fitTreePlots([{ x: paths.junction.x, z: paths.junction.z, r: 0.3 
   paths.blocks, (x, z) => Math.abs(x) > 19 || Math.abs(z) > 12);
 assert.ok(!paths.blocks(fitted[0].x, fitted[0].z, 1.1), 'tree roots must clear the paving and border');
 assert.deepEqual(fitted[1], { x: -18, z: -10, r: 0.1 }, 'trees clear of paths stay in place');
+const outhouse = { x: 17.5, z: -5 }, outhouseApproach = { x: 15.8, z: -5 };
+const outhousePaths = planPaths({ ...yards[0], seed: 71, pavingOrigin, pavingOutline,
+  outhouse, outhouseApproach, outhouseStart: { x: pavingOrigin.x, z: pavingOrigin.z - 5.4 }, outhouseWidth: 0.78 });
+const outhouseRoute = outhousePaths.paths.find(({ destination }) => destination === 'outhouse');
+nearPoint(outhouseRoute.points.at(-1), outhouse);
+assert.ok(outhousePaths.blocks(outhouse.x, outhouse.z), 'the new path excludes vegetation at its entrance');
+const outhouseParts = outhousePaths.build().children;
+const outhouseIndex = outhousePaths.paths.indexOf(outhouseRoute);
+const entryPos = outhouseParts[outhouseIndex].geometry.attributes.position, last = entryPos.count - 17;
+assert.ok(Math.abs(Math.hypot(entryPos.getX(last) - entryPos.getX(last + 16),
+  entryPos.getZ(last) - entryPos.getZ(last + 16)) - 0.78) < 1e-5, 'path meets the full door width');
 const random = Math.random;
 Math.random = () => 0.5;
 const tuftAtlas = { material: null, cols: 1, rows: 1, aspect: 1, heights: [[1, 1]], rank: [0], turning: false };
