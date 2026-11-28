@@ -352,3 +352,35 @@ function log(parts, wall, y, from, to, { r, butt, reach, sag: depth, wobble, u, 
     }
   }
 }
+
+export function buildLogSegment(from, to, { radius = R, materials = logMaterials(), seed = 1 } = {}) {
+  const axis = to.clone().sub(from), length = axis.length();
+  if (length < 0.1) throw new RangeError('Бревно должно быть длиннее 10 см.');
+  axis.normalize();
+  const rnd = generator(seed), parts = { pos: [], normal: [], uv: [], side: [], end: [] };
+  log(parts, { along: 'x', at: 0 }, 1, 0, length,
+    { r: radius, butt: 1, reach: length, sag: 0.005, wobble: rnd() * 100, u: rnd() * 10, v: rnd() * 10 }, rnd);
+  const geometry = new THREE.BufferGeometry();
+  const rotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), axis);
+  const positions = [];
+  for (let i = 0; i < parts.pos.length; i += 3) {
+    const point = new THREE.Vector3(parts.pos[i], parts.pos[i + 1] - 1, parts.pos[i + 2])
+      .applyQuaternion(rotation).add(from);
+    positions.push(point.x, point.y, point.z);
+  }
+  const normals = [];
+  for (let i = 0; i < parts.normal.length; i += 3) {
+    const normal = new THREE.Vector3(parts.normal[i], parts.normal[i + 1], parts.normal[i + 2]).applyQuaternion(rotation);
+    normals.push(normal.x, normal.y, normal.z);
+  }
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(parts.uv, 2));
+  geometry.setIndex([...parts.side, ...parts.end]);
+  geometry.addGroup(0, parts.side.length, 0);
+  geometry.addGroup(parts.side.length, parts.end.length, 1);
+  const mesh = new THREE.Mesh(geometry, materials);
+  mesh.userData.logSegment = { from: from.toArray(), to: to.toArray(), radius };
+  mesh.castShadow = mesh.receiveShadow = true;
+  return mesh;
+}

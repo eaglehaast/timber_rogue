@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { planHouse, buildHouse, R, COURSE, PLINTH, logMaterials } from './house.js';
+import { planHouse, buildHouse, buildLogSegment, R, COURSE, PLINTH, logMaterials } from './house.js';
 import { PANE, LINING } from './window.js';
 import { buildDoor, buildRailSegments } from './porch.js';
 import { Planks, boardMaterials, TONES, buildRoofExtension } from './attic.js';
@@ -64,8 +64,8 @@ export function buildBanya(site, river, power, house) {
   const roofEndZ = riverEnd - 0.35, roofStartZ = -roofShape.zEnd;
   const roofExtension = buildRoofExtension(plan, roofShape, roofEndZ);
   const rafters = buildBanyaRafters(roofShape, roofStartZ, roofEndZ, rnd);
-  const supportZ = riverEnd + 0.25, roofSupportX = W / 2 - 0.1;
-  const roofSupports = buildRoofSupports(supportZ, roofStartZ + 0.2, roofSupportX, top, roofShape);
+  const supportZ = riverEnd, roofSupportX = W / 2 - 0.1;
+  const roofSupports = buildRoofSupports(supportZ, roofStartZ + 0.2, roofSupportX, top, roofShape, seed + 211);
   roofSupports.userData.roofEndZ = roofEndZ;
   const beamRadius = R * 1.08;
   const eaveY = roofShape.ridge - roofSupportX * Math.tan(roofShape.pitch)
@@ -129,10 +129,15 @@ export function buildBanya(site, river, power, house) {
       normal, postAt,
     });
   };
-  rail(-W / 2, 0, -W / 2, length, new THREE.Vector3(-1, 0, 0));
+  rail(-roofSupportX, 0, -roofSupportX, length, new THREE.Vector3(-1, 0, 0));
+  railSegments.at(-1).structuralPosts = [{ distance: length, radius: beamRadius }];
   const stairRailX = x1 - 0.055, stairRailStart = sideBack - 0.055, stairRailEnd = sideBack + stairRun - 0.055;
   rail(stairRailX, length, stairRailX, front - stairRailStart, new THREE.Vector3(1, 0, 0), 0.8, true);
-  rail(-W / 2, length, stairRailX, length, new THREE.Vector3(0, 0, -1), 0.8, true);
+  rail(-roofSupportX, length, stairRailX, length, new THREE.Vector3(0, 0, -1), 0.8, true);
+  railSegments.at(-1).structuralPosts = [
+    { distance: 0, radius: beamRadius },
+    { distance: 2 * roofSupportX, radius: beamRadius },
+  ];
   railSegments.push({
     from: new THREE.Vector3(stairRailX, top, stairRailStart),
     to: new THREE.Vector3(stairRailX, top - treads * rise, stairRailEnd),
@@ -146,6 +151,7 @@ export function buildBanya(site, river, power, house) {
   const railing = buildRailSegments(seed + 211, railSegments);
   railing.name = 'banya-dock-rails';
   railing.userData.stairRailSides = ['outer'];
+  railing.userData.structuralPosts = [-roofSupportX, roofSupportX].map((postX) => ({ x: postX, z: supportZ }));
   const stairPlan = { x: stairX, innerX: x0, outerX: x1, z: sideBack, run: stairRun, treads, rise, footY };
   const benchPlan = { x: -1.1, z: front - 0.78, width: 1.2, depth: 0.44, floorY: top, seatY: top + 0.47 };
   const bench = buildBanyaBench(benchPlan, rnd);
@@ -332,17 +338,11 @@ function buildBanyaRafters(shape, startZ, endZ, rnd) {
   return group;
 }
 
-function buildRoofSupports(z, startZ, x, floor, shape) {
+function buildRoofSupports(z, startZ, x, floor, shape, seed) {
   const group = new THREE.Group(), radius = R * 1.08, roofClearance = ROOF_SUPPORT_CLEARANCE;
-  const timberMaterial = BANYA_LOGS[0];
   const beam = (a, b) => {
-    const direction = b.clone().sub(a), length = direction.length();
-    const geometry = new THREE.CylinderGeometry(radius, radius, length, 12);
-    const mesh = new THREE.Mesh(geometry, timberMaterial);
-    mesh.position.copy(a).add(b).multiplyScalar(0.5);
-    mesh.quaternion.setFromUnitVectors(UP, direction.normalize());
+    const mesh = buildLogSegment(a, b, { radius, materials: BANYA_LOGS, seed: seed + group.children.length });
     mesh.name = 'banya-roof-longitudinal-beam';
-    mesh.castShadow = mesh.receiveShadow = true;
     group.add(mesh);
   };
   for (const side of [-1, 1]) {
@@ -351,14 +351,10 @@ function buildRoofSupports(z, startZ, x, floor, shape) {
     const normalGap = radius + ROOF_BOARD_THICKNESS + roofClearance;
     const eave = roofY - normalGap / Math.cos(shape.pitch);
     beam(new THREE.Vector3(at, eave, startZ), new THREE.Vector3(at, eave, z));
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.84, radius * 0.84, eave - radius - floor, 12), timberMaterial);
-    post.position.set(at, (eave - radius + floor) / 2, z);
+    const post = buildLogSegment(new THREE.Vector3(at, floor, z), new THREE.Vector3(at, eave - radius, z),
+      { radius, materials: BANYA_LOGS, seed: seed + 100 + side });
     post.name = 'banya-roof-post';
-    post.castShadow = post.receiveShadow = true;
     group.add(post);
-    const baseBlock = new Planks(boardMaterials(TONES.gable), 0.018);
-    addTimber(baseBlock, new THREE.Vector3(at, floor, z), new THREE.Vector3(at, floor + 0.08, z), radius * 2.2, generator(211 + side));
-    group.add(...baseBlock.meshes());
   }
   group.userData.crossbeam = eaveYFor(shape, x, radius, roofClearance) - radius - floor >= 2.4;
   if (group.userData.crossbeam) {

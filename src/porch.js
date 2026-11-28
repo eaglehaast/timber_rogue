@@ -283,7 +283,7 @@ export function buildRailSegments(seed, segments) {
   const rails = new Planks(boardMaterials(WOOD, { color: paint }), RAIL.size), balusters = new Faces(), posts = new Faces();
   const [u0, v0, u1, v1] = cell('baluster', Math.floor(rnd() * KIT.baluster.count));
   const uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]], newel = Math.floor(rnd() * KIT.newel.count);
-  for (const { from, to, normal, postAt = [0], spacing = BALUSTER, floorAt } of segments) {
+  for (const { from, to, normal, postAt = [0], spacing = BALUSTER, floorAt, structuralPosts = [] } of segments) {
     const axis = new THREE.Vector3(to.x - from.x, 0, to.z - from.z);
     const length = axis.length();
     if (length < 0.05) continue;
@@ -292,7 +292,10 @@ export function buildRailSegments(seed, segments) {
     const rise = to.y - from.y, railTop = RAIL.height;
     rails.add([[0, railTop], [length, railTop + rise], [length, railTop - RAIL.size + rise], [0, railTop - RAIL.size]],
       frame, outward, [1, 0], RAIL.size, rnd);
+    const overlapsSupport = (distance, margin = POST) => structuralPosts.some((support) =>
+      Math.abs(support.distance - distance) < (support.radius ?? 0) + margin);
     for (const distance of postAt) {
+      if (overlapsSupport(distance)) continue;
       const t = THREE.MathUtils.clamp(distance / length, 0, 1), base = from.clone().lerp(to, t);
       newelPost(posts, newel, base, axis, outward, RAIL.height + 0.12);
     }
@@ -301,6 +304,7 @@ export function buildRailSegments(seed, segments) {
       const t = distance / length, base = from.clone().lerp(to, t), top = base.y + RAIL.height - RAIL.size;
       if (floorAt) base.y = floorAt(distance);
       const half = (top - base.y) / 8;
+      if (overlapsSupport(distance, half)) continue;
       const along = (offset, y) => base.clone().addScaledVector(axis, offset).setY(y).toArray();
       const across = (offset, y) => base.clone().addScaledVector(outward, offset).setY(y).toArray();
       balusters.face([along(-half, base.y), along(half, base.y), along(half, top), along(-half, top)], outward.toArray(), uv);
