@@ -253,7 +253,7 @@ export function buildDoor(seed, door, wall, { base, face }) {
     leaves.mesh(new THREE.MeshLambertMaterial({ map: atlas('door'), color: repaint('door', DOOR_PAINTS[Math.floor(rnd() * DOOR_PAINTS.length)]) })));
 }
 
-// Столб перил: брус POST × POST от земли до height, грани — картинка столба index (набор house-newel.webp — тело
+// Столб перил: брус POST × POST от base до base.y + height, грани — картинка столба index (набор house-newel.webp — тело
 // столба с шапкой, без свеса шапки). Низ и шапка картинки — в своём масштабе (по ширине столба), середина тянется
 // по высоте. s, n — оси столба вдоль стены и от неё, base — середина низа.
 const NEWEL = { foot: 0.05, cap: 0.16 }; // доли высоты картинки: низ и шапка, которые не тянутся
@@ -263,7 +263,7 @@ function newelPost(faces, index, base, s, n, height) {
   const v = (f) => v0 + f * (v1 - v0);
   // Пояса по высоте: [низ, верх, доля картинки снизу, доля сверху].
   const bands = [[0, foot, 0, NEWEL.foot], [foot, height - cap, NEWEL.foot, 1 - NEWEL.cap], [height - cap, height, 1 - NEWEL.cap, 1]];
-  const h = POST / 2, corner = (i, j, y) => base.clone().addScaledVector(s, i * h).addScaledVector(n, j * h).setY(y).toArray();
+  const h = POST / 2, corner = (i, j, y) => base.clone().addScaledVector(s, i * h).addScaledVector(n, j * h).setY(base.y + y).toArray();
   // Четыре грани: [угол слева, угол справа, наружу] для того, кто смотрит на грань снаружи.
   const sides = [[[-1, 1], [1, 1], n], [[1, 1], [1, -1], s], [[1, -1], [-1, -1], n.clone().negate()], [[-1, -1], [-1, 1], s.clone().negate()]];
   for (const [[ai, aj], [bi, bj], out] of sides) {
@@ -283,7 +283,7 @@ export function buildRailSegments(seed, segments) {
   const rails = new Planks(boardMaterials(WOOD, { color: paint }), RAIL.size), balusters = new Faces(), posts = new Faces();
   const [u0, v0, u1, v1] = cell('baluster', Math.floor(rnd() * KIT.baluster.count));
   const uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]], newel = Math.floor(rnd() * KIT.newel.count);
-  for (const { from, to, normal, postAt = [0], spacing = BALUSTER } of segments) {
+  for (const { from, to, normal, postAt = [0], spacing = BALUSTER, floorAt } of segments) {
     const axis = new THREE.Vector3(to.x - from.x, 0, to.z - from.z);
     const length = axis.length();
     if (length < 0.05) continue;
@@ -297,8 +297,10 @@ export function buildRailSegments(seed, segments) {
       newelPost(posts, newel, base, axis, outward, RAIL.height + 0.12);
     }
     for (let distance = spacing; distance < length - POST; distance += spacing) {
+      if (postAt.some((post) => Math.abs(post - distance) < POST)) continue;
       const t = distance / length, base = from.clone().lerp(to, t), top = base.y + RAIL.height - RAIL.size;
-      const half = (RAIL.height - RAIL.size) / 8;
+      if (floorAt) base.y = floorAt(distance);
+      const half = (top - base.y) / 8;
       const along = (offset, y) => base.clone().addScaledVector(axis, offset).setY(y).toArray();
       const across = (offset, y) => base.clone().addScaledVector(outward, offset).setY(y).toArray();
       balusters.face([along(-half, base.y), along(half, base.y), along(half, top), along(-half, top)], outward.toArray(), uv);
