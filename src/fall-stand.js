@@ -170,6 +170,7 @@ export async function startFallStand() {
   orbit(0);
   await renderer.compileAsync(scene, camera);
   stand.hidden = false;
+  window.stand = { renderer, scene, camera, game, study };
   function frame(now) {
     if (canvas.clientWidth !== width || canvas.clientHeight !== height) resize();
     const elapsed = last ? now - last : 16.67;

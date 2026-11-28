@@ -20,7 +20,7 @@ import { Limb, Kerf, combine } from './limbs.js';
 import { Body, World, Grip, rayHit } from './bodies.js';
 import { dressBark, dressLimbs } from './bark.js';
 import { watch, note, beat, pauseWatch, tell } from './watch.js';
-import { seed, random } from './random.js';
+import { seed, random, generator } from './random.js';
 import { wind, gust } from './wind.js';
 import { classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './wood-handling.js';
 import { advanceLadderClimb, buildLadder, findLadderPlacement, LADDER_ATTACH_HEIGHT, ladderClimbPosition } from './ladder.js';
@@ -31,7 +31,26 @@ let woodyard = null;
 let spawnPoint = null;
 
 // Три клёна за домом. r — радиус ствола выше корневых наплывов.
-export const MAPLES = [{ r: 0.1, x: -15, z: -3 }, { r: 0.3, x: 0, z: -3 }, { r: 0.2, x: 15, z: -3 }];
+// ?maples=N — N клёнов рядами за домом (для замеров участка, где их 30–40): первые три — те же.
+export const MAPLES = maplePlots(new URLSearchParams(location.search).get('maples'));
+function maplePlots(count) {
+  const three = [{ r: 0.1, x: -15, z: -3 }, { r: 0.3, x: 0, z: -3 }, { r: 0.2, x: 15, z: -3 }];
+  if (count === null) return three;
+  const n = Number(count);
+  if (!Number.isInteger(n) || n < 1 || n > 60) throw new Error(`?maples= ждёт целое от 1 до 60, пришло «${count}»`);
+  const rnd = generator(4021), plots = [...three];
+  // Ряды через 3 м между дорожкой у дома (z ≈ 0) и рекой (z ≈ −9), в рядах через 3,4 м, со сдвигом.
+  for (const z of [-3, -6, -9, 0]) {
+    for (let x = -16.5; x <= 16.5 && plots.length < n; x += 3.4) {
+      const at = { r: 0.1 + 0.2 * rnd(), x: x + (rnd() - 0.5) * 1.2, z: z + (rnd() - 0.5) * 1.2 };
+      if (plots.every((p) => Math.hypot(p.x - at.x, p.z - at.z) > 2.4)) plots.push(at);
+    }
+  }
+  if (plots.length < n) throw new Error(`?maples=${n}: поместилось только ${plots.length}`);
+  return plots.slice(0, n);
+}
+// Сколько стоят клёны: заполнение кубиков, сетка ствола, рост кроны (мс) — для стенда и замеров.
+export const mapleCost = { fill: 0, remesh: 0, grow: 0, trees: 0 };
 let plots = MAPLES, fallStand, fallLeaves;
 const TREE_H = 12;
 const BODY_RADIUS = 0.35;
@@ -256,9 +275,16 @@ function newRound(slot, treeSeed, artistic) {
   const { r, x, z } = plots[slot];
 
   seed(treeSeed);
+  const t0 = performance.now();
   const voxels = new TrunkVoxels(trunkShape(r, ZONE_H, random() * Math.PI * 2), ZONE_H, [dressBark(), dressWood()]);
+  const t1 = performance.now();
   voxels.remesh();
+  const t2 = performance.now();
   const tree = growTree(voxels, artistic);
+  mapleCost.fill += t1 - t0;
+  mapleCost.remesh += t2 - t1;
+  mapleCost.grow += performance.now() - t2;
+  mapleCost.trees++;
 
   const root = new THREE.Group();
   root.name = 'maple';
@@ -2635,5 +2661,24 @@ export function attachGame({ scene: yard, camera: eyes, ground: floor, groundNor
   // Точка появления игрока при входе в «Игру»: у ворот, с внутренней стороны (house-view.js привязывает её
   // к фактическим воротам забора). yaw = Math.PI — лицом во двор (спиной к улице), чтобы сразу идти вперёд.
   const spawn = () => spawnPoint ?? { x: MAPLES[1].x, z: MAPLES[1].z + 4, yaw: 0 };
-  return { get active() { return playing; }, setSpawn: (p) => { spawnPoint = p; }, spawn, placeWoodyard: woodyard?.placeByGate, regrow, canStand, enter, leave, tick, look, touchWalk };
+  return { get active() { return playing; }, setSpawn: (p) => { spawnPoint = p; }, spawn, placeWoodyard: woodyard?.placeByGate, regrow, canStand, enter, leave, tick, look, touchWalk, cost };
+}
+
+// Что занимают клёны: байты массивов кубиков и геометрии (позиции, нормали, индексы…) под деревьями.
+function cost() {
+  const arrays = (o) => Object.values(o).reduce((n, v) => n + (ArrayBuffer.isView(v) ? v.byteLength : 0), 0);
+  let voxels = 0, geometry = 0, meshes = 0;
+  const seen = new Set();
+  for (const tree of trees) {
+    voxels += arrays(tree.voxels);
+    tree.root.traverse((o) => {
+      if (!o.isMesh || !o.geometry) return;
+      meshes++;
+      if (seen.has(o.geometry)) return;
+      seen.add(o.geometry);
+      for (const a of Object.values(o.geometry.attributes)) geometry += a.array.byteLength;
+      geometry += o.geometry.index?.array.byteLength ?? 0;
+    });
+  }
+  return { ...mapleCost, voxels, geometry, meshes };
 }
