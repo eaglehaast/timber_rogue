@@ -4,7 +4,7 @@ import { random } from './random.js';
 
 // Низ ствола — сетка кубиков-вокселей: древесина есть или выпилена.
 // Пила вырезает из неё настоящую щель, по оставшимся кубикам считается, держит ли недопил.
-export const VOXEL = 0.01;
+export const VOXEL = 0.02;
 const CHUNK = 10; // слоёв в одном куске сетки; при пилении перестраиваются только задетые куски
 const SMOOTH = 3 * VOXEL; // м — с такой округи кубиков берём, куда смотрит поверхность у твёрдого тела
 
@@ -332,6 +332,9 @@ export class PlainTrunk extends TrunkGrid {
   at(i, j, k) { return this.wood(i, j, k) ? 1 : 0; }
 
   under(p) { return p.y < this.height && this.shape.contains(p.x, p.y, p.z); }
+
+  // Древесина в точке: ствол не пилен, поэтому то же, что under.
+  solid(p) { return p.y >= 0 && this.under(p); }
 
   // Объём древесины и её центр: mask — только этих стволов (0 — всех). Ствол целый, поэтому только от земли.
   measure(mask = 0, from = 0) {

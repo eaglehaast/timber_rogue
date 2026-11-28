@@ -14,6 +14,7 @@ globalThis.matchMedia = () => ({ matches: true });
 Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'node', maxTouchPoints: 0 }, configurable: true });
 const { createWinch, findWinchTarget, WINCH_MAX, WINCH_STEP } = await import('./src/winch.js');
 const { leaning } = await import('./src/physics.js');
+const { VOXEL } = await import('./src/trunk.js');
 
 const scene = new THREE.Scene();
 const root = new THREE.Group();
@@ -79,7 +80,7 @@ assert.equal(winch.directionFrom(root.position).x, -1);
 const group = new THREE.Group();
 scene.add(group);
 const voxels = {
-  group, lift: group, x0: -0.05, z0: -0.05, n: 10, m: 10, ny: 300, cutHigh: -1,
+  group, lift: group, x0: -0.05, z0: -0.05, n: 0.1 / VOXEL, m: 0.1 / VOXEL, ny: 3 / VOXEL, cutHigh: -1,
   at: () => 1,
 };
 const standing = { standing: 1, voxels };
@@ -91,7 +92,7 @@ assert.ok(Math.abs(target.point.y - 1.7) < 1e-6);
 assert.ok(Math.abs(target.point.z - 0.05) < 1e-6, 'точка крепления лежит на пересечении луча со стволом');
 assert.equal(findWinchTarget([standing], eye, new THREE.Vector3(1, 0, 0)), null, 'мимо ствола привязать нельзя');
 assert.equal(findWinchTarget([{ ...standing, standing: 0 }], eye, look), null, 'к спиленному дереву привязать нельзя');
-voxels.cutHigh = 180;
+voxels.cutHigh = 1.8 / VOXEL;
 assert.equal(findWinchTarget([standing], eye, look), null, 'ниже пропила трос не привязывается к падающей части');
 assert.ok(findWinchTarget([standing], new THREE.Vector3(0, 2, 1), look), 'с лестницы можно выбрать точку выше пропила');
 console.log('winch checks ok');
