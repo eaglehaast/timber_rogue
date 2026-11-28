@@ -21,7 +21,7 @@ export function curvedRoute(anchors, spacing = ROUTE_SPACING) {
   return curve.getSpacedPoints(count).map(({ x, z }) => ({ x, z }));
 }
 
-export function planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house }) {
+export function planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house, pier, pierApproach, utilityPierStart }) {
   const lerp = (a, b, t) => a + (b - a) * t;
   const targetX = (porch.x + pad.x + bath.x) / 3;
   const junction = { x: lerp(gate.x, targetX, 0.26), z: gate.z - 4.4 };
@@ -42,13 +42,20 @@ export function planPathNetwork({ gate, porch, porchApproach, pad, padApproach, 
     bath: bathApproach ?? midpoint(bath, bathBack, 1.2),
   };
   const houseBend = Math.min(0.65, 0.2 * Math.hypot(junction.x - approach.porch.x, junction.z - approach.porch.z));
+  const routes = [
+    { destination: 'gate', points: curvedRoute([gate, midpoint(gate, junction, 0.35), junction]) },
+    { destination: 'house', points: curvedRoute([junction, midpoint(junction, approach.porch, houseBend), approach.porch, porch]) },
+    { destination: 'utility', points: curvedRoute([junction, midpoint(junction, pad, houseSide * 0.9), approach.pad, pad]) },
+    { destination: 'bath', points: curvedRoute([junction, bathSide, bathBack, approach.bath, bath]) },
+  ];
+  if (pier) {
+    routes.push(
+      { destination: 'pier', points: curvedRoute([utilityPierStart, midpoint(utilityPierStart, pierApproach, 0.25), pierApproach, pier]) },
+      { destination: 'pier-link', points: curvedRoute([approach.bath, midpoint(approach.bath, pierApproach, 0.35), pierApproach]) },
+    );
+  }
   return {
     junction,
-    routes: [
-      { destination: 'gate', points: curvedRoute([gate, midpoint(gate, junction, 0.35), junction]) },
-      { destination: 'house', points: curvedRoute([junction, midpoint(junction, approach.porch, houseBend), approach.porch, porch]) },
-      { destination: 'utility', points: curvedRoute([junction, midpoint(junction, pad, houseSide * 0.9), approach.pad, pad]) },
-      { destination: 'bath', points: curvedRoute([junction, bathSide, bathBack, approach.bath, bath]) },
-    ],
+    routes,
   };
 }

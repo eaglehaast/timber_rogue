@@ -57,15 +57,15 @@ export function buildBanya(site, river, power, house) {
   const riverEnd = front - length, sideOuter = W / 2 + 1.65, sideBack = 0.9;
   const deckTop = base + top;
   const deckPlan = { seed: seed + 211, start, along, across, top: deckTop, length, land: 0, width: W, riverEnd, sideOuter, sideBack };
-  const dock = buildBanyaDeck(seed + 211, { top, front, riverEnd, sideBack, sideOuter, site, base });
+  const dock = buildBanyaDeck(seed + 211, { top, front, riverEnd, sideBack, sideOuter, site, base, river });
   dock.position.set(x, base, z);
   dock.rotation.y = angle;
   const roofShape = group.userData.roofShape;
   const roofEndZ = riverEnd - 0.35, roofStartZ = -roofShape.zEnd;
   const roofExtension = buildRoofExtension(plan, roofShape, roofEndZ);
   const rafters = buildBanyaRafters(roofShape, roofStartZ, roofEndZ, rnd);
-  const supportZ = riverEnd, roofSupportX = W / 2 - 0.1;
-  const roofSupports = buildRoofSupports(supportZ, roofStartZ + 0.2, roofSupportX, top, roofShape, seed + 211);
+  const supportZ = riverEnd, roofSupportX = W / 2;
+  const roofSupports = buildRoofSupports(supportZ, -D / 2 - 0.22, roofSupportX, top, roofShape, seed + 211);
   roofSupports.userData.roofEndZ = roofEndZ;
   const beamRadius = R * 1.08;
   const eaveY = roofShape.ridge - roofSupportX * Math.tan(roofShape.pitch)
@@ -223,7 +223,7 @@ function addTimber(planks, from, to, width, rnd) {
     axis.clone().negate(), [1, 0], width, rnd);
 }
 
-function buildBanyaDeck(seed, { top, front, riverEnd, sideBack, sideOuter, site, base }) {
+function buildBanyaDeck(seed, { top, front, riverEnd, sideBack, sideOuter, site, base, river }) {
   const rnd = generator(seed + 97), floor = new Planks(boardMaterials(TONES.roof), BANYA_FRAME.deck);
   const frame = new Planks(boardMaterials(TONES.gable), 0.018), wetFrame = new Planks(
     boardMaterials(TONES.gable.clone().multiplyScalar(0.68)), 0.018);
@@ -253,7 +253,20 @@ function buildBanyaDeck(seed, { top, front, riverEnd, sideBack, sideOuter, site,
     z: site.z - Math.sin(site.angle) * lx + Math.cos(site.angle) * lz,
   });
   const sideFrame = { o: new THREE.Vector3(sideOuter, 0, 0), X: new THREE.Vector3(0, 0, 1), Y: UP };
-  for (let z0 = front; z0 < sideBack - 0.001; z0 += 0.1) {
+  const onLand = (z) => {
+    const p = world(sideOuter, z);
+    return p.z >= river.shore(p.x);
+  };
+  let low = riverEnd, high = sideBack;
+  if (!onLand(low)) {
+    for (let i = 0; i < 24; i++) {
+      const mid = (low + high) / 2;
+      if (onLand(mid)) high = mid;
+      else low = mid;
+    }
+  } else high = low;
+  const skirtEnd = high;
+  for (let z0 = skirtEnd; z0 < sideBack - 0.001; z0 += 0.1) {
     const z1 = Math.min(sideBack, z0 + 0.1), p0 = world(sideOuter, z0), p1 = world(sideOuter, z1);
     const bottom0 = Math.min(top - 0.04, height(p0.x, p0.z) - base - 0.05);
     const bottom1 = Math.min(top - 0.04, height(p1.x, p1.z) - base - 0.05);
@@ -261,7 +274,7 @@ function buildBanyaDeck(seed, { top, front, riverEnd, sideBack, sideOuter, site,
       sideFrame, new THREE.Vector3(1, 0, 0), [0, 1], z1 - z0, rnd);
   }
   const outerSupportX = sideOuter - (BANYA_FRAME.pile + 0.06) / 2 - 0.018;
-  const supportXs = [-mainHalf + 0.1, 0, mainHalf - 0.1, outerSupportX];
+  const supportXs = [-mainHalf, 0, mainHalf, outerSupportX];
   const supportEnds = new Map(supportXs.map((x) => [x, x > mainHalf ? sideBack : front]));
   for (const [x, endZ] of supportEnds) {
     addTimber(frame, new THREE.Vector3(x, beamY, riverEnd), new THREE.Vector3(x, beamY, endZ), BANYA_FRAME.beam, rnd);
@@ -281,7 +294,6 @@ function buildBanyaDeck(seed, { top, front, riverEnd, sideBack, sideOuter, site,
   for (const [x, endZ] of supportEnds) {
     const count = Math.max(1, Math.ceil((endZ - riverEnd) / BANYA_FRAME.pileSpacing));
     const zPositions = Array.from({ length: count + 1 }, (_, i) => THREE.MathUtils.lerp(riverEnd, endZ, i / count));
-    if (Math.abs(Math.abs(x) - (mainHalf - 0.1)) < 1e-5) zPositions.push(riverEnd + 0.25);
     for (const z of [...new Set(zPositions)].sort((a, b) => a - b)) {
       const point = world(x, z);
       const ground = height(point.x, point.z) - base;
@@ -304,6 +316,7 @@ function buildBanyaDeck(seed, { top, front, riverEnd, sideBack, sideOuter, site,
   }
   const skirt = new THREE.Group().add(...cladding.meshes());
   skirt.name = 'banya-veranda-skirt';
+  skirt.userData.landEnd = skirtEnd;
   const deck = new THREE.Group().add(...floor.meshes(), ...frame.meshes(), ...wetFrame.meshes(), skirt);
   deck.name = 'banya-veranda-deck';
   deck.userData.plan = { front, riverEnd, sideBack, sideOuter, top, upper, beamBottom };
@@ -340,28 +353,35 @@ function buildBanyaRafters(shape, startZ, endZ, rnd) {
 
 function buildRoofSupports(z, startZ, x, floor, shape, seed) {
   const group = new THREE.Group(), radius = R * 1.08, roofClearance = ROOF_SUPPORT_CLEARANCE;
-  const beam = (a, b) => {
-    const mesh = buildLogSegment(a, b, { radius, materials: BANYA_LOGS, seed: seed + group.children.length });
+  const beam = (a, b, deform) => {
+    const mesh = buildLogSegment(a, b, { radius, materials: BANYA_LOGS, seed: seed + group.children.length, deform });
     mesh.name = 'banya-roof-longitudinal-beam';
     group.add(mesh);
   };
+  const eave = eaveYFor(shape, x, radius, roofClearance);
+  const crossY = eave - radius * 1.35;
+  // Shallow saddles in the underside make the bearing surfaces legible at the crossings.
+  const saddle = (point, centreY, distance, depth) => {
+    const t = Math.abs(distance) / radius;
+    if (t >= 1 || point.y >= centreY) return;
+    const underside = Math.min(1, (centreY - point.y) / radius);
+    point.y += depth * Math.sqrt(1 - t * t) * underside;
+  };
+  const cross = (point) => {
+    for (const side of [-1, 1]) saddle(point, crossY, point.x - side * x, radius * 0.42);
+  };
+  beam(new THREE.Vector3(-x - 0.22, crossY, z), new THREE.Vector3(x + 0.22, crossY, z), cross);
+  group.children.at(-1).name = 'banya-roof-crossbeam';
   for (const side of [-1, 1]) {
     const at = side * x;
-    const roofY = shape.ridge - x * Math.tan(shape.pitch);
-    const normalGap = radius + ROOF_BOARD_THICKNESS + roofClearance;
-    const eave = roofY - normalGap / Math.cos(shape.pitch);
-    beam(new THREE.Vector3(at, eave, startZ), new THREE.Vector3(at, eave, z));
-    const post = buildLogSegment(new THREE.Vector3(at, floor, z), new THREE.Vector3(at, eave - radius, z),
+    beam(new THREE.Vector3(at, eave, startZ), new THREE.Vector3(at, eave, z - 0.19),
+      (point) => saddle(point, eave, point.z - z, radius * 0.55));
+    const post = buildLogSegment(new THREE.Vector3(at, floor, z), new THREE.Vector3(at, crossY - radius * 0.45, z),
       { radius, materials: BANYA_LOGS, seed: seed + 100 + side });
     post.name = 'banya-roof-post';
     group.add(post);
   }
-  group.userData.crossbeam = eaveYFor(shape, x, radius, roofClearance) - radius - floor >= 2.4;
-  if (group.userData.crossbeam) {
-    const y = eaveYFor(shape, x, radius, roofClearance);
-    beam(new THREE.Vector3(-x, y, z), new THREE.Vector3(x, y, z));
-    group.children.at(-1).name = 'banya-roof-crossbeam';
-  }
+  group.userData.crossbeam = true;
   group.userData.radius = radius;
   group.userData.roofClearance = roofClearance;
   group.userData.roofShape = { ridge: shape.ridge, pitch: shape.pitch, x };
@@ -371,7 +391,7 @@ function buildRoofSupports(z, startZ, x, floor, shape, seed) {
 
 function eaveYFor(shape, x, radius, clearance) {
   return shape.ridge - x * Math.tan(shape.pitch)
-    - (radius + ROOF_BOARD_THICKNESS + clearance) / Math.cos(shape.pitch);
+    - (radius * 1.06 + ROOF_BOARD_THICKNESS + clearance) / Math.cos(shape.pitch);
 }
 
 function buildBanyaBench({ x, z, width, depth, floorY, seatY }, rnd) {

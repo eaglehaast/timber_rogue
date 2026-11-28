@@ -31,8 +31,9 @@ const { planPower, powerWireMaterial } = await import('./src/power.js');
 const { generator } = await import('./src/random.js');
 const { GATES, WICKET } = await import('./src/fence.js');
 const { planPaths } = await import('./src/paths.js');
-const { yardPavingOutline } = await import('./src/campfire.js');
+const { yardPavingOutline, yardPavingContains } = await import('./src/campfire.js');
 const { buildRailSegments } = await import('./src/porch.js');
+const { planPier, buildPier } = await import('./src/pier.js');
 
 assert.equal(planHouse(73, { doorWall: 'right' }).openings.find(({ kind }) => kind === 'door').wall, 'right');
 
@@ -142,8 +143,7 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const roofCrossbeams = roofSupports.children.filter((part) => part.name === 'banya-roof-crossbeam');
   assert.equal(roofBeams.length, 2, 'под обоими скатами есть продольные балки');
   assert.equal(roofPosts.length, 2, 'продольные балки стоят на двух несущих стойках');
-  assert.equal(roofCrossbeams.length, roofSupports.userData.crossbeam ? 1 : 0,
-    'торцевая связь устанавливается только при достаточном проходе под ней');
+  assert.equal(roofCrossbeams.length, 1, 'поперечное бревно связывает стойки на торце веранды');
   assert.ok([...roofBeams, ...roofPosts, ...roofCrossbeams].every((part) =>
     part.material.length === 2 && part.material[0].map === LOG_MATERIAL.map
     && part.material[1].map === END_MATERIAL.map
@@ -152,10 +152,13 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   for (const beam of roofBeams) {
     const vertices = beam.geometry.getAttribute('position'), roof = roofSupports.userData.roofShape;
     const beamEnd = beam.userData.logSegment.to[2];
-    assert.ok(Math.abs(beamEnd - verandaPlan.riverEnd) < 1e-4,
-      `балка заканчивается над своей опорой, внутри контура кровли: seed ${seed}, end ${beamEnd}, river ${verandaPlan.riverEnd}`);
-    assert.ok(beamEnd > roofSupports.userData.roofEndZ + 0.2,
+    assert.ok(Math.abs(beamEnd - verandaPlan.riverEnd + 0.19) < 1e-4,
+      'остаток продольного бревна выходит за поперечину');
+    assert.ok(beamEnd > roofSupports.userData.roofEndZ + 0.1,
       'торец балки утоплен от края кровли, а не выступает из ската');
+    assert.ok(Math.abs(Math.abs(beam.userData.logSegment.from[0]) - 2) < 1e-5
+      && beam.userData.logSegment.from[2] > -2.3 && beam.userData.logSegment.from[2] < -2,
+    'продольное бревно продолжает ось боковой стены и соединяется с её выпуском');
     for (let i = 0; i < vertices.count; i++) {
       const local = new THREE.Vector3().fromBufferAttribute(vertices, i);
       const clearance = (roof.ridge - Math.abs(local.x) * Math.tan(roof.pitch) - local.y) * Math.cos(roof.pitch)
@@ -167,10 +170,39 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   assert.ok(roofBeams.some((beam) => beam.userData.logSegment.from[0] < 0)
     && roofBeams.some((beam) => beam.userData.logSegment.from[0] > 0),
     'балки стоят под обоими скатами');
+  const cross = roofCrossbeams[0].userData.logSegment;
+  assert.ok(cross.from[0] < -2 && cross.to[0] > 2 && Math.abs(cross.from[2] - verandaPlan.riverEnd) < 1e-5,
+    'поперечное бревно имеет выпуски за стойками');
+  assert.ok(cross.from[1] - cross.radius - verandaPlan.top > 1.8, 'поперечное бревно не закрывает проход');
+  const crossVertices = roofCrossbeams[0].geometry.getAttribute('position'), roof = roofSupports.userData.roofShape;
+  for (let i = 0; i < crossVertices.count; i++) {
+    const clearance = (roof.ridge - Math.abs(crossVertices.getX(i)) * Math.tan(roof.pitch) - crossVertices.getY(i))
+      * Math.cos(roof.pitch) - 0.022;
+    assert.ok(clearance > 0, 'поперечное бревно и его выпуски не пересекают скаты');
+  }
+  const bottomAt = (mesh, coord, value) => {
+    const p = mesh.geometry.getAttribute('position');
+    let min = Infinity;
+    for (let i = 0; i < p.count; i++) {
+      if (Math.abs((coord === 'x' ? p.getX(i) : p.getZ(i)) - value) < 0.014) min = Math.min(min, p.getY(i));
+    }
+    return min;
+  };
+  for (const beam of roofBeams) {
+    const join = bottomAt(beam, 'z', cross.from[2]), plain = bottomAt(beam, 'z', cross.from[2] + 0.36);
+    assert.ok(join > plain + 0.035, 'на продольном бревне вырублена чаша под поперечину');
+  }
+  for (const at of [-2, 2]) {
+    const join = bottomAt(roofCrossbeams[0], 'x', at), plain = bottomAt(roofCrossbeams[0], 'x', at * 0.75);
+    assert.ok(join > plain + 0.02, 'под поперечиной вырублено седло на вершине стойки');
+  }
   assert.equal(veranda.name, 'banya-veranda-deck');
   assert.ok(veranda.children.length > 0 && veranda.userData.piles.length >= 8, 'настил опирается на отдельный каркас и сваи');
   for (const post of roofPosts) {
     const [postX, , postZ] = post.userData.logSegment.from;
+    assert.ok(Math.abs(postZ - cross.from[2]) < 1e-5
+      && post.userData.logSegment.to[1] > cross.from[1] - cross.radius,
+    'стойка подходит снизу к поперечному бревну');
     assert.ok(veranda.userData.piles.some((pile) => Math.abs(pile.x - postX) < 1e-5
       && Math.abs(pile.z - postZ) < 1e-5), 'стойка крыши передаёт нагрузку на сваю под настилом');
   }
@@ -212,7 +244,11 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   }
   const skirt = veranda.getObjectByName('banya-veranda-skirt');
   veranda.updateMatrixWorld(true);
-  for (const pile of veranda.userData.piles.filter((p) => p.x > 2 && p.z > verandaPlan.front + 0.1 && p.z < verandaPlan.sideBack - 0.1)) {
+  const skirtEnd = skirt.userData.landEnd;
+  const [shoreX, shoreZ] = worldAtLocal(verandaPlan.sideOuter, skirtEnd);
+  assert.ok(Math.abs(shoreZ - river.shore(shoreX)) < 0.01 || Math.abs(skirtEnd - verandaPlan.riverEnd) < 0.01,
+    'обшивка доходит до уреза, но не закрывает сваи в воде');
+  for (const pile of veranda.userData.piles.filter((p) => p.x > 2 && p.z > skirtEnd + 0.15 && p.z < verandaPlan.sideBack - 0.1)) {
     const [wx, wz] = worldAtLocal(verandaPlan.sideOuter + 0.4, pile.z);
     const y = verandaPlan.beamBottom - 0.03;
     if (y <= pile.ground + 0.03) continue;
@@ -310,13 +346,60 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   assert.ok(Math.hypot(banya.approach.x - approach[0], banya.approach.z - approach[1]) < 1e-6);
   assert.ok(Math.hypot(banya.approachGuide.x - guide[0], banya.approachGuide.z - guide[1]) < 1e-6);
   const pavingOrigin = { x: 14.95, z: 4.25 };
-  const paths = planPaths({
+  const pier = planPier(river, seed);
+  const entry = pier.entry;
+  const guidePier = pier.start.clone().addScaledVector(pier.along, -2);
+  const pathPlan = planPaths({
     seed, gate: { x: GATES.at, z: 12.32 }, porch: { x: -1.5, z: 7 }, porchApproach: { x: 0.1, z: 7 },
     porchWidth: 1.8, pad: { x: 10.35, z: 4.25 }, padApproach: { x: 9.15, z: 4.25 }, pavingOrigin,
     pavingOutline: yardPavingOutline.map((p) => ({ x: p.x + pavingOrigin.x, z: p.z + pavingOrigin.z })),
     bath: banya.approach, bathApproach: banya.approachGuide, bathWidth: banya.approachWidth,
+    ...(site.x < 0 ? {
+      pier: { x: entry.x, z: entry.y }, pierApproach: { x: guidePier.x, z: guidePier.y },
+      pierWidth: pier.width, pierEntrySurface: pier.entrySurface,
+      utilityPierStart: { x: pavingOrigin.x, z: pavingOrigin.z - 5.4 },
+    } : {}),
     house: { ...atHouse, w: house.w + 1, d: house.d + 1 },
-  }).build();
+  });
+  const paths = pathPlan.build();
+  assert.ok(pier.start.x > 0 && Math.abs(entry.x) + pier.width / 2 < 20,
+    'причал внутри участка у противоположного забора');
+  assert.ok(Math.abs(pier.top - groundAt(pier.start.x, pier.start.y)) < 0.2,
+    'на причал можно подняться с берега');
+  for (let s = 0; s <= 0.1; s += 0.025) for (let c = -0.5; c <= 0.5; c += 0.05) {
+    const p = pier.start.clone().addScaledVector(pier.along, s).addScaledVector(pier.across, c);
+    assert.ok(pier.top - 0.035 > groundAt(p.x, p.y) + 0.015,
+      `первая доска видна над грунтом и мощением по всей ширине: seed ${seed}`);
+  }
+  const pierMesh = buildPier(pier);
+  const ray = new THREE.Raycaster(new THREE.Vector3(entry.x, pier.top + 1, entry.y), new THREE.Vector3(0, -1, 0), 0, 2);
+  assert.ok(ray.intersectObject(pierMesh, true).some(({ point }) => Math.abs(point.y - pier.top) < 0.001),
+    'первая доска видимо перекрывает конец тропы');
+  pierMesh.traverse((part) => part.geometry?.dispose());
+  const pierPaths = pathPlan.paths.filter((p) => p.destination.startsWith('pier'));
+  assert.equal(pierPaths.length, site.x < 0 ? 2 : 0);
+  for (const route of pierPaths) {
+    for (const p of route.points) {
+      assert.ok(Math.abs(p.x) < 19 && p.z > river.shore(p.x), `новая тропа внутри участка и на суше: seed ${seed}`);
+      assert.ok(!banya.blocks(p.x, p.z), `новая тропа не проходит сквозь баню: seed ${seed}`);
+    }
+  }
+  if (pierPaths.length) {
+    const pierRoute = pierPaths.find((p) => p.destination === 'pier');
+    const linkRoute = pierPaths.find((p) => p.destination === 'pier-link');
+    assert.ok(yardPavingContains(pierRoute.points[0].x - pavingOrigin.x, pierRoute.points[0].z - pavingOrigin.z),
+      'тропа к причалу начинается внутри хозплощадки');
+    assert.ok(Number.isFinite(pier.deck(pierRoute.points.at(-1).x, pierRoute.points.at(-1).z)),
+      'тропа доходит до настила причала');
+    const endVertices = paths.children[4].geometry.attributes.position;
+    for (let i = endVertices.count - 17; i < endVertices.count; i++) {
+      assert.ok(Math.abs(endVertices.getY(i) - pier.entrySurface) < 0.01,
+        'конец мощения подходит снизу вплотную к первой доске');
+    }
+    assert.ok(pathPlan.paths.find((p) => p.destination === 'bath').points.some((p) =>
+      Math.hypot(p.x - linkRoute.points[0].x, p.z - linkRoute.points[0].z) < 0.13),
+    'поперечная тропа соединена с подходом к бане');
+  }
   const path = paths.children[3].geometry.attributes.position;
   for (let i = 0; i < path.count; i++) {
     const x = path.getX(i), z = path.getZ(i);
@@ -324,11 +407,22 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
     if (i % 17 === 8) assert.ok(!banya.blocks(x, z), `тропа к бане не упирается в сруб или перила: seed ${seed}`);
   }
   const tops = paths.getObjectByName('path-border-ends').geometry.attributes.position;
+  for (const mesh of pierPaths.length ? paths.children.slice(4, 6) : []) {
+    const positions = mesh.geometry.attributes.position;
+    for (let i = 0; i < positions.count; i += 17 * 4) {
+      const mid = i + 8, x = positions.getX(mid), z = positions.getZ(mid);
+      assert.ok(z > river.shore(x), 'новое мощение не уходит в воду');
+      for (let j = 0; j < tops.count; j += 9) {
+        assert.ok(Math.hypot(x - tops.getX(j), z - tops.getZ(j)) > 0.3,
+          'брёвна бордюра не перекрывают центр новой тропы');
+      }
+    }
+  }
   for (const index of [path.count - 17, path.count - 1]) {
     const x = path.getX(index), z = path.getZ(index);
     assert.ok(Array.from({ length: tops.count / 9 }, (_, i) => i * 9)
       .some((i) => Math.hypot(x - tops.getX(i), z - tops.getZ(i)) < 0.08),
-    `бордюр доходит до края ступеней: seed ${seed}`);
+    `бордюр доходит до края ступеней: seed ${seed}, ${x}, ${z}`);
   }
   paths.traverse((o) => o.geometry?.dispose());
   assert.ok(banya.blocks(...worldAtLocal(-2, -2 - 0.13 - length / 2)), 'перила боковой стороны блокируют проход насквозь');

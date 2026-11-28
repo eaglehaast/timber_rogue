@@ -31,13 +31,13 @@ const noise = (rnd, h = 1.3) => {
   return (s) => w(s / h, 7.3);
 };
 
-function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, bathWidth) {
+function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, bathWidth, pierWidth, pierEntrySurface) {
   const lengths = [0];
   for (let i = 1; i < points.length; i++) {
     lengths.push(lengths[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].z - points[i - 1].z));
   }
   const total = lengths.at(-1);
-  const terminalHalf = { gate: 0.78, house: porchWidth / 2, utility: PAVING_ENTRY_HALF, bath: bathWidth / 2 }[destination];
+  const terminalHalf = { gate: 0.78, house: porchWidth / 2, utility: PAVING_ENTRY_HALF, bath: bathWidth / 2, pier: pierWidth / 2, 'pier-link': PATH.half }[destination];
   const routeSeed = [...destination].reduce((sum, char) => sum + char.charCodeAt(0), seed);
   const edgeNoise = noise(generator(routeSeed + 160), 1.1);
   const smooth = (t) => t * t * (3 - 2 * t);
@@ -47,7 +47,7 @@ function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, b
     const tangent = new THREE.Vector2(after.x - before.x, after.z - before.z).normalize();
     const normal = new THREE.Vector2(-tangent.y, tangent.x);
     const distToEnd = total - lengths[i];
-    const startFlare = destination === 'gate' ? 0 : smooth(THREE.MathUtils.clamp(1 - lengths[i] / 1.3, 0, 1));
+    const startFlare = destination === 'gate' || destination.startsWith('pier') ? 0 : smooth(THREE.MathUtils.clamp(1 - lengths[i] / 1.3, 0, 1));
     const endFlare = smooth(THREE.MathUtils.clamp(1 - distToEnd / 1.8, 0, 1));
     const flare = Math.max(startFlare, endFlare);
     const half = THREE.MathUtils.lerp(PATH.half, terminalHalf, flare)
@@ -55,7 +55,10 @@ function ribbon(points, destination, surface, textureOrigin, seed, porchWidth, b
     for (let j = 0; j < columns; j++) {
       const offset = half * (2 * j / (columns - 1) - 1);
       const x = points[i].x + normal.x * offset, z = points[i].z + normal.y * offset;
-      positions.push(x, surface(x, z), z);
+      const ground = surface(x, z);
+      const ramp = destination === 'pier' ? smooth(THREE.MathUtils.clamp(1 - distToEnd / 0.8, 0, 1)) : 0;
+      const y = ramp ? THREE.MathUtils.lerp(ground, Math.max(ground, pierEntrySurface), ramp) : ground;
+      positions.push(x, y, z);
       uvs.push((z - textureOrigin.z) / PAVING_TILE, (x - textureOrigin.x) / PAVING_TILE);
       if (!i) continue;
       const a = (i - 1) * columns + j, b = i * columns + j;
@@ -144,10 +147,13 @@ function border(paths, junction, pad, pavingOutline, seed) {
 }
 
 // Строить после shapeGround: единый ствол от ворот расходится к дому, бане и хозплощадке.
-export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, padApproach, pavingOrigin = pad, pavingOutline, bath, bathApproach, bathWidth, house }) {
+export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, padApproach, pavingOrigin = pad, pavingOutline, bath, bathApproach, bathWidth, house, pier, pierApproach, pierWidth, pierEntrySurface, utilityPierStart }) {
+  if (pier && (!pierApproach || !utilityPierStart || !Number.isFinite(pierWidth) || !Number.isFinite(pierEntrySurface))) {
+    throw new TypeError('Для тропы к причалу нужны подход, начало, ширина и высота стыка');
+  }
   const surface = (x, z) => groundAt(x, z) + PATH.lift;
   const near = (x, z, p, r) => Math.hypot(x - p.x, z - p.z) < r;
-  const network = planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house });
+  const network = planPathNetwork({ gate, porch, porchApproach, pad, padApproach, bath, bathApproach, house, pier, pierApproach, utilityPierStart });
   const paths = network.routes.map(({ points, destination }) => ({
     destination, points,
   }));
@@ -195,7 +201,7 @@ export function planPaths({ seed, gate, porch, porchApproach, porchWidth, pad, p
     build() {
       const group = new THREE.Group();
       const ribbons = paths.map((path) => ({
-        ...path, geometry: ribbon(path.points, path.destination, surface, pavingOrigin, seed, porchWidth, bathWidth),
+        ...path, geometry: ribbon(path.points, path.destination, surface, pavingOrigin, seed, porchWidth, bathWidth, pierWidth, pierEntrySurface),
       }));
       ribbons.forEach(({ geometry }) => {
         const mesh = new THREE.Mesh(geometry, stone);

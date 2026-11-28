@@ -6,31 +6,36 @@ import { Planks, boardMaterials, TONES } from './attic.js';
 // Рыбацкие мостки с нашего берега (Никита, 2026-11-10): из тех же досок, что забор (attic.js: Planks), без краски.
 // Стоят там, где наш берег — подмытый откос: у него сразу глубоко. Сваи-бруски вбиты в дно парами, на них
 // две лаги вдоль мостков, поперёк лаг — настил, доски чуть разной длины, с неровными щелями. Начинается настил
-// на верху откоса, лежит на земле, и уходит над водой на один пролёт: две пары свай, у уреза и под краем
+// у бровки откоса и уходит над водой на один пролёт: две пары свай, у уреза и под краем
 // (Никита, 2026-11-11: длиннее — уже не мостки, а сломанный мост через полреки).
-const WIDTH = 1, LAND = 0.6, OVER = 1.2;      // м: ширина настила; сколько его на берегу и над водой от уреза
+const WIDTH = 1, LAND = 0.05, OVER = 1.2;     // м: ширина, небольшой заход на бровку и вынос за урез
 const DECK = 0.035, BEAM = 0.1;               // м: толщина доски настила; сторона бруса лаг и свай
 const GAP = [0.008, 0.025], SPAN = 1.2, DRIVEN = 0.4; // м: щели настила; шаг свай не больше; на сколько сваи в дне
-const SEARCH = [18, 27];                      // м: где по |x| искать место — у боковых заборов, где наш берег внешний
+const PIER_X = 16.5;                           // м: внутри участка у противоположного от бани забора
 
 // Где стоят мостки. deck(x, z) — высота верха настила над точкой, или −∞, если она не на мостках: по нему на мостки
-// заходят. Строить после shapeGround: настил ложится на землю у откоса, сваи — на дно.
+// заходят. Строить после shapeGround: сваи уходят в дно, настил возвышается над берегом.
 export function planPier(river, seed) {
-  // Наш берег (к +z) тем круче, чем сильнее русло изгибается к двору (bend меньше нуля).
-  let x = SEARCH[0];
-  for (let a = SEARCH[0]; a <= SEARCH[1]; a += 0.5) {
-    for (const v of [a, -a]) if (river.section(v).bend < river.section(x).bend) x = v;
-  }
+  const x = PIER_X;
   const sec = river.section(x), { shore, run } = river.side(sec.w, sec);
   // Поперёк русла от нашего берега к воде — along, вдоль течения — across.
   const along = new THREE.Vector2(river.slope(x), -1).normalize(), across = new THREE.Vector2(-along.y, along.x);
   const at = (u) => new THREE.Vector2(x, river.center(x)).addScaledVector(along, -u);   // точка на u метров от оси к нам
-  const start = at(shore + run + LAND), top = height(...at(shore + run).toArray()) + DECK, length = LAND + run + OVER;
+  const start = at(shore + run + LAND), length = LAND + run + OVER;
+  let ground = -Infinity;
+  for (let s = 0; s <= 0.3 + 1e-6; s += 0.025) {
+    for (let c = -WIDTH / 2 - 0.03; c <= WIDTH / 2 + 0.031; c += 0.053) {
+      const p = start.clone().addScaledVector(along, s).addScaledVector(across, c);
+      ground = Math.max(ground, height(p.x, p.y));
+    }
+  }
+  const top = ground + DECK + 0.035;
+  const entry = start.clone().addScaledVector(along, 0.06);
   const deck = (px, pz) => {
     const d = new THREE.Vector2(px, pz).sub(start), s = d.dot(along), c = d.dot(across);
     return s >= 0 && s <= length && Math.abs(c) <= WIDTH / 2 ? top : -Infinity;
   };
-  return { seed, start, along, across, top, length, land: LAND + run, deck };
+  return { seed, start, entry, entrySurface: top - DECK - 0.002, along, across, top, length, land: LAND + run, width: WIDTH, deck };
 }
 
 export function buildPier({ seed, start, along, across, top, length, land, width = WIDTH }) {

@@ -302,7 +302,7 @@ function chinking(chink, wall, below, above) {
 // Кусок бревна стены wall от from до to вдоль неё, ось на высоте y. look — общее у всех кусков одного бревна:
 // радиус, с какого конца комель, провис, неровность обвода и сдвиг узора, — так перерезанное проёмом бревно
 // остаётся одним бревном.
-function log(parts, wall, y, from, to, { r, butt, reach, sag: depth, wobble, u, v }, rnd) {
+function log(parts, wall, y, from, to, { r, butt, reach, sag: depth, wobble, u, v, step = STEP }, rnd) {
   // Ниже верха цоколя бревно стёсано: точка обвода не опускается под него.
   const hewn = (s, x, h) => [x, Math.max(h, PLINTH - (y - drop(s)))];
   // Точка бревна: s вдоль стены, x поперёк неё (наружу дома — по знаку wall.at), h — высота; turn — тот же поворот без сдвига.
@@ -314,7 +314,7 @@ function log(parts, wall, y, from, to, { r, butt, reach, sag: depth, wobble, u, 
   // Радиус в месте s: сбег 8 % от комля к вершине и неровность обвода — пара плавных волн по азимуту.
   const radius = (s, az) => taper({ r, butt, reach }, s) * (1 + 0.025 * Math.sin(2 * az + wobble) + 0.015 * Math.sin(3 * az + 0.7 * s + wobble));
   const drop = (s) => sag({ sag: depth, reach }, s); // провис к середине
-  const n = Math.max(1, Math.ceil((to - from) / STEP));
+  const n = Math.max(1, Math.ceil((to - from) / step));
   const start = parts.pos.length / 3;
   for (let i = 0; i <= n; i++) {
     const s = from + ((to - from) * i) / n;
@@ -353,19 +353,21 @@ function log(parts, wall, y, from, to, { r, butt, reach, sag: depth, wobble, u, 
   }
 }
 
-export function buildLogSegment(from, to, { radius = R, materials = logMaterials(), seed = 1 } = {}) {
+export function buildLogSegment(from, to, { radius = R, materials = logMaterials(), seed = 1, deform = null } = {}) {
   const axis = to.clone().sub(from), length = axis.length();
   if (length < 0.1) throw new RangeError('Бревно должно быть длиннее 10 см.');
   axis.normalize();
   const rnd = generator(seed), parts = { pos: [], normal: [], uv: [], side: [], end: [] };
   log(parts, { along: 'x', at: 0 }, 1, 0, length,
-    { r: radius, butt: 1, reach: length, sag: 0.005, wobble: rnd() * 100, u: rnd() * 10, v: rnd() * 10 }, rnd);
+    { r: radius, butt: 1, reach: length, sag: 0.005, wobble: rnd() * 100, u: rnd() * 10, v: rnd() * 10,
+      step: deform ? 0.025 : STEP }, rnd);
   const geometry = new THREE.BufferGeometry();
   const rotation = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), axis);
   const positions = [];
   for (let i = 0; i < parts.pos.length; i += 3) {
     const point = new THREE.Vector3(parts.pos[i], parts.pos[i + 1] - 1, parts.pos[i + 2])
       .applyQuaternion(rotation).add(from);
+    if (deform) deform(point);
     positions.push(point.x, point.y, point.z);
   }
   const normals = [];
@@ -379,6 +381,7 @@ export function buildLogSegment(from, to, { radius = R, materials = logMaterials
   geometry.setIndex([...parts.side, ...parts.end]);
   geometry.addGroup(0, parts.side.length, 0);
   geometry.addGroup(parts.side.length, parts.end.length, 1);
+  if (deform) geometry.computeVertexNormals();
   const mesh = new THREE.Mesh(geometry, materials);
   mesh.userData.logSegment = { from: from.toArray(), to: to.toArray(), radius };
   mesh.castShadow = mesh.receiveShadow = true;

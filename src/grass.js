@@ -94,13 +94,10 @@ export async function atlas(name, { turning = false, dusk } = {}) {
   return { material, cols, rows, aspect, heights, rank, turning };
 }
 // Злаки (ежа, мятлик, овсяница…) — один атлас, у каждого сорняка свой: вместе не влезли бы в одну текстуру.
-export const grassTufts = await atlas('grass-tufts');
-export const mugwortTufts = await atlas('mugwort-tufts');
-export const nettleTufts = await atlas('nettle-tufts');
-export const tansyTufts = await atlas('tansy-tufts');
-export const dandelionTufts = await atlas('dandelion-tufts', { turning: true });
-export const cloverTufts = await atlas('clover-tufts', { turning: true });
-export const yarrowTufts = await atlas('yarrow-tufts', { turning: true });
+export const [grassTufts, mugwortTufts, nettleTufts, tansyTufts, dandelionTufts, cloverTufts, yarrowTufts] = await Promise.all([
+  atlas('grass-tufts'), atlas('mugwort-tufts'), atlas('nettle-tufts'), atlas('tansy-tufts'),
+  atlas('dandelion-tufts', { turning: true }), atlas('clover-tufts', { turning: true }), atlas('yarrow-tufts', { turning: true }),
+]);
 
 // Плавный шум 0..1 с ячейкой в метр: по нему трава то выше и гуще, то ниже и реже.
 export const noise = smoothNoise(Math.random);

@@ -21,10 +21,12 @@ import { attachGame, MAPLES } from './main.js';
 import { createWoodyard, PAVING_HALF, yardPavingContains, yardPavingOutline } from './campfire.js';
 import { fitPavingCenter } from './route.js';
 import { planPaths } from './paths.js';
+import { performanceMonitor as perf } from './performance.js';
 
 // Один двор для облёта и игры. Здесь собирается участок и рисуется кадр; main.js ведёт клёны, пилу и игрока.
 const canvas = document.getElementById('scene');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.info.autoReset = false;
 renderer.setPixelRatio(mode === 'game' ? 1 : Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -33,7 +35,7 @@ const scene = new THREE.Scene();
 const FOV = 45, camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 400);
 // Ближнего кольца панорамы (луг со стогами в 45 м) на стенде нет: вокруг двора будет своя местность объёмом
 // по плану Никиты (2026-11-08). Земля тянется до кольца гор.
-const world = await makeWorld(renderer, scene, [RINGS.far]);
+const world = await perf.measureAsync('world', () => makeWorld(renderer, scene, [RINGS.far]));
 
 // Дом стоит фасадом к улице у забора, за палисадником в 1,5–2,5 м (Никита, 2026-11-08: фасад прямо в линию забора
 // не нравится). Боком с крыльцом — к воротам, в ASIDE от их середины. Земля под домом выровнена (terrain.js).
@@ -50,7 +52,7 @@ function rebuild(seed) {
     for (const part of [house, yard]) part.traverse((o) => o.geometry?.dispose());
   }
   const plan = planHouse(seed, { doorWall: 'right' }), rnd = generator(seed + 13);
-  house = buildHouse(plan);
+  house = perf.measure('house', () => buildHouse(plan));
   const front = PALISADE[0] + rnd() * (PALISADE[1] - PALISADE[0]);
   const door = 1;
   const at = { x: GATES.at - door * (plan.w / 2 + ASIDE), z: YARD.d / 2 - front - plan.d / 2 };
@@ -65,7 +67,8 @@ function rebuild(seed) {
     w: PAVING_HALF.z * 2 + 0.8, d: PAVING_HALF.x * 2 + 0.8,
   };
   const banyaSite = planBanya(seed, river, -door);
-  shapeGround(seed, [pad, woodPad, banyaSite.pad, ...MAPLES], YARD.w, YARD.d, { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
+  perf.measure('terrain', () => shapeGround(seed, [pad, woodPad, banyaSite.pad, ...MAPLES], YARD.w, YARD.d,
+    { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] }));
   at.y = height(at.x, at.z);
   const woodCenter = new THREE.Vector3(woodPad.x, height(woodPad.x, woodPad.z), woodPad.z);
   game.placeWoodyard(woodCenter, door, -Math.PI / 2);
@@ -85,14 +88,22 @@ function rebuild(seed) {
   const padNear = { x: woodPad.x - PAVING_HALF.z, z: woodPad.z };
   const padApproach = { x: padNear.x - 1.2, z: padNear.z };
   const pier = planPier(river, seed);
+  const pierEntry = pier.entry;
+  const pierGuide = pier.start.clone().addScaledVector(pier.along, -2.0);
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  const banya = buildBanya(banyaSite, river, power, { plan, at });
-  const paths = planPaths({
+  const { banya, paths } = perf.measure('banya', () => {
+    const banya = buildBanya(banyaSite, river, power, { plan, at });
+    const paths = planPaths({
     seed, gate: { x: GATES.at, z: fence - 0.18 }, porch, porchApproach, porchWidth: porchStairWidth(plan.tambour), pad: padNear, padApproach,
     pavingOrigin: woodPad, pavingOutline: yardPavingOutline.map((p) => ({ x: p.x + woodPad.x, z: p.z + woodPad.z })),
     bath: banya.approach, bathApproach: banya.approachGuide, bathWidth: banya.approachWidth,
+    pier: { x: pierEntry.x, z: pierEntry.y }, pierApproach: { x: pierGuide.x, z: pierGuide.y },
+    pierWidth: pier.width, pierEntrySurface: pier.entrySurface,
+    utilityPierStart: { x: woodPad.x, z: woodPad.z - PAVING_HALF.x + 1.2 },
     house: { x: pad.x, z: pad.z, w: pad.w, d: pad.d },
+    });
+    return { banya, paths };
   });
   house.position.set(at.x, at.y, at.z);
   // Вертикальные пучки растут только во дворе, от улицы до реки.
@@ -104,13 +115,22 @@ function rebuild(seed) {
       || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
     return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * paths.grass(x, z) * (1 - field.cover(x, z));
   };
-  yard = new THREE.Group().add(makeMeadow(grass, MEADOW, GROUND, { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }), makeFence({ open: river.shore }), buildGas(gas), buildPower(power), buildRoad(road), buildLand(land), buildRiver(river, MEADOW), buildPier(pier), banya.group, banya.dock, banya.powerLine, buildField(field), paths.build());
+  const meadow = perf.measure('meadow', () => makeMeadow(grass, MEADOW, GROUND,
+    { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }));
+  yard = perf.measure('yard', () => new THREE.Group().add(meadow,
+    perf.measure('fence', () => makeFence({ open: river.shore })),
+    ...perf.measure('utilities', () => [buildGas(gas), buildPower(power)]),
+    perf.measure('road', () => buildRoad(road)),
+    perf.measure('land', () => buildLand(land)),
+    ...perf.measure('river', () => [buildRiver(river, MEADOW), buildPier(pier)]),
+    banya.group, banya.dock, banya.powerLine,
+    perf.measure('field', () => buildField(field)), perf.measure('paths', () => paths.build())));
   layout = { at, gas, power, road, pier, pad, river, paths, banya };
   scene.add(house, yard);
   animated.length = 0;
   for (const group of [house, yard]) group.traverse(part => { if (part.tick) animated.push(part); });
   blow(rnd() * Math.PI * 2, 0.05 + rnd() * 0.2, rnd() * 9);
-  game.regrow(generator(seed + 41));
+  perf.measure('trees', () => game.regrow(generator(seed + 41)));
   view.target.set(at.x, at.y + 2.5, at.z);
   // Появление в «Игре» — у самих ворот, с внутренней стороны: спиной к улице, лицом во двор.
   // forwardOf(yaw) = (-sin yaw, 0, -cos yaw): yaw = 0 смотрит на −z, т.е. от забора у дороги вглубь участка,
@@ -243,6 +263,8 @@ function reach(target, dir) {
 
 const clock = new THREE.Clock();
 function frame(now) {
+  const started = performance.now();
+  renderer.info.reset();
   // Живые части дома и двора (дым из трубы, огонёк счётчика) двигаются во времени, траву клонит ветер, облака плывут.
   const dt = Math.min(clock.getDelta(), 0.05);
   stepWind(dt);
@@ -257,7 +279,9 @@ function frame(now) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     world.rays.setSize(size.x, size.y);
   }
+  const beforeGame = performance.now();
   game.tick(now, dt);
+  const afterGame = performance.now();
   if (!game.active) {
     pan(dt);
     const dir = new THREE.Vector3(Math.sin(view.yaw) * Math.cos(view.pitch), Math.sin(view.pitch), Math.cos(view.yaw) * Math.cos(view.pitch));
@@ -266,15 +290,22 @@ function frame(now) {
   }
   const light = world.light(camera);
   renderer.setViewport(0, 0, w, h);
+  const beforeRender = performance.now();
   renderer.render(scene, camera);
+  const beforeRays = performance.now();
   world.rays.render(camera, light, dt);
+  const end = performance.now();
+  perf.frame(now, { world: beforeGame - started + beforeRender - afterGame, game: afterGame - beforeGame,
+    render: beforeRays - beforeRender, rays: end - beforeRays },
+  { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
+    geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures }, !document.hidden);
 }
 rebuild(Number(new URLSearchParams(location.search).get('seed')) || 1);
 export async function startYard() {
   if (mode === 'game') game.enter(spawn(), spawnPoint?.yaw ?? 0, PHONE, false);
   document.querySelector('#help').hidden = !game.active;
-  await renderer.compileAsync(scene, camera);
-  frame(performance.now());
+  await perf.measureAsync('compile', () => renderer.compileAsync(scene, camera));
+  perf.measure('first', () => frame(performance.now()));
   walkButton.disabled = false;
   renderer.setAnimationLoop(frame);
   window.stand = { view, rebuild, renderer, scene, get layout() { return layout; } };
