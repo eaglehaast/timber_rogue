@@ -333,5 +333,5 @@ export async function startYard() {
   perf.measure('first', () => frame(performance.now()));
   walkButton.disabled = false;
   renderer.setAnimationLoop(frame);
-  window.stand = { view, rebuild, renderer, scene, get layout() { return layout; } };
+  window.stand = { view, rebuild, renderer, scene, game, get layout() { return layout; } };
 }

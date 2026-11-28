@@ -4,7 +4,7 @@ import { random } from './random.js';
 
 // Низ ствола — сетка кубиков-вокселей: древесина есть или выпилена.
 // Пила вырезает из неё настоящую щель, по оставшимся кубикам считается, держит ли недопил.
-export const VOXEL = 0.01;
+export const VOXEL = 0.02;
 const CHUNK = 10; // слоёв в одном куске сетки; при пилении перестраиваются только задетые куски
 const SMOOTH = 3 * VOXEL; // м — с такой округи кубиков берём, куда смотрит поверхность у твёрдого тела
 
@@ -264,14 +264,11 @@ function stemsShape(stems, radius, leanAz, height, seam) {
   };
 }
 
-export class TrunkVoxels {
-  // shape — форма ствола (trunkShape): по ней кубики заполняются, а грань, за которой форма кончается, —
-  // кора, остальные открытые грани — свежий срез. floor — с какого слоя (от земли) начинается сетка:
-  // у отвалившихся кусков она не с нуля, но сетка в плане у всех кусков одна.
-  // skin — материалы коры и среза этого дерева (dressBark, dressWood): куски берут их от ствола.
-  constructor(shape, height, skin, floor = 0, filled = true) {
+// Сетка кубиков вокруг ствола формы shape высотой height: n по x, m по z, ny слоёв от слоя floor.
+// Одна и та же у нетронутого ствола (PlainTrunk), у кубиков (TrunkVoxels) и у всех кусков, что от них отпилены.
+class TrunkGrid {
+  constructor(shape, height, floor) {
     this.shape = shape;
-    this.skin = skin;
     this.radius = shape.radius;
     this.floor = floor;
     // Сетка в плане — прямоугольник вокруг ствола: n кубиков по x, m по z.
@@ -285,6 +282,138 @@ export class TrunkVoxels {
       low: new THREE.Vector3(this.x0, floor * VOXEL, this.z0),
       high: new THREE.Vector3(this.x0 + this.n * VOXEL, (floor + this.ny) * VOXEL, this.z0 + this.m * VOXEL),
     };
+  }
+
+  // Кубик внутри формы ствола: древесина, пока её не выпилили.
+  wood(i, j, k) { return this.shape.contains(this.x(i), (this.floor + j + 0.5) * VOXEL, this.z(k)); }
+
+  x(i) { return this.x0 + (i + 0.5) * VOXEL; }
+  y(j) { return (j + 0.5) * VOXEL; }
+  z(k) { return this.z0 + (k + 0.5) * VOXEL; }
+}
+
+// Ствол, которого ещё не касалась пила: одна сетка коры по форме и ни одного кубика. Кубики (TrunkVoxels)
+// заводят, когда ствол начинают пилить. Для прицела, лебёдки и тел он отвечает по форме так же, как кубики
+// нетронутого ствола.
+export class PlainTrunk extends TrunkGrid {
+  constructor(shape, height, bark) {
+    super(shape, height, 0);
+    this.height = height;
+    this.cutHigh = -1;
+    this.version = 0;
+    this.body = 0;
+    this.group = new THREE.Mesh(plainGeometry(shape, height), bark);
+    this.group.castShadow = this.group.receiveShadow = true;
+    // Объём и центр каждого ствола: кольца по высоте, в кольце — точки по углу и радиусу.
+    // У двойного дерева точка идёт тому стволу, в котором она глубже (shape.of), как и кубики.
+    const LAYERS = 64, ANGLES = 48, RINGS = 8, dy = height / LAYERS, da = (2 * Math.PI) / ANGLES;
+    this.stems = shape.stems.map(() => ({ volume: 0, moment: new THREE.Vector3() }));
+    shape.stems.forEach((stem, s) => {
+      const own = this.stems[s];
+      for (let l = 0; l < LAYERS; l++) {
+        const y = (l + 0.5) * dy, c = stem.center(y);
+        for (let a = 0; a < ANGLES; a++) {
+          const angle = (a + 0.5) * da, R = stem.outline(angle, y), dr = R / RINGS;
+          const cos = Math.cos(angle), sin = Math.sin(angle);
+          for (let q = 0; q < RINGS; q++) {
+            const r = (q + 0.5) * dr, x = c.x + r * cos, z = c.z + r * sin;
+            if (shape.stems.length > 1 && (shape.of(x, y, z) !== s || shape.seam(x, y, z))) continue;
+            const dv = r * dr * da * dy;
+            own.volume += dv;
+            own.moment.x += x * dv;
+            own.moment.y += y * dv;
+            own.moment.z += z * dv;
+          }
+        }
+      }
+    });
+  }
+
+  at(i, j, k) { return this.wood(i, j, k) ? 1 : 0; }
+
+  under(p) { return p.y < this.height && this.shape.contains(p.x, p.y, p.z); }
+
+  // Древесина в точке: ствол не пилен, поэтому то же, что under.
+  solid(p) { return p.y >= 0 && this.under(p); }
+
+  // Объём древесины и её центр: mask — только этих стволов (0 — всех). Ствол целый, поэтому только от земли.
+  measure(mask = 0, from = 0) {
+    if (from !== 0) throw new Error(`PlainTrunk.measure: нетронутый ствол меряют от земли, а не от слоя ${from}`);
+    const center = new THREE.Vector3();
+    let volume = 0;
+    this.stems.forEach((s, i) => {
+      if (mask && !(mask & (1 << i))) return;
+      volume += s.volume;
+      center.add(s.moment);
+    });
+    return { volume, center: center.divideScalar(volume) };
+  }
+
+  // Тело p радиуса r подошло к коре ближе reach: куда и на сколько его вытолкнуть (как TrunkVoxels.press).
+  press(p, r, reach) {
+    if (p.y < 0 || p.y > this.height) return null;
+    let best = Infinity, nx = 0, nz = 0;
+    for (const stem of this.shape.stems) {
+      const c = stem.center(p.y), dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz);
+      const gap = d - stem.outline(Math.atan2(dz, dx), p.y);
+      if (gap >= r + reach || gap >= best) continue;
+      if (d < 1e-9) throw new Error(`PlainTrunk.press: тело на самой оси ствола (${p.x}, ${p.y}, ${p.z})`);
+      best = gap; nx = dx / d; nz = dz / d;
+    }
+    if (best === Infinity) return null;
+    hit.normal.set(nx, 0, nz);
+    hit.depth = r - best;
+    return hit;
+  }
+
+  remesh() {}
+
+  dispose() { this.group.geometry.dispose(); }
+}
+
+// Кора нетронутого ствола: у каждого ствола трубка по контуру outline, кольца гуще у земли, где лапы.
+// Развёртка коры та же, что у кубиков (buildChunk): u — путь по окружности, v — высота минус спуск по лапе.
+const PLAIN_ANGLES = 40;
+const PLAIN_YS = [0, 0.03, 0.07, 0.12, 0.18, 0.26, 0.36, 0.5, 0.7, 0.95, 1.3, 1.7, 2.1, 2.5, 2.9];
+function plainGeometry(shape, height) {
+  const ys = [...PLAIN_YS.filter((y) => y < height), height];
+  const pos = [], nor = [], uv = [], index = [];
+  for (const stem of shape.stems) {
+    const first = pos.length / 3;
+    for (const y of ys) {
+      const c = stem.center(y), size = stem.scale(y);
+      for (let a = 0; a <= PLAIN_ANGLES; a++) {
+        const angle = (a / PLAIN_ANGLES) * 2 * Math.PI, R = stem.outline(angle, y);
+        pos.push(c.x + R * Math.cos(angle), y, c.z + R * Math.sin(angle));
+        nor.push(...stem.normal(angle, y, R));
+        const down = Math.max(0, R - size * stem.profile(angle));
+        uv.push((angle * stem.radius) / BARK_TILE, (y - down) / BARK_TILE);
+      }
+    }
+    const row = PLAIN_ANGLES + 1;
+    for (let l = 0; l + 1 < ys.length; l++) {
+      for (let a = 0; a < PLAIN_ANGLES; a++) {
+        const v = first + l * row + a;
+        index.push(v, v + row, v + 1, v + 1, v + row, v + row + 1);
+      }
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geometry.setIndex(index);
+  return geometry;
+}
+
+export class TrunkVoxels extends TrunkGrid {
+  // shape — форма ствола (trunkShape): по ней кубики заполняются, а грань, за которой форма кончается, —
+  // кора, остальные открытые грани — свежий срез. floor — с какого слоя (от земли) начинается сетка:
+  // у отвалившихся кусков она не с нуля, но сетка в плане у всех кусков одна.
+  // skin — материалы коры и среза этого дерева (dressBark, dressWood): куски берут их от ствола.
+  constructor(shape, height, skin, floor = 0, filled = true) {
+    super(shape, height, floor);
+    this.skin = skin;
 
     this.data = new Uint8Array(this.n * this.m * this.ny);
     // top — верхний слой с древесиной в каждой колонке: выше него воздух, даже если там форма ствола
@@ -405,12 +534,6 @@ export class TrunkVoxels {
   // Слой, где ломается недопил стоящего ствола: середина полосы, где прошла пила.
   get middle() { return Math.round((this.cutLow + this.cutHigh) / 2); }
 
-  // Кубик внутри формы ствола: древесина, пока её не выпилили.
-  wood(i, j, k) { return this.shape.contains(this.x(i), (this.floor + j + 0.5) * VOXEL, this.z(k)); }
-
-  x(i) { return this.x0 + (i + 0.5) * VOXEL; }
-  y(j) { return (j + 0.5) * VOXEL; }
-  z(k) { return this.z0 + (k + 0.5) * VOXEL; }
   at(i, j, k) { return this.data[(j * this.m + k) * this.n + i]; }
 
   // Убирает кубик; если он был верхним в колонке, верх колонки опускается до следующего.
