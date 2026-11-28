@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { fitPavingCenter, ROUTE_SPACING, planPathNetwork } from './src/route.js';
+import { fitPavingCenter, fitTreePlots, ROUTE_SPACING, planPathNetwork } from './src/route.js';
 
 class ImageMock {
   addEventListener(name, fn) { this[`on${name}`] = fn; }
@@ -104,8 +104,9 @@ for (const yard of yards) {
 
 const { shapeGround, groundGeometry, groundAt } = await import('./src/terrain.js');
 const { planPaths } = await import('./src/paths.js');
-const { yardPavingOutline, yardPavingContains } = await import('./src/campfire.js');
+const { yardPavingOutline, yardPavingContains, PAVING_HALF } = await import('./src/campfire.js');
 const { exposedPavingEdges, borderPoints } = await import('./src/paving-contour.js');
+const { makeTufts } = await import('./src/grass.js');
 const rectangle = (x0, x1) => {
   const polygon = [{ x: x0, z: 0 }, { x: x1, z: 0 }, { x: x1, z: 2 }, { x: x0, z: 2 }];
   return { polygon, edges: polygon.map((p, i) => [p, polygon[(i + 1) % polygon.length]]) };
@@ -118,6 +119,13 @@ shapeGround(71, [], 40, 25);
 groundGeometry(200);
 const pavingOrigin = { x: 14.95, z: 4.25 };
 const pavingOutline = yardPavingOutline.map((p) => ({ x: p.x + pavingOrigin.x, z: p.z + pavingOrigin.z }));
+for (const x of [-PAVING_HALF.z + 0.01, PAVING_HALF.z - 0.01]) {
+  for (const z of [-PAVING_HALF.x + 0.01, PAVING_HALF.x - 0.01]) {
+    assert.ok(yardPavingContains(x, z), 'utility paving includes its rectangular corners');
+  }
+}
+assert.ok(!yardPavingContains(PAVING_HALF.z + 0.01, 0), 'utility paving retains its original width');
+assert.ok(!yardPavingContains(0, PAVING_HALF.x + 0.01), 'utility paving retains its original length');
 const paths = planPaths({
   ...yards[0], seed: 71, pavingOrigin, pavingOutline,
 });
@@ -157,6 +165,56 @@ for (let i = 0; i < tops.count; i += 9) {
     && x < yards[0].pad.x + 1.2), 'border must not cross the entrance to the utility paving');
 }
 const posts = Array.from({ length: tops.count / 9 }, (_, i) => ({ x: tops.getX(i * 9), z: tops.getZ(i * 9) }));
+for (const p of posts) {
+  assert.ok(paths.blocks(p.x, p.z), 'each border post must exclude plants');
+  assert.ok(paths.blocks(p.x + 0.3, p.z, 0.3), 'plant footprint must not overlap a border post');
+}
+const forecourt = { x0: -4, x1: 3.05, z0: 2, z1: 12.5 };
+const courtyard = planPaths({ ...yards[0], seed: 71, pavingOrigin, pavingOutline, forecourt });
+const courtyardMeshes = courtyard.build().children;
+const forecourtMesh = courtyardMeshes.find((mesh) => mesh.name === 'house-forecourt');
+assert.ok(forecourtMesh, 'forecourt has a rendered surface');
+const courtPos = forecourtMesh.geometry.attributes.position;
+const courtBounds = { x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity };
+for (let i = 0; i < courtPos.count; i++) {
+  const x = courtPos.getX(i), z = courtPos.getZ(i);
+  courtBounds.x0 = Math.min(courtBounds.x0, x); courtBounds.x1 = Math.max(courtBounds.x1, x);
+  courtBounds.z0 = Math.min(courtBounds.z0, z); courtBounds.z1 = Math.max(courtBounds.z1, z);
+  assert.ok(Math.abs(courtPos.getY(i) - groundAt(x, z) - 0.018) < 1e-6, 'forecourt follows the ground');
+}
+for (const key of Object.keys(forecourt)) assert.ok(Math.abs(courtBounds[key] - forecourt[key]) < 1e-5);
+assert.ok(courtyard.blocks(0, 6), 'forecourt excludes vegetation');
+const courtPosts = courtyardMeshes.find((mesh) => mesh.name === 'path-border-ends').geometry.attributes.position;
+for (let i = 0; i < courtPosts.count; i += 9) {
+  const x = courtPosts.getX(i), z = courtPosts.getZ(i);
+  assert.ok(!(x > forecourt.x0 + 0.1 && x < forecourt.x1 - 0.1 && z > forecourt.z0 + 0.1 && z < forecourt.z1 - 0.1),
+    'border must not obstruct the forecourt interior');
+}
+for (const mesh of meshes.slice(0, 4)) {
+  const pos = mesh.geometry.attributes.position, index = mesh.geometry.index;
+  for (let i = 0; i < index.count; i += 3) {
+    const ids = [index.getX(i), index.getX(i + 1), index.getX(i + 2)];
+    const x = ids.reduce((sum, id) => sum + pos.getX(id), 0) / 3;
+    const z = ids.reduce((sum, id) => sum + pos.getZ(id), 0) / 3;
+    assert.ok(paths.blocks(x, z), 'all rendered paving must exclude plants');
+  }
+}
+assert.ok(paths.blocks(paths.junction.x, paths.junction.z), 'junction excludes plants');
+assert.ok(paths.blocks(pavingOrigin.x, pavingOrigin.z), 'utility paving excludes plants');
+const fitted = fitTreePlots([{ x: paths.junction.x, z: paths.junction.z, r: 0.3 }, { x: -18, z: -10, r: 0.1 }],
+  paths.blocks, (x, z) => Math.abs(x) > 19 || Math.abs(z) > 12);
+assert.ok(!paths.blocks(fitted[0].x, fitted[0].z, 1.1), 'tree roots must clear the paving and border');
+assert.deepEqual(fitted[1], { x: -18, z: -10, r: 0.1 }, 'trees clear of paths stay in place');
+const random = Math.random;
+Math.random = () => 0.5;
+const tuftAtlas = { material: null, cols: 1, rows: 1, aspect: 1, heights: [[1, 1]], rank: [0], turning: false };
+const allowedTuft = makeTufts(tuftAtlas, 1, 1, () => 1);
+let clearance = 0;
+const blockedTuft = makeTufts(tuftAtlas, 1, 1, () => 1, { exclude: (_x, _z, r) => { clearance = r; return true; } });
+Math.random = random;
+assert.ok(allowedTuft.geometry.attributes.position.count > 0);
+assert.equal(blockedTuft.geometry.attributes.position.count, 0);
+assert.ok(clearance >= 1.28, 'clearance includes card width and maximum wind sway');
 for (const [a, b] of unionEdges) for (let t = 0; t <= 1; t += 0.05) {
   const x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t;
   assert.ok(unionPosts.some((p) => Math.hypot(x - p.x, z - p.z) < 0.08),
@@ -197,12 +255,15 @@ const circle = Array.from({ length: 32 }, (_, i) => ({
 }));
 shapes.push({ polygon: circle, edges: segmentPairs([...circle, circle[0]]) });
 shapes.push({ polygon: pavingOutline, edges: segmentPairs(pavingOutline).filter(([a, b]) =>
-  !(Math.abs(a.x - yards[0].pad.x) < 1e-5 && Math.abs(b.x - yards[0].pad.x) < 1e-5)) });
+  !(Math.abs(a.x - yards[0].pad.x) < 1e-5 && Math.abs(b.x - yards[0].pad.x) < 1e-5
+    && Math.abs(a.z - yards[0].pad.z) <= 0.9 + 1e-5 && Math.abs(b.z - yards[0].pad.z) <= 0.9 + 1e-5)) });
 for (const [a, b] of exposedPavingEdges(shapes)) {
   const n = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 0.04);
   for (let i = 0; i <= n; i++) {
     const x = a.x + (b.x - a.x) * i / n, z = a.z + (b.z - a.z) * i / n;
-    assert.ok(posts.some((p) => Math.hypot(x - p.x, z - p.z) < 0.08),
+    const atEntry = Math.abs(x - yards[0].pad.x) < 0.11 && Math.abs(Math.abs(z - yards[0].pad.z) - 0.9) < 0.11;
+    const tolerance = atEntry ? 0.11 : 0.08;
+    assert.ok(posts.some((p) => Math.hypot(x - p.x, z - p.z) < tolerance),
       `uncovered paving boundary at ${x.toFixed(2)}, ${z.toFixed(2)}`);
   }
 }

@@ -44,6 +44,7 @@ const MAT = {
 };
 export const gasPostMaterial = MAT.post;
 const FEET = 5; // картинок цемента в ряд
+export const gasArchOuterPost = (gate) => gate + ARCH.w / 2 + MAIN.r + ARCH.low + 0.5;
 
 // Где отвод входит в бок дома: глухой бок (без двери), ближнее к улице место между окнами, углами и выпусками
 // пятой стены. Всё — в метрах двора: дом стоит в at фасадом к улице (+z), at.y — земля под ним; fence — где забор
@@ -100,7 +101,7 @@ export function buildGas({ seed, floor, street, gate, branch }) {
   };
   // Стойки улицы — от арки наружу, у самых колен и дальше через SPAN; у тройника стойку отодвигаем.
   const posts = [];
-  for (let x = a1 + 0.5; x < REACH; x += SPAN) posts.push(x);
+  for (let x = gasArchOuterPost(gate); x < REACH; x += SPAN) posts.push(x);
   for (let x = a0 - 0.5; x > -REACH; x -= SPAN) posts.push(x);
   for (const x of posts) stand(Math.abs(x - branch.x) < 0.3 ? branch.x + Math.sign(x - branch.x || 1) * 0.3 : x, z, MAIN.r, POST.r, 'x');
   // Высокие стойки арки — под перемычкой, сразу за верхними коленами: держат её снизу седлом.

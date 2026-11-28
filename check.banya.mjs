@@ -68,6 +68,9 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const shoreRay = new THREE.Raycaster(new THREE.Vector3(site.x, 10, river.shore(site.x) - 0.15), new THREE.Vector3(0, -1, 0));
   assert.ok(shoreRay.intersectObject(grassGround).length, 'под настилом у уреза есть земля');
   const banya = buildBanya(site, river, power, { plan: house, at: atHouse });
+  assert.deepEqual(site.approach, banya.approach, 'planned and built stair approaches agree');
+  assert.deepEqual(site.approachGuide, banya.approachGuide, 'planned and built stair guides agree');
+  assert.equal(site.approachWidth, banya.approachWidth, 'planned and built stair widths agree');
   const banyaLogs = banya.group.children[0].material;
   assert.ok(banyaLogs[0] !== LOG_MATERIAL && banyaLogs[1] !== END_MATERIAL
     && banyaLogs[0].map === LOG_MATERIAL.map && banyaLogs[1].map === END_MATERIAL.map

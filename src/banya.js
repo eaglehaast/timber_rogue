@@ -14,6 +14,14 @@ const UP = new THREE.Vector3(0, 1, 0);
 const BANYA_FRAME = { deck: 0.035, beam: 0.2, pile: 0.24, pileSpacing: 1.35, joistSpacing: 0.85, pileDrive: 0.4 };
 const ROOF_SUPPORT_CLEARANCE = 0.025, ROOF_BOARD_THICKNESS = 0.022;
 const BANYA_LOGS = logMaterials(2.4), BANYA_GABLE = TONES.gable.clone().multiplyScalar(2.2);
+const SIDE_OUTER = W / 2 + 1.65, SIDE_BACK = 0.9, STAIR_RUN = 1.2;
+function stairApproach({ x, z, angle }) {
+  const stairX = (W / 2 + R + 0.02 + SIDE_OUTER) / 2;
+  const at = (lz) => ({ x: x + Math.cos(angle) * stairX + Math.sin(angle) * lz,
+    z: z - Math.sin(angle) * stairX + Math.cos(angle) * lz });
+  return { approach: at(SIDE_BACK + STAIR_RUN), approachGuide: at(SIDE_BACK + STAIR_RUN + 1.6),
+    approachWidth: SIDE_OUTER - (W / 2 + R + 0.02) };
+}
 // Сруб параллелен касательной к нашему берегу; его площадка не выравнивает сам берег.
 export function planBanya(seed, river, side) {
   const x = side * 10, angle = -Math.atan(river.slope(x));
@@ -21,7 +29,7 @@ export function planBanya(seed, river, side) {
   const c = Math.cos(angle), s = Math.sin(angle);
   const extent = Math.abs(c) * (W / 2 + 0.35) + Math.abs(s) * (D / 2 + 0.35);
   const depth = Math.abs(s) * (W / 2 + 0.35) + Math.abs(c) * (D / 2 + 0.35);
-  return { seed, x, z, angle, pad: { x, z, w: 2 * extent, d: 2 * depth } };
+  return { seed, x, z, angle, pad: { x, z, w: 2 * extent, d: 2 * depth }, ...stairApproach({ x, z, angle }) };
 }
 
 export function buildBanya(site, river, power, house) {
@@ -54,7 +62,7 @@ export function buildBanya(site, river, power, house) {
   const across = new THREE.Vector2(Math.cos(angle), -Math.sin(angle));
   const shore = river.shore(start.x);
   const length = Math.max(2.5, (start.y - shore) / Math.cos(angle) + 0.8);
-  const riverEnd = front - length, sideOuter = W / 2 + 1.65, sideBack = 0.9;
+  const riverEnd = front - length, sideOuter = SIDE_OUTER, sideBack = SIDE_BACK;
   const deckTop = base + top;
   const deckPlan = { seed: seed + 211, start, along, across, top: deckTop, length, land: 0, width: W, riverEnd, sideOuter, sideBack };
   const dock = buildBanyaDeck(seed + 211, { top, front, riverEnd, sideBack, sideOuter, site, base, river });
@@ -72,7 +80,7 @@ export function buildBanya(site, river, power, house) {
     - (beamRadius + ROOF_BOARD_THICKNESS + ROOF_SUPPORT_CLEARANCE) / Math.cos(roofShape.pitch);
   // Боковая площадка огибает сруб и выводит лестницу на сухую сторону, вдоль стены.
   const x0 = W / 2 + R + 0.02, x1 = sideOuter;
-  const stairWidth = x1 - x0, stairRun = 1.2, stairX = (x0 + x1) / 2;
+  const stairWidth = x1 - x0, stairRun = STAIR_RUN, stairX = (x0 + x1) / 2;
   const foot = localToWorld(stairX, sideBack + stairRun);
   const approachGuide = localToWorld(stairX, sideBack + stairRun + 1.6);
   let footY = -Infinity;

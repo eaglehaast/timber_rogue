@@ -3,7 +3,7 @@ import { planHouse, buildHouse, R, PLINTH } from './house.js';
 import { porchStairWidth } from './porch.js';
 import { generator } from './random.js';
 import { makeFence, YARD, GATES, WICKET } from './fence.js';
-import { planGas, buildGas } from './gas.js';
+import { planGas, buildGas, gasArchOuterPost } from './gas.js';
 import { planPower, buildPower } from './power.js';
 import { planRoad, buildRoad } from './road.js';
 import { planLand, buildLand } from './land.js';
@@ -19,7 +19,7 @@ import { EYE, forwardOf } from './player.js';
 import { PHONE, mode } from './device.js';
 import { attachGame, MAPLES } from './main.js';
 import { createWoodyard, PAVING_HALF, yardPavingContains, yardPavingOutline } from './campfire.js';
-import { fitPavingCenter } from './route.js';
+import { fitPavingCenter, fitTreePlots } from './route.js';
 import { planPaths } from './paths.js';
 import { performanceMonitor as perf } from './performance.js';
 
@@ -43,6 +43,7 @@ const PALISADE = [1.5, 2.5], ASIDE = 5;
 const MEADOW = YARD.w; // ширина участка с вертикальными пучками
 const GROUND = 2 * RINGS.far[1]; // плоская земля до кольца панорамы во всех направлениях
 let house = null, yard = null, layout = null;
+const treePlots = MAPLES.map((tree) => ({ ...tree }));
 const animated = [];
 const label = document.getElementById('seed');
 function rebuild(seed) {
@@ -67,11 +68,9 @@ function rebuild(seed) {
     w: PAVING_HALF.z * 2 + 0.8, d: PAVING_HALF.x * 2 + 0.8,
   };
   const banyaSite = planBanya(seed, river, -door);
-  perf.measure('terrain', () => shapeGround(seed, [pad, woodPad, banyaSite.pad, ...MAPLES], YARD.w, YARD.d,
-    { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] }));
-  at.y = height(at.x, at.z);
-  const woodCenter = new THREE.Vector3(woodPad.x, height(woodPad.x, woodPad.z), woodPad.z);
-  game.placeWoodyard(woodCenter, door, -Math.PI / 2);
+  const shape = (trees) => shapeGround(seed, [pad, woodPad, banyaSite.pad, ...trees], YARD.w, YARD.d,
+    { dug: (x, z) => road.dug(x, z) + land.dug(x, z) + river.dug(x, z), calm: river.calm, rows: [...road.rows, ...river.rows] });
+  perf.measure('terrain', () => shape(MAPLES));
   // Узлы сети привязаны к нижней ступени крыльца, краю плитняка у поленницы и нижней ступени бани.
   // Стена с дверью — боковая (left/right): её лицо стоит по X (walls.right.at = +w/2), проём отсчитывается
   // вдоль стены по Z (house.js: turn(s,x,h) = (x+wall.at, h, s)). Площадка без тамбура — глубиной 1.1 м,
@@ -87,36 +86,52 @@ function rebuild(seed) {
   // Плитняк развернут вдоль правого забора; его открытый торец обращён к воротам.
   const padNear = { x: woodPad.x - PAVING_HALF.z, z: woodPad.z };
   const padApproach = { x: padNear.x - 1.2, z: padNear.z };
-  const pier = planPier(river, seed);
-  const pierEntry = pier.entry;
-  const pierGuide = pier.start.clone().addScaledVector(pier.along, -2.0);
+  const forecourt = { x0: at.x + plan.w / 2, x1: gasArchOuterPost(GATES.at),
+    z0: at.z - plan.d / 2, z1: fence };
+  const makePaths = (pier) => {
+    const pierEntry = pier.entry, pierGuide = pier.start.clone().addScaledVector(pier.along, -2.0);
+    return planPaths({
+      seed, gate: { x: GATES.at, z: fence - 0.18 }, porch, porchApproach, porchWidth: porchStairWidth(plan.tambour), pad: padNear, padApproach,
+      pavingOrigin: woodPad, pavingOutline: yardPavingOutline.map((p) => ({ x: p.x + woodPad.x, z: p.z + woodPad.z })),
+      bath: banyaSite.approach, bathApproach: banyaSite.approachGuide, bathWidth: banyaSite.approachWidth,
+      pier: { x: pierEntry.x, z: pierEntry.y }, pierApproach: { x: pierGuide.x, z: pierGuide.y },
+      pierWidth: pier.width, pierEntrySurface: pier.entrySurface,
+      utilityPierStart: { x: woodPad.x, z: woodPad.z - PAVING_HALF.x + 1.2 },
+      house: { x: pad.x, z: pad.z, w: pad.w, d: pad.d },
+      forecourt,
+    });
+  };
+  let pier = planPier(river, seed), paths = makePaths(pier);
+  const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
+  const fitted = fitTreePlots(MAPLES, paths.blocks, (x, z, r) =>
+    Math.abs(x) + r >= YARD.w / 2 || z + r >= fence || z - r <= river.brow(x) + 0.5
+    || inside(x, z, pad, pad.w + 2 * r, pad.d + 2 * r)
+    || inside(x, z, woodPad, woodPad.w + 2 * r, woodPad.d + 2 * r)
+    || inside(x, z, banyaSite.pad, banyaSite.pad.w + 2 * r + 3.3, banyaSite.pad.d + 2 * r + 3.3));
+  treePlots.splice(0, treePlots.length, ...fitted);
+  if (fitted.some((tree, i) => tree.x !== MAPLES[i].x || tree.z !== MAPLES[i].z)) {
+    perf.measure('terrain', () => shape(treePlots));
+    pier = planPier(river, seed);
+    paths = makePaths(pier);
+  }
+  at.y = height(at.x, at.z);
+  const woodCenter = new THREE.Vector3(woodPad.x, height(woodPad.x, woodPad.z), woodPad.z);
+  game.placeWoodyard(woodCenter, door, -Math.PI / 2);
   const gas = planGas(plan, at, { fence, gate: GATES.at });
   const power = planPower(plan, at, gas, { fence, keep: [WICKET, GATES, road.keep] });
-  const { banya, paths } = perf.measure('banya', () => {
-    const banya = buildBanya(banyaSite, river, power, { plan, at });
-    const paths = planPaths({
-    seed, gate: { x: GATES.at, z: fence - 0.18 }, porch, porchApproach, porchWidth: porchStairWidth(plan.tambour), pad: padNear, padApproach,
-    pavingOrigin: woodPad, pavingOutline: yardPavingOutline.map((p) => ({ x: p.x + woodPad.x, z: p.z + woodPad.z })),
-    bath: banya.approach, bathApproach: banya.approachGuide, bathWidth: banya.approachWidth,
-    pier: { x: pierEntry.x, z: pierEntry.y }, pierApproach: { x: pierGuide.x, z: pierGuide.y },
-    pierWidth: pier.width, pierEntrySurface: pier.entrySurface,
-    utilityPierStart: { x: woodPad.x, z: woodPad.z - PAVING_HALF.x + 1.2 },
-    house: { x: pad.x, z: pad.z, w: pad.w, d: pad.d },
-    });
-    return { banya, paths };
-  });
+  const banya = perf.measure('banya', () => buildBanya(banyaSite, river, power, { plan, at }));
   house.position.set(at.x, at.y, at.z);
   // Вертикальные пучки растут только во дворе, от улицы до реки.
-  const inside = (x, z, c, w, d) => Math.abs(x - c.x) < w / 2 && Math.abs(z - c.z) < d / 2;
   const lawn = (x, z) => (Math.abs(x) < YARD.w / 2 && z < fence && z > river.shore(x) ? 1 : 0);
   const grass = (x, z) => {
     if (inside(x, z, pad, pad.w, pad.d) || yardPavingContains(x - woodPad.x, z - woodPad.z)
       || banya.blocks(x, z) || banya.deck(x, z) > -Infinity || pier.deck(x, z) > -Infinity
-      || MAPLES.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
+      || treePlots.some((tree) => Math.hypot(x - tree.x, z - tree.z) < 0.8)) return 0;
     return road.grass(x, z) * lawn(x, z) * river.grass(x, z) * paths.grass(x, z) * (1 - field.cover(x, z));
   };
   const meadow = perf.measure('meadow', () => makeMeadow(grass, MEADOW, GROUND,
-    { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush }));
+    { trodden: (x, z) => Math.max(road.trodden(x, z), river.trodden(x, z), paths.trodden(x, z)), lush: land.lush,
+      exclude: paths.blocks }));
   yard = perf.measure('yard', () => new THREE.Group().add(meadow,
     perf.measure('fence', () => makeFence({ open: river.shore })),
     ...perf.measure('utilities', () => [buildGas(gas), buildPower(power)]),
@@ -125,7 +140,7 @@ function rebuild(seed) {
     ...perf.measure('river', () => [buildRiver(river, MEADOW), buildPier(pier)]),
     banya.group, banya.dock, banya.powerLine,
     perf.measure('field', () => buildField(field)), perf.measure('paths', () => paths.build())));
-  layout = { at, gas, power, road, pier, pad, river, paths, banya };
+  layout = { at, gas, power, road, pier, pad, river, paths, banya, treePlots, forecourt };
   scene.add(house, yard);
   animated.length = 0;
   for (const group of [house, yard]) group.traverse(part => { if (part.tick) animated.push(part); });
@@ -152,7 +167,7 @@ function walkable(x, z) {
   if (banya.blocks(x, z)) return false;
   return pier.deck(x, z) > -Infinity || banya.deck(x, z) > -Infinity || (z >= river.shore(x) && height(x, z) >= river.level(x));
 }
-const game = attachGame({ scene, camera, ground, groundNormal, walkable, createWoodyard });
+const game = attachGame({ scene, camera, ground, groundNormal, walkable, createWoodyard, treePlots });
 // Точка появления — у фактических ворот забора; её задаёт rebuild() после каждого нового участка.
 let spawnPoint = null;
 const spawn = () => spawnPoint ?? { x: GATES.at, z: YARD.d / 2 - 0.7 };
