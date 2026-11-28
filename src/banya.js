@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { planHouse, buildHouse, R, COURSE, PLINTH, LOG_MATERIAL } from './house.js';
+import { planHouse, buildHouse, R, COURSE, PLINTH, logMaterials } from './house.js';
 import { PANE, LINING } from './window.js';
 import { buildDoor, buildRailSegments } from './porch.js';
 import { Planks, boardMaterials, TONES, buildRoofExtension } from './attic.js';
@@ -13,6 +13,7 @@ const W = 4, D = 4, POLE_HEIGHT = 2, SPAN = 4;
 const UP = new THREE.Vector3(0, 1, 0);
 const BANYA_FRAME = { deck: 0.035, beam: 0.2, pile: 0.24, pileSpacing: 1.35, joistSpacing: 0.85, pileDrive: 0.4 };
 const ROOF_SUPPORT_CLEARANCE = 0.025, ROOF_BOARD_THICKNESS = 0.022;
+const BANYA_LOGS = logMaterials(2.4), BANYA_GABLE = TONES.gable.clone().multiplyScalar(2.2);
 // Сруб параллелен касательной к нашему берегу; его площадка не выравнивает сам берег.
 export function planBanya(seed, river, side) {
   const x = side * 10, angle = -Math.atan(river.slope(x));
@@ -34,8 +35,9 @@ export function buildBanya(site, river, power, house) {
     openings: [door, window('left', 0), window('right', 0)], parts: new Set(['roof', 'chimney']),
     carving: null, attic: null, roof: 'tes', plinth: 'brick', tambour: false, noPorch: true,
     plainWindows: true, curtains: false, sashColor: 0x241912, windowBacking: 0x30231c, backingMargin: COURSE + LINING + 0.02,
+    gableTone: BANYA_GABLE,
     plinthHeight: PLINTH + 0.06, plinthOut: 0.025, plinthCap: true, noDrip: true };
-  const group = buildHouse(plan);
+  const group = buildHouse(plan, { logs: BANYA_LOGS });
   group.position.set(x, base, z);
   group.rotation.y = angle;
   const localToWorld = (lx, lz) => new THREE.Vector2(x + Math.cos(angle) * lx + Math.sin(angle) * lz,
@@ -290,8 +292,7 @@ function buildBanyaRafters(shape, startZ, endZ, rnd) {
 
 function buildRoofSupports(z, startZ, x, floor, shape) {
   const group = new THREE.Group(), radius = R * 1.08, roofClearance = ROOF_SUPPORT_CLEARANCE;
-  const timberMaterial = LOG_MATERIAL.clone();
-  timberMaterial.color.multiplyScalar(1.25);
+  const timberMaterial = BANYA_LOGS[0];
   const beam = (a, b) => {
     const direction = b.clone().sub(a), length = direction.length();
     const geometry = new THREE.CylinderGeometry(radius, radius, length, 12);

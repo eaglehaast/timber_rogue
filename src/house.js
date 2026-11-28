@@ -55,10 +55,11 @@ const SINK = 0.05, DAMP = 0.6;
 const [logMap, endMap, chinkMap] = tiles(['assets/textures/house-log.jpg', 'assets/textures/house-endgrain.jpg', 'assets/textures/house-chinking.jpg']);
 export const ENDS = await (await fetch('assets/textures/house-endgrain.json')).json();
 const LOOK = { contrast: 0.7, saturation: 0.65, scales: [0.3, 1.1], low: [0.8, 0.8, 0.8], high: [1.08, 1.04, 1.0] };
-const materials = [
-  soften(new THREE.MeshLambertMaterial({ map: logMap }), { ...LOOK, cells: [5, 2] }),
-  soften(new THREE.MeshLambertMaterial({ map: endMap }), LOOK),
+export const logMaterials = (tone = 1) => [
+  soften(new THREE.MeshLambertMaterial({ map: logMap, color: new THREE.Color().setScalar(tone) }), { ...LOOK, cells: [5, 2] }),
+  soften(new THREE.MeshLambertMaterial({ map: endMap, color: new THREE.Color().setScalar(tone) }), LOOK),
 ];
+const materials = logMaterials();
 export const LOG_MATERIAL = materials[0];
 export const END_MATERIAL = materials[1];
 // Пакля — жгут в пазу между венцами снаружи: половина трубки радиуса CHINK.r, торчит из паза на CHINK.out.
@@ -158,7 +159,7 @@ export function blind(plan, wall, clear) {
 
 // Дом по плану: сруб (бок и торцы брёвен — две группы граней со своими материалами), цоколь,
 // а над срубом и у цоколя — дощатые части (attic.js).
-export function buildHouse(plan) {
+export function buildHouse(plan, { logs = materials } = {}) {
   const { seed, w, d, courses, openings } = plan;
   const rnd = generator(seed + 1);
   const parts = { pos: [], normal: [], uv: [], side: [], end: [] };
@@ -206,7 +207,7 @@ export function buildHouse(plan) {
   geometry.setIndex([...parts.side, ...parts.end]);
   geometry.addGroup(0, parts.side.length, 0);
   geometry.addGroup(parts.side.length, parts.end.length, 1);
-  const srub = new THREE.Mesh(geometry, materials);
+  const srub = new THREE.Mesh(geometry, logs);
   srub.castShadow = srub.receiveShadow = true;
   const chinkGeometry = new THREE.BufferGeometry();
   for (const [name, size] of [['position', 3], ['normal', 3], ['uv', 2]]) chinkGeometry.setAttribute(name, new THREE.Float32BufferAttribute(chink[name === 'position' ? 'pos' : name], size));
