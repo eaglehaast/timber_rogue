@@ -144,32 +144,43 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   assert.equal(roofPosts.length, 2, 'продольные балки стоят на двух несущих стойках');
   assert.equal(roofCrossbeams.length, roofSupports.userData.crossbeam ? 1 : 0,
     'торцевая связь устанавливается только при достаточном проходе под ней');
-  assert.ok([...roofBeams, ...roofPosts, ...roofCrossbeams].every((part) => part.material.map === LOG_MATERIAL.map
-    && part.material.color.r > LOG_MATERIAL.color.r
-    && part.geometry.type === 'CylinderGeometry'), 'кровельные балки и стойки выполнены из брёвен');
+  assert.ok([...roofBeams, ...roofPosts, ...roofCrossbeams].every((part) =>
+    part.material.length === 2 && part.material[0].map === LOG_MATERIAL.map
+    && part.material[1].map === END_MATERIAL.map
+    && part.material[0].color.r > LOG_MATERIAL.color.r
+    && part.geometry.groups.length === 2), 'кровельные балки и стойки используют текстуры боков и торцов брёвен сруба');
   for (const beam of roofBeams) {
-    beam.updateMatrix();
     const vertices = beam.geometry.getAttribute('position'), roof = roofSupports.userData.roofShape;
-    const beamEnd = beam.position.z - beam.geometry.parameters.height / 2;
-    assert.ok(Math.abs(beamEnd - verandaPlan.riverEnd - 0.25) < 1e-4,
+    const beamEnd = beam.userData.logSegment.to[2];
+    assert.ok(Math.abs(beamEnd - verandaPlan.riverEnd) < 1e-4,
       `балка заканчивается над своей опорой, внутри контура кровли: seed ${seed}, end ${beamEnd}, river ${verandaPlan.riverEnd}`);
-    assert.ok(beamEnd > roofSupports.userData.roofEndZ + 0.4,
+    assert.ok(beamEnd > roofSupports.userData.roofEndZ + 0.2,
       'торец балки утоплен от края кровли, а не выступает из ската');
     for (let i = 0; i < vertices.count; i++) {
-      const local = new THREE.Vector3().fromBufferAttribute(vertices, i).applyMatrix4(beam.matrix);
+      const local = new THREE.Vector3().fromBufferAttribute(vertices, i);
       const clearance = (roof.ridge - Math.abs(local.x) * Math.tan(roof.pitch) - local.y) * Math.cos(roof.pitch)
         - 0.022;
       assert.ok(clearance >= roofSupports.userData.roofClearance - 1e-4,
         `весь объём балки под скатом: seed ${seed}, clearance ${clearance}`);
     }
   }
-  assert.ok(roofBeams.some((beam) => beam.position.x < 0) && roofBeams.some((beam) => beam.position.x > 0),
+  assert.ok(roofBeams.some((beam) => beam.userData.logSegment.from[0] < 0)
+    && roofBeams.some((beam) => beam.userData.logSegment.from[0] > 0),
     'балки стоят под обоими скатами');
   assert.equal(veranda.name, 'banya-veranda-deck');
   assert.ok(veranda.children.length > 0 && veranda.userData.piles.length >= 8, 'настил опирается на отдельный каркас и сваи');
   for (const post of roofPosts) {
-    assert.ok(veranda.userData.piles.some((pile) => Math.abs(pile.x - post.position.x) < 1e-5
-      && Math.abs(pile.z - post.position.z) < 1e-5), 'стойка крыши передаёт нагрузку на сваю под настилом');
+    const [postX, , postZ] = post.userData.logSegment.from;
+    assert.ok(veranda.userData.piles.some((pile) => Math.abs(pile.x - postX) < 1e-5
+      && Math.abs(pile.z - postZ) < 1e-5), 'стойка крыши передаёт нагрузку на сваю под настилом');
+  }
+  const railPosts = dockRails.children.at(-1).geometry.getAttribute('position');
+  for (const { x, z } of dockRails.userData.structuralPosts) {
+    let duplicateVertices = 0;
+    for (let i = 0; i < railPosts.count; i++) {
+      if (Math.abs(railPosts.getX(i) - x) < 0.16 && Math.abs(railPosts.getZ(i) - z) < 0.16) duplicateVertices++;
+    }
+    assert.equal(duplicateVertices, 0, 'бревно крыши заменяет декоративную стойку ограждения в той же точке');
   }
   for (const pile of veranda.userData.piles) {
     assert.ok(pile.bottom <= pile.ground - 0.39, `свая заглублена в точке установки: seed ${seed}`);
