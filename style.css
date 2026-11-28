@@ -75,6 +75,9 @@ body.touch .desktop-only, body:not(.touch) .touch-only { display: none; }
 #flight.walking :is(a,#seed,#keys,#another) { display: none; }
 #loading { inset: 0; display: grid; align-content: center; justify-items: center; gap: 12px; background: #243228; }
 #loading a { color: var(--paper); text-underline-offset: 3px; }
+#performance { position: absolute; z-index: 4; top: 5px; right: 5px; max-width: min(360px, 85%); color: #fff3dc; font: 11px/1.35 system-ui, sans-serif; background: #19251fec; border: 1px solid #bfc3ad70; border-radius: 4px; }
+#performance summary { display: block; width: auto; height: auto; padding: 5px 8px; border: 0; background: transparent; text-align: right; }
+#performance pre { overflow: auto; max-height: 65cqh; white-space: pre-wrap; margin: 0; padding: 4px 8px 8px; font: inherit; font-variant-numeric: tabular-nums; user-select: text; }
 #orientation { display: none; }
 @media (orientation: portrait) { #orientation:not([hidden]) { position: fixed; bottom: max(6svh, env(safe-area-inset-bottom)); width: 100%; text-align: center; padding: 0 24px; display: block; color: #d2d9cd; } }
 

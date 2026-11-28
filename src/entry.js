@@ -1,5 +1,6 @@
 import { mode, PHONE } from './device.js';
 import { addBenchArt } from './hud-bench-art.js';
+import { performanceMonitor as perf, showPerformancePanel } from './performance.js';
 
 if (PHONE && mode !== 'game') {
   location.replace('./#stands');
@@ -8,9 +9,12 @@ if (PHONE && mode !== 'game') {
   document.body.classList.toggle('touch', PHONE);
   document.querySelector('#orientation').hidden = !PHONE;
   const loading = document.querySelector('#loading');
+  const performancePanel = mode === 'game' || mode === 'fly' ? showPerformancePanel() : null;
   try {
-    const { setupHud } = await import('./hud-layout.js');
-    const hud = await setupHud();
+    const hud = await perf.measureAsync('hud', async () => {
+      const { setupHud } = await import('./hud-layout.js');
+      return setupHud();
+    });
     addBenchArt(hud.base);
     if (mode === 'hud') {
       document.title = 'Редактор HUD · Timber Rogue';
@@ -45,13 +49,17 @@ if (PHONE && mode !== 'game') {
         loading.firstElementChild.textContent = `Загружаем двор · ${done} / ${total}`;
         if (done === total) images.onLoad?.();
       };
-      const { startYard } = await import('./house-view.js');
-      await Promise.race([loaded, new Promise(resolve => setTimeout(resolve, 5000))]);
+      const { startYard } = await perf.measureAsync('modules', () => import('./house-view.js'));
+      perf.textureWaitTimedOut = await perf.measureAsync('textures', () => new Promise(resolve => {
+        const timer = setTimeout(() => resolve(true), 5000);
+        loaded.then(() => { clearTimeout(timer); resolve(false); });
+      }));
       images.onStart = images.onLoad = images.onError = images.onProgress = undefined;
       if (failed) throw new Error(`Не загрузился рисунок ${failed}`);
-      await Promise.all([...document.querySelectorAll('.hud-art img')].map(img => img.decode()));
+      await perf.measureAsync('images', () => Promise.all([...document.querySelectorAll('.hud-art img')].map(img => img.decode())));
       loading.firstElementChild.textContent = 'Готовим первый кадр…';
       await startYard();
+      performancePanel.ready();
     }
     loading.hidden = true;
   } catch (error) {
