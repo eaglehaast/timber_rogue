@@ -22,6 +22,7 @@ import { wind, gust } from './wind.js';
 import { classifyLimbBody, dragBranch, haulSpeed, HOLD_DROP_LOW, PICK_RANGE } from './wood-handling.js';
 import { advanceLadderClimb, buildLadder, findLadderPlacement, LADDER_ATTACH_HEIGHT, ladderClimbPosition } from './ladder.js';
 import { createWinch, findWinchTarget } from './winch.js';
+import { glueMaple, stillMaterials } from './still-maple.js';
 
 let woodyard = null;
 // Где игрок появляется при выборе «Игра» — задаёт house-view.js: у ворот, с внутренней стороны двора.
@@ -241,7 +242,7 @@ function regrow(rnd = Math.random) {
   for (const tree of trees) {
     tree.root.removeFromParent();
     tree.root.traverse((object) => object.geometry?.dispose());
-    for (const material of [...tree.bark, ...tree.skin]) material.dispose();
+    for (const material of [...tree.bark, ...tree.skin, tree.stillLook.bark, tree.stillLook.leaf]) material.dispose();
     tree.bark[0].map.dispose();
   }
   saw = null;
@@ -304,6 +305,16 @@ function newRound(slot, treeSeed) {
   });
   standUp((1 << tree.stems.length) - 1);
   root.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+  // Склейка нетронутого клёна (still-maple.js): какие ветки и сетки в неё вошли и докуда ветки достают в плане.
+  const limbs = limbsOf(round);
+  round.dressing = new Map(limbs.map((l) => [l, l.meshes[0]]));
+  round.stillLook = stillMaterials(tree.skin[0], limbs[0].meshes[1].material);
+  round.spread = Math.max(...limbs.map((l) => {
+    const { center, radius } = l.meshes[1].geometry.boundingSphere ?? (l.meshes[1].geometry.computeBoundingSphere(), l.meshes[1].geometry.boundingSphere);
+    return Math.hypot(center.x, center.z) + radius;
+  }));
+  round.still = null;
+  glue(round);
 
 }
 
@@ -334,6 +345,42 @@ function uncarve(tree) {
   tree.root.add(tree.plain.group);
   tree.voxels = tree.plain;
   mapleCost.carved--;
+}
+
+// Нетронутый клён издали рисуется склейкой (still-maple.js): кора всех веток и листва — по одной сетке.
+// Подошёл игрок ближе, чем ветки достают, плюс STILL_NEAR — склейку убираем, ветки рисуются сами.
+const STILL_NEAR = 4; // м
+function glue(tree) {
+  const limbs = limbsOf(tree);
+  tree.still = glueMaple({
+    crowns: tree.stems.map((s) => ({ pivot: s.bend.position, limbs: [s.crown, ...s.lows.filter((l) => l.crownBranch).map((l) => l.limb)] })),
+    lows: tree.stems.flatMap((s) => s.lows.filter((l) => !l.crownBranch).map((l) => l.limb)),
+    base: tree.base, arm: tree.com.y - ZONE_H, materials: tree.stillLook,
+  });
+  tree.root.add(...tree.still);
+  for (const limb of limbs) for (const mesh of limb.meshes) mesh.visible = false;
+}
+
+function unglue(tree) {
+  for (const mesh of tree.still) {
+    mesh.removeFromParent();
+    mesh.geometry.dispose();
+  }
+  tree.still = null;
+  for (const limb of limbsOf(tree)) for (const mesh of limb.meshes) mesh.visible = true;
+}
+
+// Клён таков, каким вырос: ствол не пилен, все ветки на месте, целые и без пропилов.
+function untouched(tree) {
+  if (tree.voxels !== tree.plain || tree.standing !== (1 << tree.stems.length) - 1 || tree.fall || tree.top) return false;
+  const limbs = limbsOf(tree);
+  return limbs.length === tree.dressing.size && limbs.every((l) => tree.dressing.get(l) === l.meshes[0] && !l.kerfs.length);
+}
+
+function regroup(tree) {
+  const near = Math.hypot(player.pos.x - tree.base.x, player.pos.z - tree.base.z) < tree.spread + STILL_NEAR;
+  if (tree.still && near) unglue(tree);
+  else if (!tree.still && !near && untouched(tree)) glue(tree);
 }
 
 // Стоят стволы standing (маска по номерам): их ещё не валили, и пилить можно заново. Верх над пропилом
@@ -1906,6 +1953,7 @@ function updateTrees(dt) {
     round.gap = null;
     round.squeeze = false;
     if (tree !== here && tree.voxels instanceof TrunkVoxels && tree.voxels.version === 0) uncarve(tree);
+    regroup(tree);
     if (!round.top) stand(dt);
     else if (round.slide) slideTop(dt);
     if (round.fall && !round.done) {
