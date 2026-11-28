@@ -292,9 +292,11 @@ export function buildRoofExtension(plan, { ridge, pitch, length, zEnd }, endZ) {
   const normals = [-1, 1].map((s) => new THREE.Vector3(s * Math.sin(pitch), Math.cos(pitch), 0));
   for (let side = 0; side < 2; side++) {
     const X = Xs[side], n = normals[side], Y = new THREE.Vector3(0, 0, 1);
+    const ridgeLap = 0.045, boardLap = 0.018;
     for (let z0 = -zEnd; z0 > endZ; z0 -= ROOF_BOARD) {
       const z1 = Math.max(endZ, z0 - ROOF_BOARD), o = new THREE.Vector3(0, ridge, 0).addScaledVector(n, ((Math.round((-z0 - zEnd) / ROOF_BOARD)) % 2) * 0.012);
-      roof.add([[0, z0], [length, z0], [length, z1], [0, z1]], { o, X, Y }, n, [1, 0], ROOF_BOARD, rnd);
+      roof.add([[-ridgeLap, z0 + boardLap], [length, z0 + boardLap],
+        [length, z1 - boardLap], [-ridgeLap, z1 - boardLap]], { o, X, Y }, n, [1, 0], ROOF_BOARD, rnd);
     }
     if (plan.roof === 'tes') {
       const o = new THREE.Vector3(0, ridge, 0).addScaledVector(n, 0.012 + T);

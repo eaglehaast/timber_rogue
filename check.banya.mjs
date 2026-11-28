@@ -79,10 +79,54 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
     'перила используют резные балясины и столбы из набора крыльца');
   const roofExtension = banya.group.getObjectByName('banya-roof-extension');
   const roofRafters = banya.group.getObjectByName('banya-roof-rafters');
+  const ridgeBeam = roofRafters.getObjectByName('banya-roof-ridge-beam');
   const roofSupports = banya.group.getObjectByName('banya-roof-supports');
+  const veranda = banya.dock, verandaPlan = veranda.userData.plan;
   assert.ok(roofExtension.children.length > 0 && roofRafters.children.length > 0, 'общая крыша продолжается над верандой на стропилах');
-  assert.ok(roofSupports.children.length >= 4 && roofSupports.children.every((post) => post.material === LOG_MATERIAL
-    && post.geometry.type === 'CylinderGeometry'), 'навес поддерживают круглые бревна в цвет сруба');
+  assert.ok(ridgeBeam?.children.length > 0, 'у конька есть непрерывная подшивная балка без щели к небу');
+  ridgeBeam.updateMatrixWorld(true);
+  const ridgeBounds = new THREE.Box3().setFromObject(ridgeBeam);
+  assert.ok(ridgeBounds.min.y > roofRafters.userData.roofShape.ridge - 0.2
+    && ridgeBounds.max.y < roofRafters.userData.roofShape.ridge,
+  `коньковая балка остаётся целиком под скатами: seed ${seed}, bounds ${ridgeBounds.min.y}..${ridgeBounds.max.y}, ridge ${roofRafters.userData.roofShape.ridge}`);
+  const roofBeams = roofSupports.children.filter((part) => part.name === 'banya-roof-longitudinal-beam');
+  const roofPosts = roofSupports.children.filter((part) => part.name === 'banya-roof-post');
+  const roofCrossbeams = roofSupports.children.filter((part) => part.name === 'banya-roof-crossbeam');
+  assert.equal(roofBeams.length, 2, 'под обоими скатами есть продольные балки');
+  assert.equal(roofPosts.length, 2, 'продольные балки стоят на двух несущих стойках');
+  assert.equal(roofCrossbeams.length, roofSupports.userData.crossbeam ? 1 : 0,
+    'торцевая связь устанавливается только при достаточном проходе под ней');
+  assert.ok([...roofBeams, ...roofPosts, ...roofCrossbeams].every((part) => part.material.map === LOG_MATERIAL.map
+    && part.material.color.r > LOG_MATERIAL.color.r
+    && part.geometry.type === 'CylinderGeometry'), 'кровельные балки и стойки выполнены из брёвен');
+  for (const beam of roofBeams) {
+    beam.updateMatrix();
+    const vertices = beam.geometry.getAttribute('position'), roof = roofSupports.userData.roofShape;
+    const beamEnd = beam.position.z - beam.geometry.parameters.height / 2;
+    assert.ok(Math.abs(beamEnd - verandaPlan.riverEnd - 0.25) < 1e-4,
+      `балка заканчивается над своей опорой, внутри контура кровли: seed ${seed}, end ${beamEnd}, river ${verandaPlan.riverEnd}`);
+    assert.ok(beamEnd > roofSupports.userData.roofEndZ + 0.4,
+      'торец балки утоплен от края кровли, а не выступает из ската');
+    for (let i = 0; i < vertices.count; i++) {
+      const local = new THREE.Vector3().fromBufferAttribute(vertices, i).applyMatrix4(beam.matrix);
+      const clearance = (roof.ridge - Math.abs(local.x) * Math.tan(roof.pitch) - local.y) * Math.cos(roof.pitch)
+        - 0.022;
+      assert.ok(clearance >= roofSupports.userData.roofClearance - 1e-4,
+        `весь объём балки под скатом: seed ${seed}, clearance ${clearance}`);
+    }
+  }
+  assert.ok(roofBeams.some((beam) => beam.position.x < 0) && roofBeams.some((beam) => beam.position.x > 0),
+    'балки стоят под обоими скатами');
+  assert.equal(veranda.name, 'banya-veranda-deck');
+  assert.ok(veranda.children.length > 0 && veranda.userData.piles.length >= 8, 'настил опирается на отдельный каркас и сваи');
+  for (const post of roofPosts) {
+    assert.ok(veranda.userData.piles.some((pile) => Math.abs(pile.x - post.position.x) < 1e-5
+      && Math.abs(pile.z - post.position.z) < 1e-5), 'стойка крыши передаёт нагрузку на сваю под настилом');
+  }
+  for (const pile of veranda.userData.piles) {
+    assert.ok(pile.bottom <= pile.ground - 0.39, `свая заглублена в точке установки: seed ${seed}`);
+    assert.ok(pile.top < verandaPlan.beamBottom, 'свая упирается в нижнюю сторону несущей балки');
+  }
   const banyaBench = banya.group.getObjectByName('banya-bench');
   banyaBench.updateMatrixWorld(true);
   const benchBounds = new THREE.Box3().setFromObject(banyaBench);
@@ -99,7 +143,7 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   assert.equal(banya.deck(...at(length / 2, -width / 2 - 0.3).toArray()), -Infinity);
   assert.ok(banya.blocks(site.x, site.z));
   assert.ok(!banya.blocks(middle.x, middle.y));
-  assert.ok(banya.group.getObjectByName('banya-side-landing').children.length > 0, 'боковая площадка построена');
+  assert.ok(banya.dock.children.length > 0, 'единый Г-образный настил построен');
   for (let x = 1.8; x <= 2.9; x += 0.1) {
     assert.ok(!banya.blocks(...worldAtLocal(x, -2.63)), 'проход с основного настила на боковую площадку открыт');
   }
@@ -107,6 +151,25 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
     const point = worldAtLocal(2.93, z), y = banya.deck(...point);
     assert.ok(Number.isFinite(y), 'площадка и лестница соединены');
     assert.ok(!banya.blocks(...point), `проход вдоль бани открыт: seed ${seed}, z ${z}`);
+  }
+  for (let z = verandaPlan.riverEnd + 0.3; z < verandaPlan.sideBack - 0.2; z += 0.12) {
+    for (let x = 2.5; x <= verandaPlan.sideOuter - 0.3; x += 0.12) {
+      const point = worldAtLocal(x, z);
+      assert.equal(banya.deck(...point), banya.deckPlan.top, `угол настила проходим: seed ${seed}, ${x}, ${z}`);
+      assert.ok(!banya.blocks(...point), `угол настила не перекрыт: seed ${seed}, ${x}, ${z}`);
+    }
+  }
+  for (const z of [verandaPlan.riverEnd + 0.2, (verandaPlan.riverEnd + verandaPlan.sideBack) / 2]) {
+    const waterEdge = worldAtLocal(verandaPlan.sideOuter, z);
+    assert.ok(banya.blocks(...waterEdge), 'новый наружный край защищён перилами');
+  }
+  const approachDoor = worldAtLocal(0, verandaPlan.front - 0.1);
+  assert.ok(Number.isFinite(banya.deck(...approachDoor)) && !banya.blocks(...approachDoor),
+    'от Г-образного настила можно подойти к двери');
+  for (let t = 0; t <= 1; t += 0.05) {
+    const point = worldAtLocal(2.4 + t * 0.75, verandaPlan.riverEnd + 0.3 + t * 1.6);
+    assert.ok(Number.isFinite(banya.deck(...point)), `диагональный проход по настилу открыт: seed ${seed}`);
+    assert.ok(!banya.blocks(...point), `диагональный проход не заблокирован: seed ${seed}`);
   }
   let previous = top;
   for (let z = 0.91; z < 2.1; z += 0.03) {
