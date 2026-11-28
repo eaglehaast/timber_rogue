@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { generator, smoothNoise } from './random.js';
-import { KINDS, plantBirches, plantFallen, makeLogs } from './birch.js';
+import { KINDS, plantFallen, makeLogs } from './birch-wood.js';
 import { height } from './terrain.js';
 import { tiles } from './surface.js';
 
-// Местность вокруг двора по плану Никиты (2026-11-08), вся объёмом. Двор — в середине, улица — к +z, всё в метрах двора.
+// Местность вокруг двора по плану Никиты (2026-11-08). Двор — в середине, улица — к +z, всё в метрах двора.
 // Сделано: берёзовая лесополоса за улицей (по фото Никиты из такой полосы). Полоса посажена на пологом валу;
 // берёзы — рядами на гребнях старой вспашки, тесно, между гребнями борозды; посередине широкая просека; весь вал
 // в кочках; у поля — канава. Дальше по плану: поле за канавой, сзади луг к речке и бор, по бокам соседи.
@@ -19,44 +19,60 @@ const PLOW = { ridge: 0.09, furrow: 0.07, half: 1.1, wander: 0.35 };
 const TUSSOCK = { size: 1.3, height: 0.07 };                // кочки от обочины до канавы: размер и высота
 const DITCH = { z: 45.5, half: 1.3, depth: 0.3 };           // канава у поля: середина, полуширина, глубина
 
-// Берёзы (birch.js) — в ряду через step метров, чуть вбок от ряда (jitter), кое-где пропуск; kinds — какие виды
-// и как часто (взрослых больше), рост вида гуляет на ±size.
-const GROVE = { step: [1.8, 3.4], jitter: 0.35, gaps: 0.12, reach: 100, size: 0.1, kinds: [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7] };
-
 // Где в ряду пусто, берёза упала (Никита: в берёзовых посадках падают часто). Доля lying лежит целиком, сухая;
 // остальные уже распилили: пень высотой stump, а там, куда падала, брёвна одной длины log в ряд, крону (taken —
 // выше этой доли роста) увезли. Падают вдоль полосы, вбок — насколько пускает полоса: через улицу не ложатся.
 const FELL = { lying: 0.5, kinds: [0, 1, 2, 3, 4, 5], log: [[1, 1.2], [1.8, 2.4]], stump: [0.15, 0.45], taken: 0.6 };
-// Подрост — молодые берёзки (последние виды KINDS) около рядов: по одной на per м² полосы, до reach м от ряда.
-const UNDER = { kinds: [8, 9, 10], per: 8, reach: 2.2 };
+const REACH = 100;
 
-// Дальние участки лесополосы собираются из рисунков; рядом остаются объёмные деревья.
-const BELT_CHUNK = 20, BELT_DISTANCE = 60;
+// Роща видна через дорогу. Просветы в ближнем ряду открывают два следующих;
+// разница глубин даёт сдвиг крон при ходьбе вдоль забора.
+const PAINTED_ROWS = [
+  { z: 28.5, height: 15, spacing: 22, tint: 0xf1efcf, ambient: 0x343929 },
+  { z: 35.8, height: 17, spacing: 18, tint: 0xd2dfcd, ambient: 0x525f4e },
+  { z: 42.2, height: 18, spacing: 17, tint: 0xb4c9cb, ambient: 0x67796f },
+];
 const beltMaps = tiles(['assets/textures/birch-belt-01.png', 'assets/textures/birch-belt-02.png']);
-const beltMaterials = beltMaps.map((map) => {
-  map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
-  return new THREE.MeshLambertMaterial({ map, alphaTest: 0.35, side: THREE.DoubleSide });
-});
-const beltGeometry = new THREE.PlaneGeometry(26, 19.5);
+for (const map of beltMaps) map.wrapS = map.wrapT = THREE.ClampToEdgeWrapping;
+const beltMaterials = PAINTED_ROWS.map(({ tint, ambient }) => beltMaps.map(map =>
+  new THREE.MeshLambertMaterial({ map, color: tint, emissive: ambient, alphaTest: 0.32, side: THREE.DoubleSide })));
 
-function plantBelt(trees) {
-  const group = new THREE.Group(), chunks = Map.groupBy(trees, (tree) => Math.floor(tree.x / BELT_CHUNK));
-  for (const [chunk, part] of chunks) {
-    const x = (chunk + 0.5) * BELT_CHUNK, z = (BELT.from + BELT.to) / 2;
-    const variant = ((chunk % 4) + 4) % 4;
-    const near = plantBirches(part);
-    near.position.set(-x, 0, -z);
-    const far = new THREE.Mesh(beltGeometry, beltMaterials[[0, 1, 1, 0][variant]]);
-    const scale = [0.96, 1, 1.04, 0.99][variant];
-    far.scale.set(variant < 2 ? scale : -scale, scale, 1);
-    far.position.z = [-0.7, 0.5, -0.3, 0.7][variant];
-    // Стволы в рисунках заканчиваются примерно на 92% высоты холста.
-    far.position.y = height(x, z + far.position.z) + 19.5 * 0.42 * scale;
-    const detail = new THREE.LOD();
-    detail.position.set(x, 0, z);
-    detail.addLevel(near, 0);
-    detail.addLevel(far, BELT_DISTANCE, 0.1);
-    group.add(detail);
+// По одной сетке для каждой иллюстрации в ряду. Нижние углы следуют рельефу,
+// а полоску травы внизу исходного рисунка отсекаем до наложения на землю.
+function plantBelt(seed) {
+  const group = new THREE.Group();
+  group.name = 'birch-belt';
+  const crop = 0.11;
+  for (const [row, layer] of PAINTED_ROWS.entries()) {
+    const rnd = generator(seed + 379 * (row + 1));
+    const batches = beltMaps.map(() => ({ positions: [], uv: [], indices: [] }));
+    for (let x = -REACH + rnd() * layer.spacing; x <= REACH; x += layer.spacing * (0.82 + rnd() * 0.36)) {
+      const batch = batches[Math.floor(rnd() * batches.length)];
+      const h = layer.height * (0.83 + rnd() * 0.32);
+      const halfWidth = h * (4 / 3) * (0.93 + 0.14 * rnd()) / 2;
+      const angle = (rnd() - 0.5) * 0.48;
+      const z = layer.z + (rnd() - 0.5) * 1.4;
+      const flip = rnd() < 0.5;
+      const first = batch.positions.length / 3;
+      for (const side of [-1, 1]) {
+        const px = x + side * halfWidth * Math.cos(angle);
+        const pz = z + side * halfWidth * Math.sin(angle);
+        const base = height(px, pz) - 0.16;
+        const u = (side > 0) !== flip ? 1 : 0;
+        batch.positions.push(px, base, pz, px, base + h * (1 - crop), pz);
+        batch.uv.push(u, crop, u, 1);
+      }
+      batch.indices.push(first, first + 1, first + 2, first + 2, first + 1, first + 3);
+    }
+    batches.forEach(({ positions, uv, indices }, variant) => {
+      if (!indices.length) return;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+      group.add(new THREE.Mesh(geometry, beltMaterials[row][variant]));
+    });
   }
   return group;
 }
@@ -89,23 +105,20 @@ export function planLand(seed, verge) {
   };
   // За улицей вся трава сочная, как под берёзами (Никита 2026-11-09): трава двора с сорняками туда не заходит.
   const lush = (x, z) => s(z - verge(x), 0, 0.3);
-  // Берёзы по рядам: { x, z, kind, turn, scale } — место, вид, поворот и рост.
-  const birches = [], gaps = [];
+  // На некоторых местах в посадке остались упавшие деревья, пни и брёвна.
+  const gaps = [];
   ROWS.forEach((_, k) => {
-    for (let x = -GROVE.reach; x < GROVE.reach; x += GROVE.step[0] + rnd() * (GROVE.step[1] - GROVE.step[0])) {
-      if (rnd() < GROVE.gaps) {
-        gaps.push({ x, z: rowAt(k, x) });
-        continue;
-      }
-      const kind = GROVE.kinds[Math.floor(rnd() * GROVE.kinds.length)];
-      birches.push({ x, z: rowAt(k, x) + (rnd() - 0.5) * 2 * GROVE.jitter, kind, turn: rnd() * 2 * Math.PI, scale: 1 + (rnd() - 0.5) * 2 * GROVE.size });
+    for (let x = -REACH; x < REACH; x += 1.8 + rnd() * 1.6) {
+      if (rnd() < 0.12) gaps.push({ x, z: rowAt(k, x) });
+      // Раньше для живого ствола выбирали вид, смещение, поворот и рост.
+      // Сохраняем последовательность, чтобы пни и валежник знакомого двора остались на своих местах.
+      else for (let i = 0; i < 4; i++) rnd();
     }
   });
-  // Судьба пустых мест и подрост — своим генератором: ряды от них не меняются.
   const fate = generator(seed + 61), range = ([a, b]) => a + fate() * (b - a), pick = (list) => list[Math.floor(fate() * list.length)];
   const fallen = [], cut = [];
   for (const { x, z } of gaps) {
-    const kind = pick(FELL.kinds), scale = 1 + (fate() - 0.5) * 2 * GROVE.size, h = KINDS[kind] * scale;
+    const kind = pick(FELL.kinds), scale = 1 + (fate() - 0.5) * 0.2, h = KINDS[kind] * scale;
     // Куда упала: вдоль полосы (along) и вбок на угол, при котором вершина остаётся между обочиной и канавой.
     const along = fate() < 0.5 ? -1 : 1, off = 2 * fate() - 1;
     const room = off > 0 ? DITCH.z - 1 - z : z - verge(x) - 0.5, angle = off * Math.asin(THREE.MathUtils.clamp(room / h, 0, 1));
@@ -116,11 +129,7 @@ export function planLand(seed, verge) {
       cut.push({ x, z, h, dir, stump, logs: bucks(h, stump, range(pick(FELL.log)), range) });
     }
   }
-  const saplings = Array.from({ length: Math.round((2 * GROVE.reach * (BELT.to - BELT.from)) / UNDER.per) }, () => {
-    const k = Math.floor(fate() * ROWS.length), x = (2 * fate() - 1) * GROVE.reach;
-    return { x, z: rowAt(k, x) + (2 * fate() - 1) * UNDER.reach, kind: pick(UNDER.kinds), turn: fate() * 2 * Math.PI, scale: 1 + (fate() - 0.5) * 0.4 };
-  });
-  return { seed, dug, lush, birches, saplings, fallen, cut };
+  return { seed, dug, lush, fallen, cut };
 }
 
 // Распиленная берёза: брёвна по log метров от пня до taken роста, толщина как у ствола (R — 0,006 роста, комель
@@ -136,9 +145,8 @@ function bucks(h, stump, log, range) {
 }
 
 // Строить после shapeGround: берёзы встают по земле, комель чуть в ней; упавшие и брёвна лежат на ней.
-export function buildLand({ seed, birches, saplings, fallen, cut }) {
+export function buildLand({ seed, fallen, cut }) {
   const UP = new THREE.Vector3(0, 1, 0);
-  const standing = [...birches, ...saplings].map((b) => ({ ...b, y: height(b.x, b.z) - 0.05 }));
   // Упавшая лежит от комля к вершине по земле; комель приподнят на свою толщину.
   const lying = fallen.map(({ x, z, kind, scale, dir, spin }) => {
     const h = KINDS[kind] * scale, y = height(x, z);
@@ -155,5 +163,5 @@ export function buildLand({ seed, birches, saplings, fallen, cut }) {
       const mid = from.clone().addScaledVector(d, length / 2);
       return { at: from.setY(height(mid.x, mid.z) + (r0 + r1) / 2), dir: d, r0, r1, length };
     })]);
-  return new THREE.Group().add(plantBelt(standing), plantFallen(lying), makeLogs(logs, generator(seed + 67)));
+  return new THREE.Group().add(plantBelt(seed), plantFallen(lying), makeLogs(logs, generator(seed + 67)));
 }
