@@ -24,7 +24,7 @@ const { planRiver } = await import('./src/river.js');
 const { shapeGround, height, groundAt } = await import('./src/terrain.js');
 const { makeGround } = await import('./src/grass.js');
 const { planBanya, buildBanya } = await import('./src/banya.js');
-const { planHouse, buildHouse, LOG_MATERIAL, END_MATERIAL } = await import('./src/house.js');
+const { planHouse, buildHouse, LOG_MATERIAL, END_MATERIAL, R } = await import('./src/house.js');
 const { PANE } = await import('./src/window.js');
 const { planGas, gasPostMaterial } = await import('./src/gas.js');
 const { planPower, powerWireMaterial } = await import('./src/power.js');
@@ -32,8 +32,17 @@ const { generator } = await import('./src/random.js');
 const { GATES, WICKET } = await import('./src/fence.js');
 const { planPaths } = await import('./src/paths.js');
 const { yardPavingOutline } = await import('./src/campfire.js');
+const { buildRailSegments } = await import('./src/porch.js');
 
 assert.equal(planHouse(73, { doorWall: 'right' }).openings.find(({ kind }) => kind === 'door').wall, 'right');
+
+const testRail = buildRailSegments(1, [{
+  from: new THREE.Vector3(0, 2, 0), to: new THREE.Vector3(0, 1, 2),
+  normal: new THREE.Vector3(1, 0, 0), postAt: [0, 2],
+}]);
+const postBounds = new THREE.Box3().setFromObject(testRail.children.at(-1));
+assert.ok(Math.abs(postBounds.min.y - 1) < 1e-5 && Math.abs(postBounds.max.y - 3.02) < 1e-5,
+  'резные столбы стоят на высоте площадки и нижней ступени, а не на земле');
 
 for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const house = planHouse(seed), rnd = generator(seed + 13);
@@ -91,11 +100,36 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   const dockRails = banya.group.getObjectByName('banya-dock-rails');
   assert.ok(dockRails.children.length >= 3 && dockRails.children.some((part) => part.material?.map),
     'перила используют резные балясины и столбы из набора крыльца');
+  assert.deepEqual(dockRails.userData.stairRailSides, ['outer'], 'перила лестницы только с наружной стороны');
+  assert.equal(banya.group.getObjectByName('banya-stair-wall'), undefined,
+    'вдоль лестницы нет приставной стены, вместо неё видна стена сруба');
+  const staircase = banya.group.getObjectByName('banya-stairs'), stairPlan = staircase.userData.plan;
+  assert.equal(stairPlan.treads, 3, 'у лестницы ровно три ступени');
+  assert.ok(Math.abs(stairPlan.outerX - banya.deckPlan.sideOuter) < 1e-5 && stairPlan.outerX - stairPlan.innerX > 1.4,
+    'наружный край ступеней совпадает с краем площадки');
+  assert.ok(stairPlan.innerX >= 2 + R && stairPlan.innerX - (2 + R) < 0.03,
+    'внутренний край ступеней подходит вплотную к стене сруба');
+  assert.ok(staircase.getObjectByName('banya-stair-skirt').children.length > 0,
+    'открытый бок лестницы обшит досками');
   const roofExtension = banya.group.getObjectByName('banya-roof-extension');
   const roofRafters = banya.group.getObjectByName('banya-roof-rafters');
   const ridgeBeam = roofRafters.getObjectByName('banya-roof-ridge-beam');
   const roofSupports = banya.group.getObjectByName('banya-roof-supports');
   const veranda = banya.dock, verandaPlan = veranda.userData.plan;
+  assert.ok(veranda.getObjectByName('banya-veranda-skirt').children.length > 0,
+    'боковая площадка обшита досками со стороны двора');
+  const postVertices = dockRails.children.at(-1).geometry.getAttribute('position');
+  for (const [z, y] of [[stairPlan.z - 0.055, verandaPlan.top],
+    [stairPlan.z + stairPlan.run - 0.055, verandaPlan.top - stairPlan.treads * stairPlan.rise]]) {
+    const ys = [];
+    for (let i = 0; i < postVertices.count; i++) {
+      if (Math.abs(postVertices.getX(i) - (stairPlan.outerX - 0.055)) < 0.056
+          && Math.abs(postVertices.getZ(i) - z) < 0.056) ys.push(postVertices.getY(i));
+    }
+    assert.ok(ys.length && Math.abs(Math.min(...ys) - y) < 1e-4
+      && Math.abs(Math.max(...ys) - (y + 1.02)) < 1e-4,
+    'резные столбы стоят на площадке и нижней ступени');
+  }
   assert.ok(roofExtension.children.length > 0 && roofRafters.children.length > 0, 'общая крыша продолжается над верандой на стропилах');
   assert.ok(ridgeBeam?.children.length > 0, 'у конька есть непрерывная подшивная балка без щели к небу');
   ridgeBeam.updateMatrixWorld(true);
@@ -147,6 +181,64 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   assert.ok(benchBounds.max.y - benchBounds.min.y > 0.7, 'на веранде есть деревянная лавка со спинкой');
   const c = Math.cos(site.angle), s = Math.sin(site.angle);
   const worldAtLocal = (x, z) => [site.x + c * x + s * z, site.z - s * x + c * z];
+  banya.group.updateMatrixWorld(true);
+  const railMeshes = dockRails.children.slice(0, -2);
+  for (const distance of [-0.2, -0.001, 0.001, 0.2]) {
+    const z = stairPlan.z - 0.055 + distance;
+    const [wx, wz] = worldAtLocal(verandaPlan.sideOuter + 0.3, z);
+    const y = verandaPlan.top + 0.87 - Math.max(0, distance) * stairPlan.treads * stairPlan.rise / stairPlan.run;
+    const ray = new THREE.Raycaster(new THREE.Vector3(wx, banya.group.position.y + y, wz), new THREE.Vector3(-c, 0, s), 0, 0.5);
+    const hits = railMeshes.flatMap((mesh) => ray.intersectObject(mesh));
+    assert.ok(hits.some(({ point }) => Math.abs(c * (point.x - site.x) - s * (point.z - site.z) - (verandaPlan.sideOuter + 0.005)) < 0.002),
+      'поручни лестницы и террасы сходятся в одну прямую без уступа');
+  }
+  const riser = staircase.getObjectByName('banya-bottom-riser');
+  for (const x of [stairPlan.innerX + 0.1, stairPlan.x, stairPlan.outerX - 0.1]) {
+    const [wx, wz] = worldAtLocal(x, stairPlan.z + stairPlan.run + 0.15);
+    const ray = new THREE.Raycaster(new THREE.Vector3(wx, banya.group.position.y + verandaPlan.top - stairPlan.treads * stairPlan.rise - 0.05, wz),
+      new THREE.Vector3(-s, 0, -c), 0, 0.3);
+    assert.ok(ray.intersectObject(riser, true).length, 'нижний подступёнок закрывает всю ширину лестницы');
+  }
+  const skirt = veranda.getObjectByName('banya-veranda-skirt');
+  veranda.updateMatrixWorld(true);
+  for (const pile of veranda.userData.piles.filter((p) => p.x > 2 && p.z > verandaPlan.front + 0.1 && p.z < verandaPlan.sideBack - 0.1)) {
+    const [wx, wz] = worldAtLocal(verandaPlan.sideOuter + 0.4, pile.z);
+    const y = verandaPlan.beamBottom - 0.03;
+    if (y <= pile.ground + 0.03) continue;
+    const ray = new THREE.Raycaster(new THREE.Vector3(wx, banya.group.position.y + y, wz), new THREE.Vector3(-c, 0, s), 0, 0.6);
+    const hits = ray.intersectObject(veranda, true);
+    assert.ok(hits.length && hits[0].object.parent === skirt, 'обшивка закрывает выступающие детали опор');
+  }
+  for (const x of [stairPlan.innerX + 0.01, stairPlan.outerX - 0.3]) {
+    const stairPoint = worldAtLocal(x, stairPlan.z + stairPlan.run / 2);
+    assert.ok(Number.isFinite(banya.deck(...stairPoint)) && !banya.blocks(...stairPoint),
+      `по ступеням можно пройти у обоих краёв: seed ${seed}, x ${x}`);
+  }
+  assert.ok(banya.blocks(...worldAtLocal(stairPlan.outerX - 0.055, stairPlan.z + stairPlan.run / 2)),
+    'наружные перила лестницы блокируют проход через край');
+  const missingLanding = worldAtLocal(2.85, (verandaPlan.front + verandaPlan.sideBack) / 2);
+  assert.equal(banya.deck(...missingLanding), banya.deckPlan.top, 'восстановлен настил боковой площадки за торцом основного пола');
+  veranda.updateMatrixWorld(true);
+  const visibleLandingBoards = [];
+  for (let z = verandaPlan.front + 0.2; z < verandaPlan.sideBack - 0.2; z += 0.05) {
+    const point = worldAtLocal(2.85, z);
+    const ray = new THREE.Raycaster(
+      new THREE.Vector3(point[0], banya.deckPlan.top + 1, point[1]),
+      new THREE.Vector3(0, -1, 0), 0, 2,
+    );
+    if (ray.intersectObject(veranda, true).some(({ point: hit }) => Math.abs(hit.y - banya.deckPlan.top) < 0.05)) {
+      visibleLandingBoards.push(z);
+    }
+  }
+  assert.ok(visibleLandingBoards.length > 0,
+    'на восстановленном участке есть видимые доски пола, а не только коллизия');
+  const beyondLanding = worldAtLocal(stairPlan.x, stairPlan.z + 0.02);
+  const transitionRay = new THREE.Raycaster(
+    new THREE.Vector3(beyondLanding[0], banya.deckPlan.top - 0.01, beyondLanding[1]),
+    new THREE.Vector3(0, -1, 0), 0, 0.3,
+  );
+  const protrusions = transitionRay.intersectObject(veranda, true);
+  assert.equal(protrusions.length, 0, 'краевая балка настила не выступает в пространство верхней ступени');
   const { start, along, across, length, top, width } = banya.deckPlan;
   assert.ok(length < 4.5 && site.z - river.brow(site.x) < 3, 'баня придвинута к берегу, настил стал короче');
   const at = (distance, offset = 0) => start.clone().addScaledVector(along, distance).addScaledVector(across, offset);
@@ -158,11 +250,18 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
   assert.ok(banya.blocks(site.x, site.z));
   assert.ok(!banya.blocks(middle.x, middle.y));
   assert.ok(banya.dock.children.length > 0, 'единый Г-образный настил построен');
+  for (let z = verandaPlan.front + 0.3; z < verandaPlan.sideBack - 0.3; z += 0.12) {
+    for (let x = 2.5; x <= verandaPlan.sideOuter - 0.25; x += 0.12) {
+      const point = worldAtLocal(x, z);
+      assert.equal(banya.deck(...point), banya.deckPlan.top, `пол непрерывно закрывает боковую площадку: seed ${seed}, ${x}, ${z}`);
+      assert.ok(!banya.blocks(...point), `восстановленный пол остаётся проходимым: seed ${seed}, ${x}, ${z}`);
+    }
+  }
   for (let x = 1.8; x <= 2.9; x += 0.1) {
     assert.ok(!banya.blocks(...worldAtLocal(x, -2.63)), 'проход с основного настила на боковую площадку открыт');
   }
   for (let z = -2.63; z <= 2.1; z += 0.06) {
-    const point = worldAtLocal(2.93, z), y = banya.deck(...point);
+    const point = worldAtLocal(stairPlan.x, z), y = banya.deck(...point);
     assert.ok(Number.isFinite(y), 'площадка и лестница соединены');
     assert.ok(!banya.blocks(...point), `проход вдоль бани открыт: seed ${seed}, z ${z}`);
   }
@@ -186,16 +285,17 @@ for (const seed of [1, 2, 7, 42, 100, 1000, 4000, 9000]) {
     assert.ok(!banya.blocks(...point), `диагональный проход не заблокирован: seed ${seed}`);
   }
   let previous = top;
-  for (let z = 0.91; z < 2.1; z += 0.03) {
-    const center = banya.deck(...worldAtLocal(2.93, z));
+  for (let z = stairPlan.z + 0.01; z < stairPlan.z + stairPlan.run - 0.02; z += 0.03) {
+    const center = banya.deck(...worldAtLocal(stairPlan.x, z));
     assert.ok(center <= previous + 1e-6 && previous - center < 0.2, 'ступени идут вниз с нормальной высотой подступёнка');
     previous = center;
-    for (let x = 2.385; x <= 3.475; x += 0.055) {
+    for (let x = stairPlan.innerX + 0.01; x <= stairPlan.outerX - 0.01; x += 0.055) {
       const point = worldAtLocal(x, z), y = banya.deck(...point);
       assert.ok(y > groundAt(...point) + 0.035, `ступень над всей поверхностью земли: seed ${seed}, ${x}, ${z}`);
     }
   }
-  const approach = worldAtLocal(2.93, 2.1), guide = worldAtLocal(2.93, 3.7);
+  const approach = worldAtLocal(stairPlan.x, stairPlan.z + stairPlan.run);
+  const guide = worldAtLocal(stairPlan.x, stairPlan.z + stairPlan.run + 1.6);
   assert.ok(Math.hypot(banya.approach.x - approach[0], banya.approach.z - approach[1]) < 1e-6);
   assert.ok(Math.hypot(banya.approachGuide.x - guide[0], banya.approachGuide.z - guide[1]) < 1e-6);
   const pavingOrigin = { x: 14.95, z: 4.25 };
