@@ -3,7 +3,6 @@ import { planHouse, buildHouse, R, COURSE, PLINTH, LOG_MATERIAL } from './house.
 import { PANE, LINING } from './window.js';
 import { buildDoor, buildRailSegments } from './porch.js';
 import { Planks, boardMaterials, TONES, buildRoofExtension } from './attic.js';
-import { buildPier } from './pier.js';
 import { height } from './terrain.js';
 import { generator } from './random.js';
 import { gasPostMaterial } from './gas.js';
@@ -12,6 +11,8 @@ import { curve, sag, tube } from './pipe.js';
 
 const W = 4, D = 4, POLE_HEIGHT = 2, SPAN = 4;
 const UP = new THREE.Vector3(0, 1, 0);
+const BANYA_FRAME = { deck: 0.035, beam: 0.2, pile: 0.24, pileSpacing: 1.35, joistSpacing: 0.85, pileDrive: 0.4 };
+const ROOF_SUPPORT_CLEARANCE = 0.025, ROOF_BOARD_THICKNESS = 0.022;
 // Сруб параллелен касательной к нашему берегу; его площадка не выравнивает сам берег.
 export function planBanya(seed, river, side) {
   const x = side * 10, angle = -Math.atan(river.slope(x));
@@ -45,25 +46,29 @@ export function buildBanya(site, river, power, house) {
   };
 
   // Дверь и настил используют те же доски, что изба и мостки.
-  const boards = new Planks(boardMaterials(TONES.gable));
   const front = -D / 2 - R, top = PLINTH + door.bottom;
   const houseDoor = buildDoor(seed + 211, door, { along: 'x', at: -D / 2 }, { base: PLINTH, face: R });
   const start = localToWorld(0, front), along = new THREE.Vector2(-Math.sin(angle), -Math.cos(angle));
   const across = new THREE.Vector2(Math.cos(angle), -Math.sin(angle));
   const shore = river.shore(start.x);
   const length = Math.max(2.5, (start.y - shore) / Math.cos(angle) + 0.8);
+  const riverEnd = front - length, sideOuter = W / 2 + 1.65, sideBack = 0.9;
   const deckTop = base + top;
-  const deckPlan = { seed: seed + 211, start, along, across, top: deckTop, length, land: 0, width: W };
-  const dock = buildPier(deckPlan);
+  const deckPlan = { seed: seed + 211, start, along, across, top: deckTop, length, land: 0, width: W, riverEnd, sideOuter, sideBack };
+  const dock = buildBanyaDeck(seed + 211, { top, front, riverEnd, sideBack, sideOuter, site, base });
+  dock.position.set(x, base, z);
+  dock.rotation.y = angle;
   const roofShape = group.userData.roofShape;
-  const roofEndZ = front - length - 0.35, roofStartZ = -roofShape.zEnd;
+  const roofEndZ = riverEnd - 0.35, roofStartZ = -roofShape.zEnd;
   const roofExtension = buildRoofExtension(plan, roofShape, roofEndZ);
   const rafters = buildBanyaRafters(roofShape, roofStartZ, roofEndZ, rnd);
-  // Бревенчатые стойки и продольные балки поддерживают продолжение скатов над верандой.
-  const supportZ = front - length + 0.05, eaveY = roofShape.ridge - (W / 2) * Math.tan(roofShape.pitch) - 0.12;
-  const roofSupports = buildRoofSupports(supportZ, roofStartZ, W / 2, top, eaveY);
+  const supportZ = riverEnd + 0.25, roofSupportX = W / 2 - 0.1;
+  const roofSupports = buildRoofSupports(supportZ, roofStartZ + 0.2, roofSupportX, top, roofShape);
+  roofSupports.userData.roofEndZ = roofEndZ;
+  const beamRadius = R * 1.08;
+  const eaveY = roofShape.ridge - roofSupportX * Math.tan(roofShape.pitch)
+    - (beamRadius + ROOF_BOARD_THICKNESS + ROOF_SUPPORT_CLEARANCE) / Math.cos(roofShape.pitch);
   // Боковая площадка огибает сруб и выводит лестницу на сухую сторону, вдоль стены.
-  const sideOuter = W / 2 + 1.65, sideBack = 0.9, sideFront = front - 1.3;
   const stairX = W / 2 + 0.93, stairWidth = 1.1, stairRun = 1.2;
   const foot = localToWorld(stairX, sideBack + stairRun);
   const approachGuide = localToWorld(stairX, sideBack + stairRun + 1.6);
@@ -75,25 +80,6 @@ export function buildBanya(site, river, power, house) {
     }
   }
   footY += 0.02;
-  const sideFloor = new Planks(boardMaterials(TONES.roof), 0.035);
-  for (let x = W / 2; x < sideOuter - 0.001; x += 0.14) {
-    const end = Math.min(x + 0.13, sideOuter);
-    sideFloor.add([[x, sideFront], [end, sideFront], [end, sideBack], [x, sideBack]],
-      { o: new THREE.Vector3(0, top - 0.035, 0), X: new THREE.Vector3(1, 0, 0), Y: new THREE.Vector3(0, 0, 1) },
-      UP, [0, 1], 0.13, rnd);
-  }
-  const sideFrame = new Planks(boardMaterials(TONES.gable), 0.1);
-  for (const x of [W / 2 + 0.1, sideOuter - 0.1]) {
-    sideFrame.add([[x - 0.05, sideFront], [x + 0.05, sideFront], [x + 0.05, sideBack], [x - 0.05, sideBack]],
-      { o: new THREE.Vector3(0, top - 0.135, 0), X: new THREE.Vector3(1, 0, 0), Y: new THREE.Vector3(0, 0, 1) },
-      UP, [0, 1], 0.1, rnd);
-    for (const z of [sideFront + 0.1, (sideFront + sideBack) / 2, sideBack - 0.1]) {
-      const p = localToWorld(x, z), bottom = height(p.x, p.y) - base - 0.15;
-      sideFrame.add([[x - 0.05, bottom], [x + 0.05, bottom], [x + 0.05, top - 0.135], [x - 0.05, top - 0.135]],
-        { o: new THREE.Vector3(0, 0, z - 0.05), X: new THREE.Vector3(1, 0, 0), Y: UP },
-        new THREE.Vector3(0, 0, 1), [0, 1], 0.1, rnd);
-    }
-  }
   const stairs = new Planks(boardMaterials(TONES.gable), 0.035);
   const risers = Math.max(2, Math.ceil((top - footY) / 0.17)), treads = risers - 1, rise = (top - footY) / risers;
   const x0 = stairX - stairWidth / 2, x1 = stairX + stairWidth / 2;
@@ -116,25 +102,22 @@ export function buildBanya(site, river, power, house) {
     { o: new THREE.Vector3(x, 0, 0), X: new THREE.Vector3(0, 0, 1), Y: UP },
     new THREE.Vector3(sign, 0, 0), [1, 0], stairRun, rnd);
   }
-  const stairEnd = front - length;
   const railSegments = [];
-  const rail = (x0, d0, x1, d1, normal, postStep = 0.8) => {
+  const rail = (x0, d0, x1, d1, normal, postStep = 0.8, omitEndPost = false) => {
     const segmentLength = Math.hypot(x1 - x0, d1 - d0), postAt = [0];
     for (let d = postStep; d < segmentLength - 0.12; d += postStep) postAt.push(d);
-    postAt.push(segmentLength);
+    if (!omitEndPost) postAt.push(segmentLength);
     railSegments.push({
       from: new THREE.Vector3(x0, top, front - d0), to: new THREE.Vector3(x1, top, front - d1),
       normal, postAt,
     });
   };
   rail(-W / 2, 0, -W / 2, length, new THREE.Vector3(-1, 0, 0));
-  const openingEnd = Math.min(1.3, length);
-  rail(W / 2, openingEnd, W / 2, length, new THREE.Vector3(1, 0, 0));
-  rail(W / 2, openingEnd, sideOuter, openingEnd, new THREE.Vector3(0, 0, -1));
-  rail(sideOuter, openingEnd, sideOuter, front - sideBack, new THREE.Vector3(1, 0, 0));
+  rail(W / 2, 0, W / 2, front - sideBack, new THREE.Vector3(1, 0, 0));
+  rail(sideOuter, length, sideOuter, front - sideBack, new THREE.Vector3(1, 0, 0));
   rail(W / 2, front - sideBack, x0, front - sideBack, new THREE.Vector3(0, 0, 1));
   rail(x1, front - sideBack, sideOuter, front - sideBack, new THREE.Vector3(0, 0, 1));
-  rail(-W / 2, length, W / 2, length, new THREE.Vector3(0, 0, -1));
+  rail(-W / 2, length, sideOuter, length, new THREE.Vector3(0, 0, -1), 0.8, true);
   for (const sign of [-1, 1]) {
     const x = stairX + sign * (stairWidth / 2 - 0.025);
     const from = new THREE.Vector3(x, top, sideBack), to = new THREE.Vector3(x, footY, sideBack + stairRun);
@@ -145,18 +128,16 @@ export function buildBanya(site, river, power, house) {
   railing.name = 'banya-dock-rails';
   const benchPlan = { x: -1.1, z: front - 0.78, width: 1.2, depth: 0.44, floorY: top, seatY: top + 0.47 };
   const bench = buildBanyaBench(benchPlan, rnd);
-  const roofSupportPoints = [-W / 2, W / 2].map((x) => new THREE.Vector3(x, eaveY, supportZ));
+  const roofSupportPoints = [-roofSupportX, roofSupportX].map((x) => new THREE.Vector3(x, eaveY, supportZ));
   const obstacles = [...railSegments, ...roofSupportPoints.map((point) => ({ point })), { bench: benchPlan }];
   const staircase = new THREE.Group().add(...stairs.meshes(), ...stringers.meshes());
   staircase.name = 'banya-stairs';
   houseDoor.name = 'banya-door';
-  const sideLanding = new THREE.Group().add(...sideFloor.meshes(), ...sideFrame.meshes());
-  sideLanding.name = 'banya-side-landing';
-  group.add(...boards.meshes(), sideLanding, staircase, roofExtension, rafters, roofSupports, railing, bench, houseDoor);
+  group.add(staircase, roofExtension, rafters, roofSupports, railing, bench, houseDoor);
   const deck = (px, pz) => {
     const p = worldToLocal(px, pz), distance = front - p.z;
     if (Math.abs(p.x) <= W / 2 && distance >= 0 && distance <= length) return deckTop;
-    if (p.x >= W / 2 && p.x <= sideOuter && p.z >= sideFront && p.z <= sideBack) return deckTop;
+    if (p.x >= W / 2 && p.x <= sideOuter && p.z >= riverEnd && p.z <= sideBack) return deckTop;
     if (p.z >= sideBack && p.z <= sideBack + stairRun && Math.abs(p.x - stairX) <= stairWidth / 2) {
       const step = Math.min(treads, Math.floor((p.z - sideBack) / stairRun * treads) + 1);
       return base + top - step * rise;
@@ -165,7 +146,9 @@ export function buildBanya(site, river, power, house) {
   };
   const blocks = (px, pz) => {
     const p = worldToLocal(px, pz);
-    if (Math.abs(p.x) < W / 2 + R + 0.25 && Math.abs(p.z) < D / 2 + R + 0.25) return true;
+    const body = Math.abs(p.x) < W / 2 + R + 0.25 && Math.abs(p.z) < D / 2 + R + 0.25;
+    const doorway = Math.abs(p.x) < door.width / 2 && p.z >= front - 0.3 && p.z <= -D / 2 + 0.35;
+    if (body && !doorway) return true;
     if (obstacles.some((obstacle) => obstacle.bench
       ? Math.abs(p.x - obstacle.bench.x) < obstacle.bench.width / 2 + 0.2 && Math.abs(p.z - obstacle.bench.z) < obstacle.bench.depth / 2 + 0.18
       : obstacle.point
@@ -186,9 +169,104 @@ function distanceToRail(x, z, from, to) {
   return Math.hypot(x - from.x - t * dx, z - from.z - t * dz);
 }
 
+function addTimber(planks, from, to, width, rnd) {
+  const axis = to.clone().sub(from), length = axis.length();
+  if (length < 0.03) return;
+  axis.normalize();
+  const reference = Math.abs(axis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : UP;
+  const u = axis.clone().cross(reference).normalize(), v = axis.clone().cross(u).normalize();
+  const half = width / 2, rect = [[0, 0], [length, 0], [length, width], [0, width]];
+  const face = (o, Y, normal, faceWidth) => planks.add(rect,
+    { o, X: axis, Y }, normal, [1, 0], faceWidth, rnd);
+  face(from.clone().addScaledVector(u, -half).addScaledVector(v, half), v.clone().negate(), u, width);
+  face(from.clone().addScaledVector(u, -half).addScaledVector(v, -half), v, u.clone().negate(), width);
+  face(from.clone().addScaledVector(u, half).addScaledVector(v, -half), u, v, width);
+  face(from.clone().addScaledVector(u, -half).addScaledVector(v, -half), u.clone().negate(), v.clone().negate(), width);
+  planks.add([[0, 0], [width, 0], [width, width], [0, width]],
+    { o: to.clone().addScaledVector(u, -half).addScaledVector(v, -half), X: u, Y: v },
+    axis, [1, 0], width, rnd);
+  planks.add([[0, 0], [width, 0], [width, width], [0, width]],
+    { o: from.clone().addScaledVector(u, -half).addScaledVector(v, half), X: u, Y: v.clone().negate() },
+    axis.clone().negate(), [1, 0], width, rnd);
+}
+
+function buildBanyaDeck(seed, { top, front, riverEnd, sideBack, sideOuter, site, base }) {
+  const rnd = generator(seed + 97), floor = new Planks(boardMaterials(TONES.roof), BANYA_FRAME.deck);
+  const frame = new Planks(boardMaterials(TONES.gable), 0.018), wetFrame = new Planks(
+    boardMaterials(TONES.gable.clone().multiplyScalar(0.68)), 0.018);
+  const upper = top - BANYA_FRAME.deck, beamBottom = upper - BANYA_FRAME.beam, beamY = beamBottom + BANYA_FRAME.beam / 2;
+  const mainHalf = W / 2, plankLength = 0.1;
+  let z1 = front;
+  while (z1 > riverEnd + 1e-4) {
+    const z0 = Math.max(riverEnd, z1 - plankLength);
+    floor.add([[-mainHalf, z0], [mainHalf, z0], [mainHalf, z1], [-mainHalf, z1]],
+      { o: new THREE.Vector3(0, upper, 0), X: new THREE.Vector3(1, 0, 0), Y: new THREE.Vector3(0, 0, 1) },
+      UP, [1, 0], z1 - z0, rnd);
+    const annexZ1 = Math.min(z1, sideBack);
+    if (annexZ1 > z0 + 1e-4) {
+      floor.add([[mainHalf, z0], [sideOuter, z0], [sideOuter, annexZ1], [mainHalf, annexZ1]],
+        { o: new THREE.Vector3(0, upper, 0), X: new THREE.Vector3(1, 0, 0), Y: new THREE.Vector3(0, 0, 1) },
+        UP, [1, 0], annexZ1 - z0, rnd);
+    }
+    z1 = z0 - 0.01 - rnd() * 0.014;
+  }
+
+  const world = (lx, lz) => ({
+    x: site.x + Math.cos(site.angle) * lx + Math.sin(site.angle) * lz,
+    z: site.z - Math.sin(site.angle) * lx + Math.cos(site.angle) * lz,
+  });
+  const supportXs = [-mainHalf + 0.1, 0, mainHalf - 0.1, sideOuter - 0.1];
+  const supportEnds = new Map(supportXs.map((x) => [x, x > mainHalf ? sideBack : front]));
+  for (const [x, endZ] of supportEnds) {
+    addTimber(frame, new THREE.Vector3(x, beamY, riverEnd), new THREE.Vector3(x, beamY, endZ), BANYA_FRAME.beam, rnd);
+  }
+  const joist = (z, x0, x1) => addTimber(frame, new THREE.Vector3(x0, beamY, z),
+    new THREE.Vector3(x1, beamY, z), BANYA_FRAME.beam, rnd);
+  for (let z = riverEnd; z <= front + 1e-4; z += BANYA_FRAME.joistSpacing) {
+    joist(Math.min(z, front), -mainHalf, z <= sideBack ? sideOuter : mainHalf);
+  }
+  joist(riverEnd, -mainHalf, sideOuter);
+  joist(front, -mainHalf, mainHalf);
+  joist(sideBack, mainHalf, sideOuter);
+
+  const piles = [];
+  for (const [x, endZ] of supportEnds) {
+    const count = Math.max(1, Math.ceil((endZ - riverEnd) / BANYA_FRAME.pileSpacing));
+    const zPositions = Array.from({ length: count + 1 }, (_, i) => THREE.MathUtils.lerp(riverEnd, endZ, i / count));
+    if (Math.abs(Math.abs(x) - (mainHalf - 0.1)) < 1e-5) zPositions.push(riverEnd + 0.25);
+    for (const z of [...new Set(zPositions)].sort((a, b) => a - b)) {
+      const point = world(x, z);
+      const ground = height(point.x, point.z) - base;
+      const bottom = Math.min(ground - BANYA_FRAME.pileDrive, beamBottom - 0.35);
+      const headY = beamBottom - 0.045;
+      const postStart = new THREE.Vector3(x, bottom, z), postEnd = new THREE.Vector3(x, headY, z);
+      addTimber(bottom < headY - 0.35 ? wetFrame : frame, postStart, postEnd, BANYA_FRAME.pile, rnd);
+      addTimber(frame, new THREE.Vector3(x, beamBottom - 0.055, z),
+        new THREE.Vector3(x, beamBottom + 0.015, z), BANYA_FRAME.pile + 0.06, rnd);
+      piles.push({ x, z, bottom, top: headY, ground });
+    }
+  }
+  const braceXs = [-mainHalf + 0.1, 0, mainHalf - 0.1, sideOuter - 0.1];
+  for (const x of braceXs) {
+    const post = piles.find((pile) => Math.abs(pile.x - x) < 1e-5 && Math.abs(pile.z - riverEnd) < 1e-5);
+    if (!post || post.top - post.bottom < 0.9) continue;
+    const inward = x > mainHalf ? -1 : 1;
+    addTimber(frame, new THREE.Vector3(x + inward * 0.52, post.bottom + 0.42, riverEnd + 0.58),
+      new THREE.Vector3(x, beamBottom - 0.12, riverEnd + 0.08), 0.14, rnd);
+  }
+  const deck = new THREE.Group().add(...floor.meshes(), ...frame.meshes(), ...wetFrame.meshes());
+  deck.name = 'banya-veranda-deck';
+  deck.userData.plan = { front, riverEnd, sideBack, sideOuter, top, upper, beamBottom };
+  deck.userData.piles = piles;
+  return deck;
+}
+
 function buildBanyaRafters(shape, startZ, endZ, rnd) {
-  const rafters = new Planks(boardMaterials(TONES.gable), 0.075), Z = new THREE.Vector3(0, 0, 1);
-  for (let z = startZ; z > endZ - 0.05; z -= 0.75) {
+  const rafters = new Planks(boardMaterials(TONES.gable.clone().multiplyScalar(1.7)), 0.09), Z = new THREE.Vector3(0, 0, 1);
+  const positions = [];
+  for (let z = startZ; z > endZ + 0.3; z -= 0.75) positions.push(z);
+  if (!positions.length || positions.at(-1) - endZ > 0.3) positions.push(endZ);
+  for (const z of positions) {
     const z0 = Math.max(endZ, z - 0.045), z1 = Math.min(startZ, z + 0.045);
     for (const side of [-1, 1]) {
       const X = new THREE.Vector3(side * Math.cos(shape.pitch), -Math.sin(shape.pitch), 0);
@@ -199,28 +277,62 @@ function buildBanyaRafters(shape, startZ, endZ, rnd) {
     }
   }
   const group = new THREE.Group().add(...rafters.meshes());
+  const ridgeBeam = new Planks(boardMaterials(TONES.gable.clone().multiplyScalar(1.7)), 0.018);
+  addTimber(ridgeBeam, new THREE.Vector3(0, shape.ridge - 0.1, startZ),
+    new THREE.Vector3(0, shape.ridge - 0.1, endZ), 0.15, rnd);
+  const ridge = new THREE.Group().add(...ridgeBeam.meshes());
+  ridge.name = 'banya-roof-ridge-beam';
+  group.add(ridge);
+  group.userData.roofShape = { ridge: shape.ridge, startZ, endZ };
   group.name = 'banya-roof-rafters';
   return group;
 }
 
-function buildRoofSupports(z, startZ, x, floor, eave) {
-  const group = new THREE.Group(), radius = R * 1.08;
+function buildRoofSupports(z, startZ, x, floor, shape) {
+  const group = new THREE.Group(), radius = R * 1.08, roofClearance = ROOF_SUPPORT_CLEARANCE;
+  const timberMaterial = LOG_MATERIAL.clone();
+  timberMaterial.color.multiplyScalar(1.25);
   const beam = (a, b) => {
     const direction = b.clone().sub(a), length = direction.length();
     const geometry = new THREE.CylinderGeometry(radius, radius, length, 12);
-    const mesh = new THREE.Mesh(geometry, LOG_MATERIAL);
+    const mesh = new THREE.Mesh(geometry, timberMaterial);
     mesh.position.copy(a).add(b).multiplyScalar(0.5);
     mesh.quaternion.setFromUnitVectors(UP, direction.normalize());
+    mesh.name = 'banya-roof-longitudinal-beam';
     mesh.castShadow = mesh.receiveShadow = true;
     group.add(mesh);
   };
   for (const side of [-1, 1]) {
     const at = side * x;
+    const roofY = shape.ridge - x * Math.tan(shape.pitch);
+    const normalGap = radius + ROOF_BOARD_THICKNESS + roofClearance;
+    const eave = roofY - normalGap / Math.cos(shape.pitch);
     beam(new THREE.Vector3(at, eave, startZ), new THREE.Vector3(at, eave, z));
-    beam(new THREE.Vector3(at, floor, z), new THREE.Vector3(at, eave, z));
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.84, radius * 0.84, eave - radius - floor, 12), timberMaterial);
+    post.position.set(at, (eave - radius + floor) / 2, z);
+    post.name = 'banya-roof-post';
+    post.castShadow = post.receiveShadow = true;
+    group.add(post);
+    const baseBlock = new Planks(boardMaterials(TONES.gable), 0.018);
+    addTimber(baseBlock, new THREE.Vector3(at, floor, z), new THREE.Vector3(at, floor + 0.08, z), radius * 2.2, generator(211 + side));
+    group.add(...baseBlock.meshes());
   }
+  group.userData.crossbeam = eaveYFor(shape, x, radius, roofClearance) - radius - floor >= 2.4;
+  if (group.userData.crossbeam) {
+    const y = eaveYFor(shape, x, radius, roofClearance);
+    beam(new THREE.Vector3(-x, y, z), new THREE.Vector3(x, y, z));
+    group.children.at(-1).name = 'banya-roof-crossbeam';
+  }
+  group.userData.radius = radius;
+  group.userData.roofClearance = roofClearance;
+  group.userData.roofShape = { ridge: shape.ridge, pitch: shape.pitch, x };
   group.name = 'banya-roof-supports';
   return group;
+}
+
+function eaveYFor(shape, x, radius, clearance) {
+  return shape.ridge - x * Math.tan(shape.pitch)
+    - (radius + ROOF_BOARD_THICKNESS + clearance) / Math.cos(shape.pitch);
 }
 
 function buildBanyaBench({ x, z, width, depth, floorY, seatY }, rnd) {
